@@ -1,26 +1,23 @@
 services:
-  mysql:
-    image: mysql:8.0
-    container_name: openplan-mysql
+  postgres:
+    image: postgres:16
+    container_name: openplan-postgres
     restart: unless-stopped
+    # 호스트 5432에 네이티브 PG가 있을 수 있어 5433으로 매핑(컨테이너 내부는 5432 유지)
     ports:
-      - "${MYSQL_PORT:-3306}:3306"
+      - "${POSTGRES_PORT:-5433}:5432"
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root1234}
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-openplan}
-      MYSQL_USER: ${MYSQL_USER:-openplan}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-openplan1234}
+      POSTGRES_DB: ${POSTGRES_DB:-openplan}
+      POSTGRES_USER: ${POSTGRES_USER:-openplan}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-openplan1234}
       TZ: Asia/Seoul
-    command:
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
     volumes:
-      - openplan-mysql-data:/var/lib/mysql
+      - openplan-postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-root1234}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-openplan} -d ${POSTGRES_DB:-openplan}"]
       interval: 10s
       timeout: 5s
       retries: 10
 
 volumes:
-  openplan-mysql-data:
+  openplan-postgres-data:
