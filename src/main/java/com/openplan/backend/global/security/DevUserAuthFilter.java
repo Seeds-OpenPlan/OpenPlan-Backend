@@ -1,6 +1,7 @@
 package com.openplan.backend.global.security;
 
 import com.openplan.backend.global.error.ErrorCode;
+import com.openplan.backend.global.error.ErrorMessages;
 import com.openplan.backend.global.error.ErrorResponse;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.FilterChain;
@@ -23,12 +24,11 @@ import java.util.UUID;
  *   <li>{@code X-Dev-User} 헤더 생략 → 고정 dev 사용자({@link #DEFAULT_DEV_USER})</li>
  *   <li>헤더에 UUID 지정 → 그 사용자로 동작(사용자 격리·404 은닉 테스트 — NFR-030)</li>
  *   <li>형식 오류 UUID → 401 E-COM-002</li>
+ *   <li>시드되지 않은 UUID → 401 E-COM-002 (§4.1-4 — 운영과 동일한 오류 표면)</li>
  * </ul>
  *
  * <p>도메인 코드는 {@code @CurrentUser}만 본다 — 이 필터는 주체 주입만 대신한다. 4주차 교체 시
  * 이 필터를 제거(또는 {@code op.auth.dev-stub=false})해도 {@code @CurrentUser} 뒤 코드는 무변경(§4.2).
- *
- * <p>TODO(ST-B1-01b): 시드 사용자 존재 검증(미시드 UUID → 401) — UserRepository 연결 후.
  */
 public class DevUserAuthFilter extends OncePerRequestFilter {
 
@@ -38,9 +38,39 @@ public class DevUserAuthFilter extends OncePerRequestFilter {
     private static final String HEADER = "X-Dev-User";
 
     private final ObjectMapper objectMapper;
+    private final ErrorMessages errorMessages;
+    private final DevSeededUserVerifier userVerifier;
 
-    public DevUserAuthFilter(ObjectMapper objectMapper) {
+    public DevUserAuthFilter(ObjectMapper objectMapper, ErrorMessages errorMessages,
+                             DevSeededUserVerifier userVerifier) {
         this.objectMapper = objectMapper;
+        this.errorMessages = errorMessages;
+        this.userVerifier = userVerifier;
+    }
+
+    /**
+     * 인증 주체가 필요 없는 경로 — 존재 검증을 돌리지 않는다.
+     *
+     * <p>시드가 아직 안 돌았을 때 Swagger까지 401이 되면, 계약을 확인해서 원인을 찾아야 할
+     * 바로 그 순간에 문서가 잠긴다. {@code /api/v1/auth/session}은 여기 없다 —
+     * dev 사용자 주입이 필요하다(DEV-STUB-ACTIVE).
+     */
+    private static final String[] SUBJECT_FREE_PATHS = {
+            "/swagger-ui", "/v3/api-docs", "/error", "/api/v1/landing"
+    };
+
+    @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        String path = request.getRequestURI();
+        if ("/".equals(path)) {
+            return true;
+        }
+        for (String prefix : SUBJECT_FREE_PATHS) {
+            if (path.startsWith(prefix)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override
@@ -59,6 +89,13 @@ public class DevUserAuthFilter extends OncePerRequestFilter {
             }
         }
 
+        // 기본 dev 사용자도 검증한다 — 시드가 돌지 않았다면 조용히 빈 결과를 주는 대신
+        // 401로 크게 실패하는 편이 원인 파악이 빠르다.
+        if (!userVerifier.exists(userId)) {
+            writeUnauthorized(response);
+            return;
+        }
+
         UsernamePasswordAuthenticationToken authentication =
                 new UsernamePasswordAuthenticationToken(userId, null, AuthorityUtils.NO_AUTHORITIES);
         SecurityContextHolder.getContext().setAuthentication(authentication);
@@ -75,6 +112,6 @@ public class DevUserAuthFilter extends OncePerRequestFilter {
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.setCharacterEncoding("UTF-8");
         objectMapper.writeValue(response.getWriter(),
-                ErrorResponse.of(code, code.defaultMessage(), null));
+                ErrorResponse.of(code, errorMessages.resolve(code), null));
     }
 }

@@ -13,31 +13,54 @@ spring:
 
   jpa:
     hibernate:
-      ddl-auto: update
+      # ADR-0002: 스키마 정본은 Flyway. Hibernate는 검증만 하고 스키마를 손대지 않는다
+      # (update는 스키마 분기를 만든다 — charter R3).
+      ddl-auto: validate
     properties:
       hibernate:
         format_sql: true
         dialect: org.hibernate.dialect.PostgreSQLDialect
     show-sql: true
 
-  # Flyway: global 골격(ST-B1-01)에서 dev 시드/마이그레이션 도입 시 활성화
+  # ADR-0002 · ST-B1-01 AC2 — 기본값은 **운영 기준(안전한 쪽)**: dev 시드 경로를 포함하지 않는다.
+  # 설정이 누락됐을 때의 결과가 "시드 유출"이 아니라 "시드 부재"가 되도록 방향을 잡았다.
+  # local 프로파일에서만 아래에서 열어준다.
   flyway:
-    enabled: false
+    enabled: true
+    locations: classpath:db/migration
 
 server:
   port: 8080
 
 springdoc:
   swagger-ui:
-    path: /swagger-ui/index.html
+    # 진입 경로. `/swagger-ui/index.html`로 두면 springdoc이 여기에 UI 리소스 경로를 한 번 더
+    # 붙여 `/swagger-ui/swagger-ui/index.html`로 리다이렉트한다(실측). 기본값을 쓴다.
+    path: /swagger-ui.html
 
-# 애플리케이션 설정
 op:
   auth:
-    # dev-auth 스텁 필터 활성화 (local 개발 한정). 운영 프로파일은 반드시 false로 override — dev 스텁 유출 차단.
-    dev-stub: true
+    # dev-auth 스텁 필터 (D-16). 기본 false — 켜지려면 명시적 설정이 있어야 한다.
+    dev-stub: false
 
 logging:
   pattern:
     # traceId(MDC) 동반 — X-Trace-Id 헤더와 대조 (exceptions.md §1)
     level: "%5p [traceId=%X{traceId:-}]"
+
+---
+# =====================================================================================
+# local (개발) — dev 시드와 dev-auth 스텁을 여는 유일한 프로파일.
+# =====================================================================================
+spring:
+  config:
+    activate:
+      on-profile: local
+
+  flyway:
+    # V1 baseline + R__dev_seed. 시드는 R__(repeatable)이라 파일이 바뀌면 자동 재적용된다.
+    locations: classpath:db/migration,classpath:db/migration-dev
+
+op:
+  auth:
+    dev-stub: true

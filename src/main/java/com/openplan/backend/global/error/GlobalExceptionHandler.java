@@ -33,11 +33,19 @@ public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
+    /** 사용자 노출 문구는 전부 여기서 해석한다 — 봉투 조립의 단일 지점(exceptions.md §1). */
+    private final ErrorMessages errorMessages;
+
+    public GlobalExceptionHandler(ErrorMessages errorMessages) {
+        this.errorMessages = errorMessages;
+    }
+
     @ExceptionHandler(OpenPlanException.class)
     public ResponseEntity<ErrorResponse> handleOpenPlan(OpenPlanException ex, HttpServletRequest req) {
         ErrorCode code = ex.errorCode();
-        logByStatus(code, ex.getMessage(), req, ex);
-        return build(code, ex.getMessage(), ex.details());
+        String message = ex.overrideMessage() != null ? ex.overrideMessage() : errorMessages.resolve(code);
+        logByStatus(code, message, req, ex);
+        return build(code, message, ex.details());
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -51,7 +59,7 @@ public class GlobalExceptionHandler {
         }
         ErrorCode code = ErrorCode.E_COM_001;
         log.info("[{}] validation failed uri={} fields={}", code.code(), req.getRequestURI(), fields.size());
-        return build(code, code.defaultMessage(), Map.of("fields", fields));
+        return build(code, errorMessages.resolve(code), Map.of("fields", fields));
     }
 
     @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
@@ -61,21 +69,21 @@ public class GlobalExceptionHandler {
         log.warn("[{}] optimistic lock uri={}", code.code(), req.getRequestURI());
         // details.latest(최신본)는 도메인 서비스가 OpenPlanException으로 승격해 동봉하는 것이 원칙.
         // 여기 도달한 경우는 최신본 없이 충돌만 안내(SYS-05 재시도 유도).
-        return build(code, code.defaultMessage(), null);
+        return build(code, errorMessages.resolve(code), null);
     }
 
     @ExceptionHandler({NoHandlerFoundException.class, NoResourceFoundException.class})
     public ResponseEntity<ErrorResponse> handleNotFound(Exception ex, HttpServletRequest req) {
         ErrorCode code = ErrorCode.E_COM_004;
         log.warn("[{}] not found uri={}", code.code(), req.getRequestURI());
-        return build(code, code.defaultMessage(), null);
+        return build(code, errorMessages.resolve(code), null);
     }
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleUnexpected(Exception ex, HttpServletRequest req) {
         ErrorCode code = ErrorCode.E_COM_005;
         log.error("[{}] unexpected uri={}", code.code(), req.getRequestURI(), ex);
-        return build(code, code.defaultMessage(), null);
+        return build(code, errorMessages.resolve(code), null);
     }
 
     private ResponseEntity<ErrorResponse> build(ErrorCode code, String message, Map<String, Object> details) {

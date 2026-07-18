@@ -1,7 +1,9 @@
 package com.openplan.backend.global.config;
 
 import com.openplan.backend.global.error.ErrorCode;
+import com.openplan.backend.global.error.ErrorMessages;
 import com.openplan.backend.global.error.ErrorResponse;
+import com.openplan.backend.global.security.DevSeededUserVerifier;
 import com.openplan.backend.global.security.DevUserAuthFilter;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
@@ -47,7 +49,9 @@ public class SecurityConfig {
     }
 
     @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http, ObjectMapper objectMapper) throws Exception {
+    public SecurityFilterChain securityFilterChain(HttpSecurity http, ObjectMapper objectMapper,
+                                                  ErrorMessages errorMessages,
+                                                  DevSeededUserVerifier userVerifier) throws Exception {
         http
                 .csrf(AbstractHttpConfigurer::disable)
                 .formLogin(AbstractHttpConfigurer::disable)
@@ -57,23 +61,24 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(PUBLIC_PATHS).permitAll()
                         .anyRequest().authenticated())
-                .exceptionHandling(ex -> ex.authenticationEntryPoint(unauthorizedEntryPoint(objectMapper)));
+                .exceptionHandling(ex -> ex.authenticationEntryPoint(unauthorizedEntryPoint(objectMapper, errorMessages)));
 
         if (devStubEnabled) {
-            http.addFilterBefore(new DevUserAuthFilter(objectMapper), UsernamePasswordAuthenticationFilter.class);
+            http.addFilterBefore(new DevUserAuthFilter(objectMapper, errorMessages, userVerifier),
+                    UsernamePasswordAuthenticationFilter.class);
         }
 
         return http.build();
     }
 
     /** 미인증 → 오류 봉투 E-COM-002 (기본 401 HTML 대신 계약된 JSON 봉투). */
-    private AuthenticationEntryPoint unauthorizedEntryPoint(ObjectMapper objectMapper) {
+    private AuthenticationEntryPoint unauthorizedEntryPoint(ObjectMapper objectMapper, ErrorMessages errorMessages) {
         return (request, response, authException) -> {
             ErrorCode code = ErrorCode.E_COM_002;
             response.setStatus(code.status().value());
             response.setContentType(MediaType.APPLICATION_JSON_VALUE);
             response.setCharacterEncoding("UTF-8");
-            objectMapper.writeValue(response.getWriter(), ErrorResponse.of(code, code.defaultMessage(), null));
+            objectMapper.writeValue(response.getWriter(), ErrorResponse.of(code, errorMessages.resolve(code), null));
         };
     }
 }

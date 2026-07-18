@@ -1,6 +1,8 @@
 services:
   postgres:
-    image: postgres:16
+    # pgvector 번들 이미지 — V1 baseline의 CREATE EXTENSION vector (B11 · D-01 확정 스택).
+    # MVP1은 확장 활성화만 하고 벡터 컬럼은 0 (ADR-0009). 소재는 postgres:16 공식 이미지와 동일.
+    image: pgvector/pgvector:pg16
     container_name: openplan-postgres
     restart: unless-stopped
     # 호스트 5432에 네이티브 PG가 있을 수 있어 5433으로 매핑(컨테이너 내부는 5432 유지)
