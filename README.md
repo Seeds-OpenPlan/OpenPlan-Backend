@@ -6,8 +6,9 @@ OpenPlan MVP1 백엔드 Repository
 
 - Java 21 LTS
 - Spring Boot
-- MySQL
+- PostgreSQL 16 (pgvector)
 - Spring Data JPA
+- Flyway
 - Spring Security + OAuth2 + JWT
 - Swagger / Springdoc OpenAPI
 
@@ -17,7 +18,7 @@ OpenPlan MVP1 백엔드 Repository
 
 ## 로컬 DB 실행
 
-MySQL은 Docker Compose로 실행합니다.
+PostgreSQL은 Docker Compose로 실행합니다. 기본 포트는 `5433`입니다.
 
 ```bash
 docker compose up -d
