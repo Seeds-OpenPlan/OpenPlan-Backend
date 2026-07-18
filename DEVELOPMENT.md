@@ -2,7 +2,7 @@
 
 ## 개발환경 공유 방식
 
-MVP1 개발 단계에서는 MySQL만 Docker Compose로 실행한다. Spring Boot 백엔드는 로컬에서 실행해 개발과 디버깅 편의성을 유지한다.
+MVP1 개발 단계에서는 PostgreSQL만 Docker Compose로 실행한다. Spring Boot 백엔드는 로컬에서 실행해 개발과 디버깅 편의성을 유지한다.
 
 ## 필수 설치
 
@@ -10,9 +10,9 @@ MVP1 개발 단계에서는 MySQL만 Docker Compose로 실행한다. Spring Boot
 | --- | --- | --- |
 | Git | 최신 안정 버전 | 소스 코드 관리 |
 | Java | 21 LTS | Spring Boot 실행 |
-| Docker Desktop | 최신 안정 버전 | MySQL 실행 |
+| Docker Desktop | 최신 안정 버전 | PostgreSQL 실행 |
 | IntelliJ IDEA | 최신 안정 버전 | 백엔드 개발 |
-| MySQL Client 또는 DBeaver | 선택 | DB 확인 |
+| psql 또는 DBeaver | 선택 | DB 확인 |
 
 ## 최초 설정
 
@@ -84,7 +84,7 @@ wsl --install
 
 ## DB 실행
 
-MySQL은 Docker Compose로 실행한다.
+PostgreSQL은 Docker Compose로 실행한다.
 
 ```bash
 docker compose up -d
@@ -99,10 +99,10 @@ docker compose ps
 정상 예시:
 
 ```text
-openplan-mysql   mysql:8.0   ...   Up ... (healthy)   0.0.0.0:3306->3306/tcp
+openplan-postgres   pgvector/pgvector:pg16   ...   Up ... (healthy)   0.0.0.0:5433->5432/tcp
 ```
 
-`STATUS`에 `healthy`가 표시되면 MySQL 컨테이너가 정상 실행 중인 상태다.
+`STATUS`에 `healthy`가 표시되면 PostgreSQL 컨테이너가 정상 실행 중인 상태다.
 
 DB 종료:
 
@@ -125,11 +125,10 @@ docker compose down -v
 | 항목 | 값 |
 | --- | --- |
 | Host | localhost |
-| Port | 3306 |
+| Port | 5433 (컨테이너 내부 5432) |
 | Database | openplan |
 | Username | openplan |
 | Password | openplan1234 |
-| Root Password | root1234 |
 
 ## 백엔드 실행
 
@@ -200,13 +199,13 @@ wsl --shutdown
 
 `Lingering processes detected` 안내가 나오면 `Stop processes`를 눌러 기존 Docker 프로세스를 종료한 뒤 다시 실행한다.
 
-### 3306 포트가 이미 사용 중임
+### 5433 포트가 이미 사용 중임
 
-로컬에 다른 MySQL이 실행 중이면 포트가 충돌할 수 있다. 이 경우 `.env`에서 아래 값을 변경한다.
+로컬에 다른 PostgreSQL이 실행 중이면 포트가 충돌할 수 있다. 이 경우 `.env`에서 아래 값을 변경한다.
 
 ```env
-MYSQL_PORT=3307
-DB_PORT=3307
+POSTGRES_PORT=5434
+DB_PORT=5434
 ```
 
 이후 다시 실행한다.
@@ -219,7 +218,7 @@ docker compose up -d
 
 - `.env`는 커밋하지 않는다.
 - `.env.example`은 필요한 환경변수가 추가될 때 함께 갱신한다.
-- Docker는 MySQL 실행에만 사용한다.
+- Docker는 PostgreSQL 실행에만 사용한다.
 - Spring Boot 백엔드는 로컬에서 실행한다.
-- DB 스키마 변경은 추후 Flyway 또는 명시적인 마이그레이션 방식으로 관리한다.
+- DB 스키마 변경은 Flyway 마이그레이션(`src/main/resources/db/migration`)으로 관리한다.
 - PR 제출 전 로컬 실행과 관련 테스트 통과 여부를 확인한다.
