@@ -16,6 +16,14 @@ MVP1 개발 단계에서는 PostgreSQL만 Docker Compose로 실행한다. Spring
 
 ## 최초 설정
 
+### 클론 경로 주의 (필수)
+
+**저장소는 한글과 공백이 없는 경로에 클론한다.** 예: `C:\dev\openplan`
+
+한글이나 공백이 포함된 경로(예: `C:\Users\사용자\바탕 화면\OpenPlan`)에서는 `./gradlew test`가 `ClassNotFoundException`으로 **전건 실패한다.** Windows 기본 로케일에서 JVM이 `sun.jnu.encoding=MS949`로 기동되어 경로를 해석하지 못하는 것이 원인이며, 이 값은 JVM 기동 후에는 변경할 수 없다. ASCII 경로로 옮기면 즉시 해소된다.
+
+빌드 산출물 잠금을 피하기 위해 OneDrive 동기화 폴더도 피한다.
+
 ```bash
 git clone https://github.com/Seeds-OpenPlan/openplan-backend.git
 cd openplan-backend
@@ -198,6 +206,12 @@ wsl --shutdown
 ### Docker Desktop에서 실행 중인 프로세스 안내가 나옴
 
 `Lingering processes detected` 안내가 나오면 `Stop processes`를 눌러 기존 Docker 프로세스를 종료한 뒤 다시 실행한다.
+
+### `./gradlew test`가 `ClassNotFoundException`으로 전부 실패함
+
+저장소가 한글 또는 공백이 포함된 경로에 있는 경우다. Windows 기본 로케일에서 JVM이 `sun.jnu.encoding=MS949`로 기동되어 경로를 해석하지 못한다.
+
+저장소를 한글과 공백이 없는 경로(예: `C:\dev\openplan`)로 옮기면 해소된다. `sun.jnu.encoding`은 JVM 기동 후 변경할 수 없으므로 Gradle 옵션이나 환경변수로는 해결되지 않는다.
 
 ### 5433 포트가 이미 사용 중임
 
