@@ -168,6 +168,40 @@ Started OpenplanBackendApplication
 
 `bootRun`은 서버를 계속 실행하는 명령이므로 Gradle 진행률이 `80% EXECUTING`처럼 유지되는 것이 정상이다. 서버를 종료하려면 실행 중인 터미널에서 `Ctrl + C`를 누른다.
 
+## dev-auth 스텁 (로그인 없이 개발하기)
+
+인증 기능 구현은 4주차이므로, 그전까지는 **dev-auth 스텁**으로 로그인 없이 API를 개발한다. `local` 프로파일에서만 동작한다.
+
+요청에 아무것도 붙이지 않으면 고정 dev 사용자로 동작한다.
+
+```bash
+curl http://localhost:8080/api/v1/auth/session
+```
+
+다른 사용자로 요청하려면 `X-Dev-User` 헤더에 사용자 UUID를 넣는다.
+
+```bash
+curl -H "X-Dev-User: 00000000-0000-0000-0000-000000000002" http://localhost:8080/api/v1/auth/session
+```
+
+`/api/v1/auth/session`은 주입된 사용자 UUID를 그대로 돌려주므로, 헤더가 실제로 반영되는지 확인하는 용도로 쓸 수 있다.
+
+시드된 dev 사용자는 2명이다.
+
+| 사용자 | UUID | 이메일 |
+| --- | --- | --- |
+| dev1 (헤더 생략 시 기본값) | `00000000-0000-0000-0000-000000000001` | `dev1@openplan.local` |
+| dev2 | `00000000-0000-0000-0000-000000000002` | `dev2@openplan.local` |
+
+2명을 시드하는 이유는 **사용자 격리(NFR-030)와 타인 리소스 404 은닉을 실제로 테스트하기 위해서다.** dev1으로 만든 리소스를 dev2로 조회해 404가 나오는지 확인하는 식으로 쓴다.
+
+참고 사항:
+
+- 형식이 잘못된 UUID나 시드되지 않은 UUID는 `401 E-COM-002`로 응답한다. 운영과 동일한 오류 표면을 유지하기 위한 동작이다.
+- Swagger(`/swagger-ui`, `/v3/api-docs`)와 `/api/v1/landing`은 스텁을 거치지 않는다.
+- 도메인 코드는 `@CurrentUser UUID userId`만 참조한다. 4주차에 실제 인증으로 교체할 때 `@CurrentUser` 뒤의 코드는 바뀌지 않는다.
+- 인증 엔드포인트 자체는 4주차까지 `501 E-AUTH-011`을 반환한다.
+
 ## Swagger
 
 Swagger는 아래 주소에서 확인한다.
