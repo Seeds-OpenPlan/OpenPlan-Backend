@@ -19,7 +19,10 @@ import jakarta.validation.constraints.Size;
  */
 public record UpdateProfileRequest(
 
-        @Size(min = 1, max = 50, message = "name must be 1..50 characters")
+        // 공백-only 이름 차단(L3): @Size(min=1)은 "   "를 통과시키므로 비공백 1자 이상을 @Pattern으로 강제.
+        // \S = 비공백. (?s)로 개행 포함 대응. null(미제공)은 @Pattern/@Size가 모두 통과시킨다(부분 수정).
+        @Size(max = 50, message = "name must be at most 50 characters")
+        @Pattern(regexp = "(?s).*\\S.*", message = "name must not be blank")
         String name,
 
         @Size(max = 100, message = "purpose must be at most 100 characters")

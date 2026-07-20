@@ -53,17 +53,22 @@ public class UserProfileService {
         User user = loadUser(userId);
         UserProfile profile = loadProfile(userId);
 
+        // 입력을 먼저 전량 검증·정규화한 뒤에 엔티티를 변형한다(L2) — 검증 실패 시 부분 변형이 남지 않게.
+        // 운영에선 @Transactional 롤백이 있지만, 순서 자체를 "검증 후 변형"으로 두어 트랜잭션에 의존하지 않는다.
+        Weekday weekStartDay = request.weekStartDay() != null ? parseWeekday(request.weekStartDay()) : null;
+        String timezone = request.timezone() != null ? requireValidTimezone(request.timezone()) : null;
+
         if (request.name() != null) {
             profile.changeName(request.name());
         }
         if (request.purpose() != null) {
             profile.changePurpose(request.purpose());
         }
-        if (request.timezone() != null) {
-            profile.changeTimezone(requireValidTimezone(request.timezone()));
+        if (timezone != null) {
+            profile.changeTimezone(timezone);
         }
-        if (request.weekStartDay() != null) {
-            profile.changeWeekStartDay(parseWeekday(request.weekStartDay()));
+        if (weekStartDay != null) {
+            profile.changeWeekStartDay(weekStartDay);
         }
 
         return UserProfileResponse.from(user, profile);

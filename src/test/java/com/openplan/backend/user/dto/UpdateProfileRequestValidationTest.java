@@ -56,6 +56,13 @@ class UpdateProfileRequestValidationTest {
     }
 
     @Test
+    void name_공백만은_위반() {
+        // "   "(공백 3자)는 @Size(max=50)는 통과하지만 @Pattern(비공백 강제)에서 위반 — L3 리뷰 반영
+        var req = new UpdateProfileRequest("   ", null, null, null);
+        assertThat(violatedFields(req)).containsExactly("name");
+    }
+
+    @Test
     void purpose_100자_초과는_위반() {
         var req = new UpdateProfileRequest(null, "p".repeat(101), null, null);
         assertThat(violatedFields(req)).containsExactly("purpose");
