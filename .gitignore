@@ -21,3 +21,10 @@ out/
 # OS
 .DS_Store
 Thumbs.db
+
+# BATHOS
+.claude/
+assets/
+modules/
+.agent-team/
+core/
