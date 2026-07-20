@@ -16,6 +16,8 @@ OpenPlan MVP1 백엔드 Repository
 
 개발환경 설정과 실행 방법은 [DEVELOPMENT.md](./DEVELOPMENT.md)를 참고합니다.
 
+> **클론 전 확인**: 저장소는 한글과 공백이 없는 경로(예: `C:\dev\openplan`)에 클론합니다. 한글 경로에서는 `./gradlew test`가 전건 실패합니다. 자세한 내용은 [DEVELOPMENT.md](./DEVELOPMENT.md#클론-경로-주의-필수)를 참고합니다.
+
 ## 로컬 DB 실행
 
 PostgreSQL은 Docker Compose로 실행합니다. 기본 포트는 `5433`입니다.
