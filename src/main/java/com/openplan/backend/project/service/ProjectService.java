@@ -1,38 +1,55 @@
 package com.openplan.backend.project.service;
 
+import com.openplan.backend.global.error.ErrorCode;
+import com.openplan.backend.global.error.OpenPlanException;
+import com.openplan.backend.global.time.UserClock;
 import com.openplan.backend.project.dto.ProjectCreateRequest;
 import com.openplan.backend.project.dto.ProjectResponse;
 import com.openplan.backend.project.entity.Project;
-import com.openplan.backend.global.time.UserClock;
+import com.openplan.backend.project.entity.ProjectStatus;
 import com.openplan.backend.project.repository.ProjectRepository;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.EnumSet;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
- * 프로젝트 유스케이스 파사드 — 검사 순서·tx 경계를 소유한다. 검증 규칙은 {@link ProjectValidator},
- * 시각 소스는 {@link UserClock}, 영속은 {@link ProjectRepository}에 위임한다.
+ * 프로젝트 유스케이스 파사드 — 검사 순서·tx 경계를 소유한다. 검증은 {@link ProjectValidator},
+ * 시각은 {@link UserClock}, 지연 평가는 {@link ProjectAutoCloseEvaluator}, 영속은 {@link ProjectRepository}.
  *
- * <p>조회·상태변경·삭제·자동종료는 이후 슬라이스에서 추가한다(생성 C 슬라이스).
+ * <p>조회(list/detail)는 @Transactional을 붙이지 않는다 — 평가(REQUIRES_NEW) 커밋 후 repository 내장
+ * readOnly tx로 조회하는 2-tx 구조(service-sequences §1). readOnly tx에서는 평가 UPDATE를 할 수 없기 때문.
  */
 @Service
 public class ProjectService {
 
+    private static final int SIZE_MAX = 100;
+
     private final ProjectRepository projectRepository;
     private final ProjectValidator validator;
+    private final ProjectAutoCloseEvaluator autoCloseEvaluator;
     private final UserClock clock;
 
-    public ProjectService(ProjectRepository projectRepository, ProjectValidator validator, UserClock clock) {
+    public ProjectService(ProjectRepository projectRepository, ProjectValidator validator,
+                          ProjectAutoCloseEvaluator autoCloseEvaluator, UserClock clock) {
         this.projectRepository = projectRepository;
         this.validator = validator;
+        this.autoCloseEvaluator = autoCloseEvaluator;
         this.clock = clock;
     }
 
     /**
-     * 프로젝트 생성 (PROJ-02 / AC-02-1~4). status=IN_PROGRESS·closedAt=null·version=0은 엔티티 생성자가 규정.
-     * 신규 행은 자동종료 평가 대상이 아니므로 평가 선행 불요(과거 due_date는 검증으로 사전 차단).
+     * 프로젝트 생성 (PROJ-02 / AC-02-1~4). 신규 행은 평가 대상이 아니므로 평가 선행 불요.
      */
     @Transactional
     public ProjectResponse create(UUID userId, ProjectCreateRequest req) {
@@ -43,5 +60,68 @@ public class ProjectService {
         Project project = new Project(userId, name, req.description(), req.dueDate(), req.priority(), clock.now());
         projectRepository.save(project);
         return ProjectResponse.from(project);
+    }
+
+    /**
+     * 목록 조회 (PROJ-01 / AC-01-1~7). 조회 전 자동종료 평가 선행(AC-01-6). status 필터는 그룹/개별
+     * 겸용(Q-H), 정렬은 createdAt DESC·id DESC 서버 고정(Q-I).
+     *
+     * @param statusRaw null/빈 값 = 전체 3상태. 미정의 열거값 → 422.
+     */
+    public Page<ProjectResponse> list(UUID userId, int page, int size, List<String> statusRaw) {
+        validatePaging(page, size);
+        Collection<ProjectStatus> statuses = parseStatuses(statusRaw);
+
+        autoCloseEvaluator.closeOverdue(userId); // 평가 선행(REQUIRES_NEW 커밋) → 이후 조회가 결과를 봄
+
+        Pageable pageable = PageRequest.of(page - 1, size,
+                Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id")));
+        return projectRepository.findByUserIdAndStatusIn(userId, statuses, pageable)
+                .map(ProjectResponse::from);
+    }
+
+    /**
+     * 상세 조회 (PROJ-03 / AC-03-1~3). 평가 선행(AC-03-3). 부재·타인 소유 → 404 E-COM-004(구분 불가).
+     */
+    public ProjectResponse detail(UUID userId, UUID projectId) {
+        autoCloseEvaluator.closeOverdue(userId);
+        Project project = projectRepository.findByIdAndUserId(projectId, userId)
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004));
+        return ProjectResponse.from(project);
+    }
+
+    /** page/size 규약 위반은 구조 오류(400 E-COM-001). AC-01-4. */
+    private void validatePaging(int page, int size) {
+        List<Map<String, Object>> bad = new ArrayList<>();
+        if (page < 1) {
+            bad.add(Map.of("field", "page", "rule", "min", "message", "page는 1 이상이어야 합니다."));
+        }
+        if (size < 1 || size > SIZE_MAX) {
+            bad.add(Map.of("field", "size", "rule", "range", "message", "size는 1~100이어야 합니다."));
+        }
+        if (!bad.isEmpty()) {
+            throw new OpenPlanException(ErrorCode.E_COM_001, Map.of("fields", bad));
+        }
+    }
+
+    /** status 필터 파싱(Q-H). null/빈 값 = 전체. 미정의 열거값 → 422 E-COM-009. */
+    private Collection<ProjectStatus> parseStatuses(List<String> statusRaw) {
+        if (statusRaw == null || statusRaw.isEmpty()) {
+            return EnumSet.allOf(ProjectStatus.class);
+        }
+        EnumSet<ProjectStatus> set = EnumSet.noneOf(ProjectStatus.class);
+        for (String raw : statusRaw) {
+            if (raw == null || raw.isBlank()) {
+                continue;
+            }
+            try {
+                set.add(ProjectStatus.valueOf(raw.trim()));
+            } catch (IllegalArgumentException ex) {
+                throw new OpenPlanException(ErrorCode.E_COM_009,
+                        Map.of("fields", List.of(Map.of(
+                                "field", "status", "rule", "enum", "message", "정의되지 않은 상태값입니다: " + raw))));
+            }
+        }
+        return set.isEmpty() ? EnumSet.allOf(ProjectStatus.class) : set;
     }
 }
