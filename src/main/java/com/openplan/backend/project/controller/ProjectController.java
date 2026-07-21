@@ -5,6 +5,7 @@ import com.openplan.backend.global.response.PageMeta;
 import com.openplan.backend.global.security.CurrentUser;
 import com.openplan.backend.project.dto.ProjectCreateRequest;
 import com.openplan.backend.project.dto.ProjectResponse;
+import com.openplan.backend.project.dto.ProjectStatusChangeRequest;
 import com.openplan.backend.project.dto.ProjectUpdateRequest;
 import com.openplan.backend.project.service.ProjectService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -16,6 +17,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -78,6 +80,16 @@ public class ProjectController {
             @PathVariable UUID projectId,
             @Valid @RequestBody ProjectUpdateRequest request) {
         return ApiResponse.ok(projectService.update(userId, projectId, request));
+    }
+
+    @PatchMapping("/{projectId}/status")
+    @Operation(summary = "프로젝트 상태 변경 (PROJ-07)",
+            description = "IN_PROGRESS/PAUSED/CLOSED 전이. 재개(→IN_PROGRESS) 시 dueDate 동반 가능(tri-state). 동일상태=멱등, 불허전이 T6→422, 마감경과 재개→E-PROJ-004.")
+    public ApiResponse<ProjectResponse> changeStatus(
+            @CurrentUser UUID userId,
+            @PathVariable UUID projectId,
+            @Valid @RequestBody ProjectStatusChangeRequest request) {
+        return ApiResponse.ok(projectService.changeStatus(userId, projectId, request));
     }
 
     @DeleteMapping("/{projectId}")
