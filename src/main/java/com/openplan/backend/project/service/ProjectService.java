@@ -64,8 +64,12 @@ public class ProjectService {
     }
 
     /**
-     * 프로젝트 편집 (PROJ-06 / AC-06-1~4). 검사 순서 <b>404 → 409 → 422(CLOSED) → 422(필드)</b> 고정.
-     * 평가 선행(P-1): 기한 경과였다면 여기서 CLOSED·version+1 되어, stale 요청은 409로 떨어진다.
+     * 프로젝트 편집 (PROJ-06 / AC-06-1~4). 검사 순서 <b>404 → 422(CLOSED) → 409(버전) → 422(필드)</b>.
+     * 평가 선행(P-1): 기한 경과였다면 여기서 CLOSED·version+1 된다.
+     *
+     * <p><b>CLOSED를 버전보다 먼저 검사</b>(User 판정 2026-07-22, 원설계의 버전-우선을 대체): "종료된 건 수정 불가"는
+     * 버전 신선도와 무관한 절대 규칙이라, 자동종료가 버전을 올려도 "충돌(409)"이 아니라 "종료라 수정 불가(422)"로
+     * 명확히 안내한다. 종료 아닌 경우의 동시 수정 보호(409)는 그대로 유지된다.
      */
     @Transactional
     public ProjectResponse update(UUID userId, UUID projectId, ProjectUpdateRequest req) {
@@ -74,12 +78,12 @@ public class ProjectService {
         Project project = projectRepository.findByIdAndUserId(projectId, userId)
                 .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404
 
-        if (req.version() != project.getVersion()) { // 409 — latest 동봉(SYS-05 재조회)
+        if (project.getStatus() == ProjectStatus.CLOSED) { // 422 — 종료는 수정 불가, 재개 먼저(Q-E1)
+            throw new OpenPlanException(ErrorCode.E_PROJ_003);
+        }
+        if (req.version() != project.getVersion()) { // 409 — 종료 아닌 경우의 동시수정 보호, latest 동봉(SYS-05)
             throw new OpenPlanException(ErrorCode.E_COM_006,
                     Map.of("latest", ProjectResponse.from(project)));
-        }
-        if (project.getStatus() == ProjectStatus.CLOSED) { // 422 — 종료 상태는 재개 먼저(Q-E1)
-            throw new OpenPlanException(ErrorCode.E_PROJ_003);
         }
 
         LocalDate today = clock.todayOf(userId);

@@ -150,6 +150,20 @@ class ProjectUpdateApiTest {
     }
 
     @Test
+    @DisplayName("종료 먼저 안내 — 종료된 프로젝트는 낡은 version이어도 409 아닌 422 E-PROJ-003 (User 판정)")
+    void closedGuardBeforeVersionCheck() throws Exception {
+        // 서버 version=3인 CLOSED 프로젝트에 stale version=0으로 편집 시도
+        UUID closed = insert(MAIN, "종료-버전3", ProjectStatus.CLOSED, null, 3, BASE);
+        mockMvc.perform(put(PATH + "/" + closed).header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"name":"수정 시도","version":0}
+                                """))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.code").value("E-PROJ-003")); // 충돌(409)이 아니라 "종료라 불가"
+    }
+
+    @Test
     @DisplayName("AC-06 부재·타인 소유 → 404")
     void notFoundOrOtherOwner() throws Exception {
         mockMvc.perform(put(PATH + "/" + UUID.randomUUID()).header("X-Dev-User", MAIN.toString())
