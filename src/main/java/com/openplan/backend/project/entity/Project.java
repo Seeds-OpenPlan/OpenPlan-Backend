@@ -92,6 +92,30 @@ public class Project {
         this.priority = priority;
     }
 
+    /**
+     * 종료 방향 전이 (T1 →PAUSED · T2/T4 →CLOSED). 호출 전제: 전이 가능·no-op 아님을 서비스가 이미 검증.
+     * closed_at 불변식은 여기서만 유지한다 — CLOSED 진입 시 set, 그 외엔 불변.
+     */
+    public void transitionTo(ProjectStatus target, Instant now) {
+        if (target == ProjectStatus.CLOSED) {
+            this.closedAt = now;
+        }
+        this.status = target;
+    }
+
+    /**
+     * 재개 (T3 PAUSED→ · T5 CLOSED→IN_PROGRESS). closed_at을 해제(불변식)하고, dueDate 동반 시 함께 갱신한다(Q-C2).
+     *
+     * @param dueDateProvided true면 newDueDate로 교체(null=무기한), false면 기존 dueDate 유지
+     */
+    public void resume(LocalDate newDueDate, boolean dueDateProvided, Instant now) {
+        if (dueDateProvided) {
+            this.dueDate = newDueDate;
+        }
+        this.closedAt = null;
+        this.status = ProjectStatus.IN_PROGRESS;
+    }
+
     public UUID getId() {
         return id;
     }
