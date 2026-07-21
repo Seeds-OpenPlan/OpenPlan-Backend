@@ -1,7 +1,7 @@
 package com.openplan.backend.project.controller;
 
-import com.openplan.backend.global.time.UserClock;
 import com.openplan.backend.project.entity.ProjectStatus;
+import com.openplan.backend.support.FixedClockConfig;
 import com.openplan.backend.support.TestcontainersConfig;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -9,10 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
-import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
@@ -23,6 +20,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
 
+import static com.openplan.backend.support.FixedClockConfig.FIXED_TODAY;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -41,17 +39,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-@Import({TestcontainersConfig.class, ProjectReadApiTest.FixedClockConfig.class})
+@Import({TestcontainersConfig.class, FixedClockConfig.class})
 class ProjectReadApiTest {
 
     private static final String PATH = "/api/v1/projects";
     private static final UUID MAIN = UUID.fromString("aaaaaaaa-0000-0000-0000-000000000001");
     private static final UUID OTHER = UUID.fromString("aaaaaaaa-0000-0000-0000-000000000002");
     private static final Instant BASE = Instant.parse("2026-07-01T00:00:00Z");
-
-    /** 고정 "오늘" — 자동종료 판정 기준. 실시간·timezone 무관하게 결정적. */
-    static final LocalDate FIXED_TODAY = LocalDate.of(2026, 7, 15);
-    static final Instant FIXED_NOW = Instant.parse("2026-07-15T00:00:00Z");
 
     @Autowired
     private MockMvc mockMvc;
@@ -234,25 +228,5 @@ class ProjectReadApiTest {
                 closedAt == null ? null : OffsetDateTime.ofInstant(closedAt, ZoneOffset.UTC),
                 OffsetDateTime.ofInstant(createdAt, ZoneOffset.UTC));
         return id;
-    }
-
-    /** 고정 시계 — 자동종료 판정을 실시간/서버 timezone과 무관하게 결정적으로 만든다(C4). */
-    @TestConfiguration
-    static class FixedClockConfig {
-        @Bean
-        @Primary
-        UserClock fixedUserClock() {
-            return new UserClock() {
-                @Override
-                public Instant now() {
-                    return FIXED_NOW;
-                }
-
-                @Override
-                public LocalDate todayOf(UUID userId) {
-                    return FIXED_TODAY;
-                }
-            };
-        }
     }
 }
