@@ -5,6 +5,7 @@ import com.openplan.backend.global.response.PageMeta;
 import com.openplan.backend.global.security.CurrentUser;
 import com.openplan.backend.project.dto.ProjectCreateRequest;
 import com.openplan.backend.project.dto.ProjectResponse;
+import com.openplan.backend.project.dto.ProjectUpdateRequest;
 import com.openplan.backend.project.service.ProjectService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -15,6 +16,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -65,5 +67,15 @@ public class ProjectController {
             @CurrentUser UUID userId,
             @PathVariable UUID projectId) {
         return ApiResponse.ok(projectService.detail(userId, projectId));
+    }
+
+    @PutMapping("/{projectId}")
+    @Operation(summary = "프로젝트 편집 (PROJ-06)",
+            description = "name·description·dueDate·priority 전체 교체 + version 낙관락. status/closedAt 포함 시 400. CLOSED 편집 → 422.")
+    public ApiResponse<ProjectResponse> update(
+            @CurrentUser UUID userId,
+            @PathVariable UUID projectId,
+            @Valid @RequestBody ProjectUpdateRequest request) {
+        return ApiResponse.ok(projectService.update(userId, projectId, request));
     }
 }
