@@ -35,7 +35,10 @@ public class SecurityConfig {
             "/swagger-ui.html",
             "/v3/api-docs/**",
             "/api/v1/auth/**",   // 로그인·세션·소셜·가입 등 — 각 EP가 자체 인증 로직 처리(스텁: §2.1)
-            "/api/v1/landing"    // 비인증 랜딩(가드 예외)
+            "/api/v1/landing",   // 비인증 랜딩(가드 예외)
+            // 도움말/FAQ 공개(openapi security:[] — 비로그인 접근). ST-B1-13 contract-change (post-freeze, 라벨).
+            "/api/v1/support/help-articles",
+            "/api/v1/support/help-articles/**"
     };
 
     /**
