@@ -80,6 +80,18 @@ public class Project {
         this.createdAt = createdAt;
     }
 
+    /**
+     * 편집 가능 4필드 전체 교체 (PROJ-06 / PUT). status·closedAt은 건드리지 않는다 —
+     * 상태 변경은 전용 경로(PROJ-07)만 사용(우회 차단). name은 서비스가 검증·trim한 값.
+     * version은 JPA @Version이 flush 시 자동 증가한다.
+     */
+    public void edit(String name, String description, LocalDate dueDate, Integer priority) {
+        this.name = name;
+        this.description = description;
+        this.dueDate = dueDate;
+        this.priority = priority;
+    }
+
     public UUID getId() {
         return id;
     }
