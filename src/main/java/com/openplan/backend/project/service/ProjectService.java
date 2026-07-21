@@ -9,6 +9,7 @@ import com.openplan.backend.project.dto.ProjectUpdateRequest;
 import com.openplan.backend.project.entity.Project;
 import com.openplan.backend.project.entity.ProjectStatus;
 import com.openplan.backend.project.repository.ProjectRepository;
+import com.openplan.backend.project.service.port.WeeklyPlanTotalsRecalculator;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -39,13 +40,16 @@ public class ProjectService {
     private final ProjectRepository projectRepository;
     private final ProjectValidator validator;
     private final ProjectAutoCloseEvaluator autoCloseEvaluator;
+    private final WeeklyPlanTotalsRecalculator weeklyPlanTotalsRecalculator;
     private final UserClock clock;
 
     public ProjectService(ProjectRepository projectRepository, ProjectValidator validator,
-                          ProjectAutoCloseEvaluator autoCloseEvaluator, UserClock clock) {
+                          ProjectAutoCloseEvaluator autoCloseEvaluator,
+                          WeeklyPlanTotalsRecalculator weeklyPlanTotalsRecalculator, UserClock clock) {
         this.projectRepository = projectRepository;
         this.validator = validator;
         this.autoCloseEvaluator = autoCloseEvaluator;
+        this.weeklyPlanTotalsRecalculator = weeklyPlanTotalsRecalculator;
         this.clock = clock;
     }
 
@@ -123,6 +127,24 @@ public class ProjectService {
         Project project = projectRepository.findByIdAndUserId(projectId, userId)
                 .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004));
         return ProjectResponse.from(project);
+    }
+
+    /**
+     * 프로젝트 삭제 (PROJ-09 / AC-09-1~6). hard delete(Q-D) — 연관 데이터는 DB FK cascade에 위임(B-3).
+     * 상태 무관(AC-09-4), version 불요(FE 확인창이 방어선). 자동종료 평가는 결과에 영향 없어 생략.
+     *
+     * <p><b>C1 순서(필수)</b>: ① 삭제 전 영향 주차 수집(B-4) → ② delete → ③ <b>명시적 flush</b>(DELETE·cascade를
+     * DB에 반영) → ④ 재계산. flush 없이는 JdbcTemplate 재계산이 삭제 전 plan_blocks를 합산해 캐시가 오염된다.
+     */
+    @Transactional
+    public void delete(UUID userId, UUID projectId) {
+        Project project = projectRepository.findByIdAndUserId(projectId, userId)
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404 (부재·타인·재삭제)
+
+        List<UUID> affectedWeeklyPlans = weeklyPlanTotalsRecalculator.captureAffectedWeeklyPlanIds(projectId);
+        projectRepository.delete(project);
+        projectRepository.flush(); // C1 — cascade가 DB에 반영되어야 아래 재계산이 삭제 후 상태를 본다
+        weeklyPlanTotalsRecalculator.recalculate(affectedWeeklyPlans); // B-4, 같은 tx
     }
 
     /** page/size 규약 위반은 구조 오류(400 E-COM-001). AC-01-4. */
