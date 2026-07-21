@@ -5,6 +5,7 @@ import com.openplan.backend.global.error.OpenPlanException;
 import com.openplan.backend.global.time.UserClock;
 import com.openplan.backend.project.dto.ProjectCreateRequest;
 import com.openplan.backend.project.dto.ProjectResponse;
+import com.openplan.backend.project.dto.ProjectStatusChangeRequest;
 import com.openplan.backend.project.dto.ProjectUpdateRequest;
 import com.openplan.backend.project.entity.Project;
 import com.openplan.backend.project.entity.ProjectStatus;
@@ -127,6 +128,60 @@ public class ProjectService {
         Project project = projectRepository.findByIdAndUserId(projectId, userId)
                 .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004));
         return ProjectResponse.from(project);
+    }
+
+    /**
+     * 프로젝트 상태 변경 (PROJ-07 / AC-07-1~5). 순서: 열거 파싱(422) → 평가 선행 → 404 →
+     * <b>no-op 단락</b>(version 검사보다 먼저 — 더블클릭 내성, AC-07-3) → 409 → 전이 검증(T6→422) → 전이 수행.
+     */
+    @Transactional
+    public ProjectResponse changeStatus(UUID userId, UUID projectId, ProjectStatusChangeRequest req) {
+        ProjectStatus target = parseStatus(req.getStatus()); // 422 E-COM-009 (미정의 열거값)
+        autoCloseEvaluator.closeOverdue(userId);
+
+        Project project = projectRepository.findByIdAndUserId(projectId, userId)
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404
+
+        if (project.getStatus() == target) {   // no-op: version 미증가·dueDate 무시 (AC-07-3)
+            return ProjectResponse.from(project);
+        }
+        if (req.getVersion() != project.getVersion()) { // 409 (AC-07-5)
+            throw new OpenPlanException(ErrorCode.E_COM_006, Map.of("latest", ProjectResponse.from(project)));
+        }
+        if (!project.getStatus().canTransitionTo(target)) { // T6 CLOSED→PAUSED → 422 (AC-07-2)
+            throw new OpenPlanException(ErrorCode.E_PROJ_003);
+        }
+
+        if (target == ProjectStatus.IN_PROGRESS) {          // 재개 (T3/T5) + G-1 가드 (Q-C2)
+            LocalDate today = clock.todayOf(userId);
+            if (req.isDueDateProvided()) {
+                validator.validateDueDate(req.getDueDate(), today); // 동반값이 과거면 422 E-COM-009
+            }
+            LocalDate effectiveDue = req.isDueDateProvided() ? req.getDueDate() : project.getDueDate();
+            if (effectiveDue != null && effectiveDue.isBefore(today)) { // 과거 유지한 채 재개 → E-PROJ-004
+                throw new OpenPlanException(ErrorCode.E_PROJ_004);
+            }
+            project.resume(req.getDueDate(), req.isDueDateProvided(), clock.now());
+        } else {                                            // T1(→PAUSED)·T2/T4(→CLOSED)
+            if (req.isDueDateProvided()) {                  // dueDate는 재개 전용
+                throw new OpenPlanException(ErrorCode.E_COM_009, Map.of("fields", List.of(Map.of(
+                        "field", "dueDate", "rule", "unexpected", "message", "마감일은 재개 시에만 함께 변경할 수 있습니다."))));
+            }
+            project.transitionTo(target, clock.now());
+        }
+
+        projectRepository.flush(); // @Version 증가를 응답에 반영
+        return ProjectResponse.from(project);
+    }
+
+    /** status 문자열 → enum. 미정의 값 → 422 E-COM-009 (전이 오류 E-PROJ-003과 구분). */
+    private ProjectStatus parseStatus(String raw) {
+        try {
+            return ProjectStatus.valueOf(raw.trim());
+        } catch (IllegalArgumentException ex) {
+            throw new OpenPlanException(ErrorCode.E_COM_009, Map.of("fields", List.of(Map.of(
+                    "field", "status", "rule", "enum", "message", "정의되지 않은 상태값입니다: " + raw))));
+        }
     }
 
     /**
