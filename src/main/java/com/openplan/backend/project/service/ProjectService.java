@@ -3,8 +3,8 @@ package com.openplan.backend.project.service;
 import com.openplan.backend.project.dto.ProjectCreateRequest;
 import com.openplan.backend.project.dto.ProjectResponse;
 import com.openplan.backend.project.entity.Project;
+import com.openplan.backend.global.time.UserClock;
 import com.openplan.backend.project.repository.ProjectRepository;
-import com.openplan.backend.project.service.port.UserClock;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
