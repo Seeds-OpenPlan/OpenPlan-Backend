@@ -13,6 +13,7 @@ import jakarta.validation.Valid;
 import org.springframework.data.domain.Page;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -77,5 +78,15 @@ public class ProjectController {
             @PathVariable UUID projectId,
             @Valid @RequestBody ProjectUpdateRequest request) {
         return ApiResponse.ok(projectService.update(userId, projectId, request));
+    }
+
+    @DeleteMapping("/{projectId}")
+    @Operation(summary = "프로젝트 삭제 (PROJ-09)",
+            description = "hard delete. 연관 태스크·WBS·계획블록 함께 제거(FK cascade). 상태 무관. 부재·타인·재삭제 → 404.")
+    public ResponseEntity<Void> delete(
+            @CurrentUser UUID userId,
+            @PathVariable UUID projectId) {
+        projectService.delete(userId, projectId);
+        return ResponseEntity.noContent().build();
     }
 }
