@@ -5,6 +5,7 @@ import com.openplan.backend.global.error.OpenPlanException;
 import com.openplan.backend.global.time.UserClock;
 import com.openplan.backend.project.dto.ProjectCreateRequest;
 import com.openplan.backend.project.dto.ProjectResponse;
+import com.openplan.backend.project.dto.ProjectUpdateRequest;
 import com.openplan.backend.project.entity.Project;
 import com.openplan.backend.project.entity.ProjectStatus;
 import com.openplan.backend.project.repository.ProjectRepository;
@@ -59,6 +60,36 @@ public class ProjectService {
 
         Project project = new Project(userId, name, req.description(), req.dueDate(), req.priority(), clock.now());
         projectRepository.save(project);
+        return ProjectResponse.from(project);
+    }
+
+    /**
+     * 프로젝트 편집 (PROJ-06 / AC-06-1~4). 검사 순서 <b>404 → 409 → 422(CLOSED) → 422(필드)</b> 고정.
+     * 평가 선행(P-1): 기한 경과였다면 여기서 CLOSED·version+1 되어, stale 요청은 409로 떨어진다.
+     */
+    @Transactional
+    public ProjectResponse update(UUID userId, UUID projectId, ProjectUpdateRequest req) {
+        autoCloseEvaluator.closeOverdue(userId);
+
+        Project project = projectRepository.findByIdAndUserId(projectId, userId)
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404
+
+        if (req.version() != project.getVersion()) { // 409 — latest 동봉(SYS-05 재조회)
+            throw new OpenPlanException(ErrorCode.E_COM_006,
+                    Map.of("latest", ProjectResponse.from(project)));
+        }
+        if (project.getStatus() == ProjectStatus.CLOSED) { // 422 — 종료 상태는 재개 먼저(Q-E1)
+            throw new OpenPlanException(ErrorCode.E_PROJ_003);
+        }
+
+        LocalDate today = clock.todayOf(userId);
+        String name = validator.validateName(req.name());          // 422 — 생성과 동일 규칙(AC-06-2)
+        validator.validateDueDate(req.dueDate(), today);
+
+        project.edit(name, req.description(), req.dueDate(), req.priority());
+        // 명시적 flush: @Version이 여기서 증가(WHERE version=? UPDATE)해 응답이 새 version을 담는다
+        // (AC-06-1 "version 증가 반영 — FE 재조회 불요"). 잔여 경합은 OptimisticLockException → 409.
+        projectRepository.flush();
         return ProjectResponse.from(project);
     }
 
