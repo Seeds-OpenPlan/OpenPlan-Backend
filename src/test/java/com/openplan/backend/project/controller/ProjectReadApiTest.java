@@ -158,6 +158,14 @@ class ProjectReadApiTest {
     }
 
     @Test
+    @DisplayName("M1 — page 비정수(page=abc) → 400 E-COM-001 (ProjectListQuery 바인딩, 500 아님)")
+    void nonIntegerPageIsBadRequest() throws Exception {
+        mockMvc.perform(get(PATH).param("page", "abc").header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("E-COM-001"));
+    }
+
+    @Test
     @DisplayName("AC-07-2(목록) 미정의 status 값 → 422 E-COM-009")
     void invalidStatusValue() throws Exception {
         mockMvc.perform(get(PATH).param("status", "ARCHIVED").header("X-Dev-User", MAIN.toString()))

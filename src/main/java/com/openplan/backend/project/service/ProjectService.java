@@ -19,7 +19,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.EnumSet;
 import java.util.List;
@@ -35,8 +34,6 @@ import java.util.UUID;
  */
 @Service
 public class ProjectService {
-
-    private static final int SIZE_MAX = 100;
 
     private final ProjectRepository projectRepository;
     private final ProjectValidator validator;
@@ -109,7 +106,7 @@ public class ProjectService {
      * @param statusRaw null/빈 값 = 전체 3상태. 미정의 열거값 → 422.
      */
     public Page<ProjectResponse> list(UUID userId, int page, int size, List<String> statusRaw) {
-        validatePaging(page, size);
+        // page/size 규약(1-base·상한100)은 컨트롤러 ProjectListQuery @Min/@Max가 400으로 선검증한다(AC-01-4).
         Collection<ProjectStatus> statuses = parseStatuses(statusRaw);
 
         autoCloseEvaluator.closeOverdue(userId); // 평가 선행(REQUIRES_NEW 커밋) → 이후 조회가 결과를 봄
@@ -202,19 +199,6 @@ public class ProjectService {
         weeklyPlanTotalsRecalculator.recalculate(affectedWeeklyPlans); // B-4, 같은 tx
     }
 
-    /** page/size 규약 위반은 구조 오류(400 E-COM-001). AC-01-4. */
-    private void validatePaging(int page, int size) {
-        List<Map<String, Object>> bad = new ArrayList<>();
-        if (page < 1) {
-            bad.add(Map.of("field", "page", "rule", "min", "message", "page는 1 이상이어야 합니다."));
-        }
-        if (size < 1 || size > SIZE_MAX) {
-            bad.add(Map.of("field", "size", "rule", "range", "message", "size는 1~100이어야 합니다."));
-        }
-        if (!bad.isEmpty()) {
-            throw new OpenPlanException(ErrorCode.E_COM_001, Map.of("fields", bad));
-        }
-    }
 
     /** status 필터 파싱(Q-H). null/빈 값 = 전체. 미정의 열거값 → 422 E-COM-009. */
     private Collection<ProjectStatus> parseStatuses(List<String> statusRaw) {
