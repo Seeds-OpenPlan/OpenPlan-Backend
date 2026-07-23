@@ -8,11 +8,17 @@ import com.openplan.backend.project.domain.ProjectStatus;
 import com.openplan.backend.project.repository.ProjectRepository;
 import com.openplan.backend.project.service.ProjectAutoCloseEvaluator;
 import com.openplan.backend.task.domain.Task;
+import com.openplan.backend.task.domain.TaskStatus;
 import com.openplan.backend.task.dto.TaskCreateRequest;
+import com.openplan.backend.task.dto.TaskListQuery;
 import com.openplan.backend.task.dto.TaskResponse;
 import com.openplan.backend.task.repository.OwnedTask;
 import com.openplan.backend.task.repository.TaskRepository;
 import com.openplan.backend.task.service.port.TaskCategoryChecker;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -78,6 +84,42 @@ public class TaskService {
                 req.estimatedMinutes(), req.priority(), req.dueDate(), clock.now());
         taskRepository.save(task);
         return TaskResponse.from(task);
+    }
+
+    /**
+     * 프로젝트 내 태스크 목록 (PROJ-16 / EP-1 · AC-L-1~4). 정렬은 서버 고정(created_at DESC, task_id DESC — D-9).
+     *
+     * <p>읽기 경로 — 자동종료 평가·서비스 tx 없음(프로젝트 status를 응답·판정에 미사용, B-5 비소비 지점).
+     * CLOSED/PAUSED 프로젝트의 태스크도 조회 가능(D-10은 쓰기 가드만). 프로젝트 소유는
+     * {@code ProjectRepository.findByIdAndUserId}로 선판정해 부재·타인을 404로 은닉한다(AC-L-4).
+     *
+     * @param query status(단건 열거값, null/빈 값=전체 · 미정의값→422)·page(1-base)·size(≤100)
+     */
+    public Page<TaskResponse> list(UUID userId, UUID projectId, TaskListQuery query) {
+        projectRepository.findByIdAndUserId(projectId, userId)
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404 (AC-L-4)
+
+        TaskStatus statusFilter = parseStatusFilter(query.getStatus());          // 미정의값 → 422 (AC-L-2)
+        Pageable pageable = PageRequest.of(query.getPage() - 1, query.getSize(),
+                Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id")));   // D-9 서버 고정
+
+        Page<Task> page = (statusFilter == null)
+                ? taskRepository.findByProjectId(projectId, pageable)
+                : taskRepository.findByProjectIdAndStatus(projectId, statusFilter, pageable);
+        return page.map(TaskResponse::from);
+    }
+
+    /** status 필터 문자열 → enum. null/빈 값 = 전체(null 반환). 미정의 열거값 → 422 E-COM-009(AC-L-2). */
+    private TaskStatus parseStatusFilter(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            return TaskStatus.valueOf(raw.trim());
+        } catch (IllegalArgumentException ex) {
+            throw new OpenPlanException(ErrorCode.E_COM_009, Map.of("fields", List.of(Map.of(
+                    "field", "status", "rule", "enum", "message", "허용되지 않는 status 값입니다."))));
+        }
     }
 
     /**
