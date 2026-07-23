@@ -12,9 +12,11 @@ import com.openplan.backend.task.domain.TaskStatus;
 import com.openplan.backend.task.dto.TaskCreateRequest;
 import com.openplan.backend.task.dto.TaskListQuery;
 import com.openplan.backend.task.dto.TaskResponse;
+import com.openplan.backend.task.dto.TaskStatusToggleRequest;
 import com.openplan.backend.task.dto.TaskUpdateRequest;
 import com.openplan.backend.task.repository.OwnedTask;
 import com.openplan.backend.task.repository.TaskRepository;
+import com.openplan.backend.task.service.port.PlanBlockStatusMirror;
 import com.openplan.backend.task.service.port.TaskCategoryChecker;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -42,16 +44,19 @@ public class TaskService {
     private final ProjectRepository projectRepository;
     private final ProjectAutoCloseEvaluator autoCloseEvaluator;
     private final TaskCategoryChecker categoryChecker;
+    private final PlanBlockStatusMirror planBlockStatusMirror;
     private final UserClock clock;
 
     public TaskService(TaskRepository taskRepository, TaskValidator validator,
                        ProjectRepository projectRepository, ProjectAutoCloseEvaluator autoCloseEvaluator,
-                       TaskCategoryChecker categoryChecker, UserClock clock) {
+                       TaskCategoryChecker categoryChecker, PlanBlockStatusMirror planBlockStatusMirror,
+                       UserClock clock) {
         this.taskRepository = taskRepository;
         this.validator = validator;
         this.projectRepository = projectRepository;
         this.autoCloseEvaluator = autoCloseEvaluator;
         this.categoryChecker = categoryChecker;
+        this.planBlockStatusMirror = planBlockStatusMirror;
         this.clock = clock;
     }
 
@@ -169,6 +174,51 @@ public class TaskService {
 
         task.edit(title, req.memo(), req.estimatedMinutes(), req.priority(), req.dueDate(), req.categoryId());
         taskRepository.flush(); // @Version 증가를 응답에 반영. 잔여 경합 → OptimisticLockException → 409
+        return TaskResponse.from(task);
+    }
+
+    /**
+     * 완료/미완료 전환 (PLAN-13/14 / EP-5 · AC-S-1~6). 태스크 status 전환 + plan_blocks 미러를 <b>동일 tx</b>로(TB-1).
+     * 검사 순서(service-sequences §4): 평가 선행 → 404 → 422(CLOSED) → <b>no-op 단락</b>(version보다 먼저) → 409 → 전이.
+     *
+     * <p><b>CLOSED 가드가 no-op보다 먼저</b>(AC-S-5 ∩ AC-S-6 교차 — exceptions §3): CLOSED 하위는 no-op 요청도 422.
+     * 완료→COMPLETED 미러, 미완료→착지(블록≥1: IN_PROGRESS+SCHEDULED 미러 / 블록0: UNASSIGNED, 미러 미발동 — D-1c).
+     */
+    @Transactional
+    public TaskResponse toggleCompletion(UUID userId, UUID taskId, TaskStatusToggleRequest req) {
+        autoCloseEvaluator.closeOverdue(userId);
+
+        OwnedTask owned = taskRepository.findOwnedWithProjectStatus(taskId, userId)
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404 (AC-S-6)
+        Task task = owned.task();
+
+        if (owned.projectStatus() == ProjectStatus.CLOSED) { // ① 422 — no-op보다 먼저 (D-10, AC-S-6)
+            throw new OpenPlanException(ErrorCode.E_PROJ_003,
+                    Map.of("fields", List.of(Map.of("field", "project.status"))));
+        }
+
+        boolean currentlyCompleted = task.getStatus() == TaskStatus.COMPLETED;
+        if (req.completed() == currentlyCompleted) { // ② no-op 단락 — version 검사보다 먼저 (AC-S-5, 더블클릭 내성)
+            return TaskResponse.from(task);          // version 미증가·미러 미발동
+        }
+        if (req.version() != task.getVersion()) {    // ③ 409 (AC-S-6)
+            throw new OpenPlanException(ErrorCode.E_COM_006,
+                    Map.of("latest", TaskResponse.from(task)));
+        }
+
+        if (req.completed()) {                        // 완료로 표시 (TT-3)
+            task.complete();                          // UNASSIGNED면 엔티티가 E_PROJ_003 throw (TT-6, AC-S-4)
+            planBlockStatusMirror.mirrorStatus(taskId, TaskStatus.COMPLETED); // 블록 → COMPLETED (AC-S-1)
+        } else {                                      // 미완료로 되돌리기
+            boolean hasBlocks = planBlockStatusMirror.hasBlocks(taskId);
+            TaskStatus landing = task.reopen(hasBlocks);
+            if (landing == TaskStatus.IN_PROGRESS) {  // TT-4 (블록≥1)
+                planBlockStatusMirror.mirrorStatus(taskId, TaskStatus.IN_PROGRESS); // 블록 → SCHEDULED (AC-S-2)
+            }
+            // landing == UNASSIGNED (TT-5, 블록0) → 미러 미발동 (AC-S-3, D-1c)
+        }
+
+        taskRepository.flush(); // @Version 증가 + 블록 미러 UPDATE 동일 tx 커밋 (TB-1 원자성)
         return TaskResponse.from(task);
     }
 }
