@@ -1,7 +1,7 @@
 package com.openplan.backend.project.service;
 
 import com.openplan.backend.global.time.UserClock;
-import com.openplan.backend.project.entity.ProjectStatus;
+import com.openplan.backend.project.domain.ProjectStatus;
 import com.openplan.backend.project.repository.ProjectRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

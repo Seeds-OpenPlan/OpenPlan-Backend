@@ -1,4 +1,4 @@
-package com.openplan.backend.project.entity;
+package com.openplan.backend.project.domain;
 
 /**
  * 프로젝트 상태 (ST-B2-01 status-state-machine).

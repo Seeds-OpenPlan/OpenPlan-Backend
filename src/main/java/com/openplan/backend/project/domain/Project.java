@@ -1,4 +1,4 @@
-package com.openplan.backend.project.entity;
+package com.openplan.backend.project.domain;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;

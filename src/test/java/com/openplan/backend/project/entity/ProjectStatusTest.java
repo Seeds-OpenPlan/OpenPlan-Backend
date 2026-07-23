@@ -1,5 +1,6 @@
 package com.openplan.backend.project.entity;
 
+import com.openplan.backend.project.domain.ProjectStatus;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;

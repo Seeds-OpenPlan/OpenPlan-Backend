@@ -1,6 +1,6 @@
 package com.openplan.backend.project.controller;
 
-import com.openplan.backend.project.entity.ProjectStatus;
+import com.openplan.backend.project.domain.ProjectStatus;
 import com.openplan.backend.support.FixedClockConfig;
 import com.openplan.backend.support.TestcontainersConfig;
 import org.junit.jupiter.api.BeforeEach;

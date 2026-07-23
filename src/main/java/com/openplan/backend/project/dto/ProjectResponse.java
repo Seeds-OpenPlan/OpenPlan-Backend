@@ -1,6 +1,6 @@
 package com.openplan.backend.project.dto;
 
-import com.openplan.backend.project.entity.Project;
+import com.openplan.backend.project.domain.Project;
 
 import java.time.Instant;
 import java.time.LocalDate;

@@ -1,7 +1,7 @@
 package com.openplan.backend.project.repository;
 
-import com.openplan.backend.project.entity.Project;
-import com.openplan.backend.project.entity.ProjectStatus;
+import com.openplan.backend.project.domain.Project;
+import com.openplan.backend.project.domain.ProjectStatus;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
