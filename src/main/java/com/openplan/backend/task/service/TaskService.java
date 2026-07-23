@@ -10,6 +10,7 @@ import com.openplan.backend.project.service.ProjectAutoCloseEvaluator;
 import com.openplan.backend.task.domain.Task;
 import com.openplan.backend.task.dto.TaskCreateRequest;
 import com.openplan.backend.task.dto.TaskResponse;
+import com.openplan.backend.task.repository.OwnedTask;
 import com.openplan.backend.task.repository.TaskRepository;
 import com.openplan.backend.task.service.port.TaskCategoryChecker;
 import org.springframework.stereotype.Service;
@@ -77,5 +78,17 @@ public class TaskService {
                 req.estimatedMinutes(), req.priority(), req.dueDate(), clock.now());
         taskRepository.save(task);
         return TaskResponse.from(task);
+    }
+
+    /**
+     * 태스크 단건 조회 (PROJ-18 편집 폼 로딩 / EP-3 · AC-R-1~2). 전 필드 + version 반환.
+     *
+     * <p>평가 선행·서비스 tx 없음(service-sequences §1): 프로젝트 status를 판정에 쓰지 않고 404만 내므로
+     * 자동종료 평가가 불요하다. 소유 체인 조인으로 부재·타인 소유를 404 E-COM-004로 은닉한다(AC-R-2).
+     */
+    public TaskResponse detail(UUID userId, UUID taskId) {
+        OwnedTask owned = taskRepository.findOwnedWithProjectStatus(taskId, userId)
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404 (AC-R-2)
+        return TaskResponse.from(owned.task());
     }
 }
