@@ -12,6 +12,7 @@ import com.openplan.backend.task.domain.TaskStatus;
 import com.openplan.backend.task.dto.TaskCreateRequest;
 import com.openplan.backend.task.dto.TaskListQuery;
 import com.openplan.backend.task.dto.TaskResponse;
+import com.openplan.backend.task.dto.TaskUpdateRequest;
 import com.openplan.backend.task.repository.OwnedTask;
 import com.openplan.backend.task.repository.TaskRepository;
 import com.openplan.backend.task.service.port.TaskCategoryChecker;
@@ -132,5 +133,42 @@ public class TaskService {
         OwnedTask owned = taskRepository.findOwnedWithProjectStatus(taskId, userId)
                 .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404 (AC-R-2)
         return TaskResponse.from(owned.task());
+    }
+
+    /**
+     * 태스크 편집 단일 폼 (PROJ-18=PLAN-10 / EP-4 · AC-E-1~5). 6필드 전체 폼 교체 + 낙관락.
+     * 검사 순서(service-sequences §3): 평가 선행 → 404(taskId) → 422(CLOSED) → 409(version) → 422(필드) → 404(categoryId).
+     *
+     * <p><b>CLOSED를 version보다 먼저</b>(as-built 순서 승계): "종료된 프로젝트 하위는 수정 불가"는 버전 신선도와
+     * 무관한 절대 규칙(D-10). <b>COMPLETED 태스크 편집은 허용</b>(AC-E-5) — 태스크 status는 편집 가드가 아니다.
+     * categoryId=null = 카테고리 해제(검사 생략). flush로 @Version 증가를 응답에 반영(FE 재조회 불요).
+     */
+    @Transactional
+    public TaskResponse update(UUID userId, UUID taskId, TaskUpdateRequest req) {
+        autoCloseEvaluator.closeOverdue(userId);
+
+        OwnedTask owned = taskRepository.findOwnedWithProjectStatus(taskId, userId)
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404 (AC-E-3 taskId)
+        Task task = owned.task();
+
+        if (owned.projectStatus() == ProjectStatus.CLOSED) { // 422 — version보다 먼저 (D-10, AC-E-5)
+            throw new OpenPlanException(ErrorCode.E_PROJ_003,
+                    Map.of("fields", List.of(Map.of("field", "project.status"))));
+        }
+        if (req.version() != task.getVersion()) { // 409 — 최신 TaskResponse 동봉 (AC-E-4)
+            throw new OpenPlanException(ErrorCode.E_COM_006,
+                    Map.of("latest", TaskResponse.from(task)));
+        }
+
+        String title = validator.validateTitle(req.title());          // 422 (AC-E-3, 생성과 동일 코드)
+        validator.validateEstimatedMinutes(req.estimatedMinutes());    // 422
+
+        if (req.categoryId() != null && !categoryChecker.existsOwned(req.categoryId(), userId)) {
+            throw new OpenPlanException(ErrorCode.E_COM_004);           // 404 (AC-E-3 categoryId, D-8)
+        }
+
+        task.edit(title, req.memo(), req.estimatedMinutes(), req.priority(), req.dueDate(), req.categoryId());
+        taskRepository.flush(); // @Version 증가를 응답에 반영. 잔여 경합 → OptimisticLockException → 409
+        return TaskResponse.from(task);
     }
 }
