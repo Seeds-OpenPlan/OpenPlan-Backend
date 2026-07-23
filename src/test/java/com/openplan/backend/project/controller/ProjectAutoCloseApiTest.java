@@ -136,7 +136,7 @@ class ProjectAutoCloseApiTest {
                         .content("""
                                 {"name":"편집 시도","version":0}"""))
                 .andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.error.code").value("E-PROJ-003"));
+                .andExpect(jsonPath("$.error.code").value("E-PROJ-005"));
 
         assertThat(statusOf(p)).isEqualTo("CLOSED"); // 평가로 실제 종료됨
     }

@@ -80,8 +80,8 @@ public class ProjectService {
         Project project = projectRepository.findByIdAndUserId(projectId, userId)
                 .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404
 
-        if (project.getStatus() == ProjectStatus.CLOSED) { // 422 — 종료는 수정 불가, 재개 먼저(Q-E1)
-            throw new OpenPlanException(ErrorCode.E_PROJ_003);
+        if (project.getStatus() == ProjectStatus.CLOSED) { // 422 — 종료는 수정 불가, 재개 먼저(Q-E1). 편집 전용 코드(전이불허 E-PROJ-003과 구분)
+            throw new OpenPlanException(ErrorCode.E_PROJ_005);
         }
         if (req.version() != project.getVersion()) { // 409 — 종료 아닌 경우의 동시수정 보호, latest 동봉(SYS-05)
             throw new OpenPlanException(ErrorCode.E_COM_006,
