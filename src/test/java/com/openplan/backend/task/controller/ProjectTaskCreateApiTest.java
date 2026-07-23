@@ -14,6 +14,7 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -21,7 +22,6 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
 
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -206,7 +206,7 @@ class ProjectTaskCreateApiTest {
     // ---------- fixtures ----------
 
     private org.springframework.test.web.servlet.ResultActions post(UUID projectId, String body) throws Exception {
-        return mockMvc.perform(post("/api/v1/projects/" + projectId + "/tasks")
+        return mockMvc.perform(MockMvcRequestBuilders.post("/api/v1/projects/" + projectId + "/tasks")
                 .header("X-Dev-User", MAIN.toString())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(body));
