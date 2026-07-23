@@ -23,8 +23,8 @@ out/
 Thumbs.db
 
 # BATHOS
-.claude/
-assets/
-modules/
-.agent-team/
-core/
+/.claude/
+/assets/
+/modules/
+/.agent-team/
+/core/
