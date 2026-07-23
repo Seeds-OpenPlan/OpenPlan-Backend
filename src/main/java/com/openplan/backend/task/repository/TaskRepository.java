@@ -1,6 +1,9 @@
 package com.openplan.backend.task.repository;
 
 import com.openplan.backend.task.domain.Task;
+import com.openplan.backend.task.domain.TaskStatus;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -20,4 +23,8 @@ public interface TaskRepository extends JpaRepository<Task, UUID> {
              where t.id = :taskId and p.id = t.projectId and p.userId = :userId
             """)
     Optional<OwnedTask> findOwnedWithProjectStatus(@Param("taskId") UUID taskId, @Param("userId") UUID userId);
+
+    Page<Task> findByProjectId(UUID projectId, Pageable pageable);
+
+    Page<Task> findByProjectIdAndStatus(UUID projectId, TaskStatus status, Pageable pageable);
 }
