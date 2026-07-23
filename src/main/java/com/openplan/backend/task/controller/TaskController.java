@@ -3,6 +3,7 @@ package com.openplan.backend.task.controller;
 import com.openplan.backend.global.response.ApiResponse;
 import com.openplan.backend.global.security.CurrentUser;
 import com.openplan.backend.task.dto.TaskResponse;
+import com.openplan.backend.task.dto.TaskStatusToggleRequest;
 import com.openplan.backend.task.dto.TaskUpdateRequest;
 import com.openplan.backend.task.service.TaskService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -53,5 +54,18 @@ public class TaskController {
             @PathVariable UUID taskId,
             @Valid @RequestBody TaskUpdateRequest request) {
         return ApiResponse.ok(taskService.update(userId, taskId, request));
+    }
+
+    @PatchMapping("/{taskId}/status")
+    @Operation(summary = "완료/미완료 전환 (PLAN-13/14)",
+            description = "{completed, version}. completed=true=완료로 표시(IN_PROGRESS→COMPLETED, 블록 COMPLETED 미러). "
+                    + "false=미완료로 되돌리기(블록≥1→IN_PROGRESS+SCHEDULED 미러 / 블록0→UNASSIGNED 착지). "
+                    + "UNASSIGNED에 완료 → 422 E-PROJ-003(TT-6). 동일 완료여부=200 no-op(version 검사 전 단락). "
+                    + "평가 선행 후 CLOSED 프로젝트 → 422(no-op보다 먼저). stale version → 409 + details.latest.")
+    public ApiResponse<TaskResponse> toggleCompletion(
+            @CurrentUser UUID userId,
+            @PathVariable UUID taskId,
+            @Valid @RequestBody TaskStatusToggleRequest request) {
+        return ApiResponse.ok(taskService.toggleCompletion(userId, taskId, request));
     }
 }
