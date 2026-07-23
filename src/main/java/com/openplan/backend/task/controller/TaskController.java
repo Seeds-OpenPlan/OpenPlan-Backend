@@ -3,11 +3,15 @@ package com.openplan.backend.task.controller;
 import com.openplan.backend.global.response.ApiResponse;
 import com.openplan.backend.global.security.CurrentUser;
 import com.openplan.backend.task.dto.TaskResponse;
+import com.openplan.backend.task.dto.TaskUpdateRequest;
 import com.openplan.backend.task.service.TaskService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -37,5 +41,17 @@ public class TaskController {
             @CurrentUser UUID userId,
             @PathVariable UUID taskId) {
         return ApiResponse.ok(taskService.detail(userId, taskId));
+    }
+
+    @PatchMapping("/{taskId}")
+    @Operation(summary = "태스크 편집 단일 폼 (PROJ-18=PLAN-10)",
+            description = "6필드(title·memo·estimatedMinutes·priority·dueDate·categoryId) 전체 폼 교체 + version 낙관락. "
+                    + "categoryId null=해제. status 포함 시 400(상태는 /status 전용). 평가 선행 후 CLOSED 프로젝트 태스크 "
+                    + "→ 422 E-PROJ-003(COMPLETED 태스크·PAUSED 프로젝트는 성공). stale version → 409 + details.latest.")
+    public ApiResponse<TaskResponse> update(
+            @CurrentUser UUID userId,
+            @PathVariable UUID taskId,
+            @Valid @RequestBody TaskUpdateRequest request) {
+        return ApiResponse.ok(taskService.update(userId, taskId, request));
     }
 }
