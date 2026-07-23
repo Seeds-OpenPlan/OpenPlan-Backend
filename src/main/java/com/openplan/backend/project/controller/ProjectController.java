@@ -73,7 +73,7 @@ public class ProjectController {
 
     @PutMapping("/{projectId}")
     @Operation(summary = "프로젝트 편집 (PROJ-06)",
-            description = "name·description·dueDate·priority 전체 교체 + version 낙관락. status/closedAt 포함 시 400. CLOSED 편집 → 422.")
+            description = "name·description·dueDate·priority 전체 교체 + version 낙관락. status/closedAt 포함 시 400. CLOSED 편집 → 422 E-PROJ-005. 마감 경과 PAUSED를 과거 마감일 유지한 채 편집 → 422 E-PROJ-006(마감일 미래 변경 안내).")
     public ApiResponse<ProjectResponse> update(
             @CurrentUser UUID userId,
             @PathVariable UUID projectId,

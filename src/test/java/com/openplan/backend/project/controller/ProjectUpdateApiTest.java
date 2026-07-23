@@ -150,6 +150,41 @@ class ProjectUpdateApiTest {
     }
 
     @Test
+    @DisplayName("마감 경과 PAUSED 편집 — 과거 마감일 유지 → 422 E-PROJ-006 · 미래로 변경/무기한 전환 → 200")
+    void editOverduePausedGuardsPastDueDate() throws Exception {
+        // FIXED_TODAY=2026-07-15. 마감 경과(2026-07-01) PAUSED 프로젝트 — 자동종료에서 제외되어 편집 대상
+        UUID id = insert(MAIN, "경과-중지", ProjectStatus.PAUSED, LocalDate.of(2026, 7, 1), 0, null);
+
+        // 과거 마감일 그대로 편집 → 전용 코드(범용 E-COM-009 아님)
+        mockMvc.perform(put(PATH + "/" + id).header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"name":"제목만 수정","dueDate":"2026-07-01","version":0}
+                                """))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.code").value("E-PROJ-006"));
+
+        // 마감일을 오늘 이후로 변경하면 편집 성공 (status는 PAUSED 유지)
+        mockMvc.perform(put(PATH + "/" + id).header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"name":"제목 수정","dueDate":"2099-12-31","version":0}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("PAUSED"))
+                .andExpect(jsonPath("$.data.dueDate").value("2099-12-31"));
+
+        // 무기한(null)으로 비워도 편집 성공 — 앞 편집으로 version=1
+        mockMvc.perform(put(PATH + "/" + id).header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"name":"무기한 전환","dueDate":null,"version":1}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.dueDate").doesNotExist());
+    }
+
+    @Test
     @DisplayName("종료 먼저 안내 — 종료된 프로젝트는 낡은 version이어도 409 아닌 422 E-PROJ-005 (User 판정)")
     void closedGuardBeforeVersionCheck() throws Exception {
         // 서버 version=3인 CLOSED 프로젝트에 stale version=0으로 편집 시도

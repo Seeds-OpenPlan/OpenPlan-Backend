@@ -47,6 +47,7 @@ public enum ErrorCode {
     E_PROJ_003("E-PROJ-003", HttpStatus.UNPROCESSABLE_ENTITY),
     E_PROJ_004("E-PROJ-004", HttpStatus.UNPROCESSABLE_ENTITY),   // ST-B2-01 G-1 — 마감 경과 재개 불가(마감일 변경 필요)
     E_PROJ_005("E-PROJ-005", HttpStatus.UNPROCESSABLE_ENTITY),   // ST-B2-01 — 종료된 프로젝트 편집 불가(재개 먼저). 전이불허(E-PROJ-003)와 구분
+    E_PROJ_006("E-PROJ-006", HttpStatus.UNPROCESSABLE_ENTITY),   // ST-B2-01 — 마감 경과 프로젝트(자동종료 제외된 PAUSED) 편집 시 과거 마감일 유지 불가(마감일 변경 필요). 재개 가드(E-PROJ-004)와 대칭
     E_WBS_001("E-WBS-001", HttpStatus.UNPROCESSABLE_ENTITY),
 
     // 2.4 주간 계획 (E-PLAN) — BE-2

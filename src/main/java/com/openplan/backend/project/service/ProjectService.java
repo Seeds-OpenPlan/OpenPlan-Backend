@@ -69,6 +69,10 @@ public class ProjectService {
      * 프로젝트 편집 (PROJ-06 / AC-06-1~4). 검사 순서 <b>404 → 422(CLOSED) → 409(버전) → 422(필드)</b>.
      * 평가 선행(P-1): 기한 경과였다면 여기서 CLOSED·version+1 된다.
      *
+     * <p><b>마감 경과 PAUSED 편집 안내(E-PROJ-006)</b>: 자동종료에서 제외되는 PAUSED는 마감이 지나도 편집
+     * 가능하되, 과거 마감일을 그대로 둔 편집은 거부한다. 이때 범용 형식오류(E-COM-009)가 아니라 상황을 담은
+     * E-PROJ-006으로 "마감일을 오늘 이후로 먼저 변경" 을 안내한다(재개 가드 E-PROJ-004와 대칭).
+     *
      * <p><b>CLOSED를 버전보다 먼저 검사</b>(User 판정 2026-07-22, 원설계의 버전-우선을 대체): "종료된 건 수정 불가"는
      * 버전 신선도와 무관한 절대 규칙이라, 자동종료가 버전을 올려도 "충돌(409)"이 아니라 "종료라 수정 불가(422)"로
      * 명확히 안내한다. 종료 아닌 경우의 동시 수정 보호(409)는 그대로 유지된다.
@@ -90,6 +94,16 @@ public class ProjectService {
 
         LocalDate today = clock.todayOf(userId);
         String name = validator.validateName(req.name());          // 422 — 생성과 동일 규칙(AC-06-2)
+
+        // 마감 경과 프로젝트(자동종료에서 제외된 PAUSED)를 과거 마감일 그대로 편집 → 전용 안내(E-PROJ-006).
+        // "종료는 재개 먼저(E-PROJ-005)"·"경과 재개는 마감일 먼저(E-PROJ-004)"와 대칭:
+        // 경과 편집도 "마감일 먼저 미래로" 를 범용 형식오류(E-COM-009)가 아니라 상황을 담은 코드로 안내한다.
+        // 마감 미경과 프로젝트에 과거 날짜를 신규 입력한 순수 형식 오류는 아래 validateDueDate가 E-COM-009로 유지.
+        boolean requestKeepsPastDue = req.dueDate() != null && req.dueDate().isBefore(today);
+        boolean projectAlreadyOverdue = project.getDueDate() != null && project.getDueDate().isBefore(today);
+        if (requestKeepsPastDue && projectAlreadyOverdue) {
+            throw new OpenPlanException(ErrorCode.E_PROJ_006);
+        }
         validator.validateDueDate(req.dueDate(), today);
 
         project.edit(name, req.description(), req.dueDate(), req.priority());
