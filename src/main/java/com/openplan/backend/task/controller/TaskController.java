@@ -9,6 +9,8 @@ import com.openplan.backend.task.service.TaskService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -67,5 +69,17 @@ public class TaskController {
             @PathVariable UUID taskId,
             @Valid @RequestBody TaskStatusToggleRequest request) {
         return ApiResponse.ok(taskService.toggleCompletion(userId, taskId, request));
+    }
+
+    @DeleteMapping("/{taskId}")
+    @Operation(summary = "태스크 삭제 (TUT-07)",
+            description = "hard delete + FK cascade(wbs·blocks·validation·logs) 위임 + 같은 tx 주간계획 캐시 재계산(TB-4). "
+                    + "version 불요·태스크 status 무관. 평가 선행 후 CLOSED 프로젝트 태스크 → 422 E-PROJ-003. "
+                    + "부재·타인·재삭제 → 404. 성공 204(봉투 없음).")
+    public ResponseEntity<Void> delete(
+            @CurrentUser UUID userId,
+            @PathVariable UUID taskId) {
+        taskService.delete(userId, taskId);
+        return ResponseEntity.noContent().build();
     }
 }
