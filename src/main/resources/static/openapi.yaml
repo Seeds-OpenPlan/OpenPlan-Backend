@@ -1,0 +1,2558 @@
+openapi: 3.1.0
+info:
+  title: OpenPlan MVP1 API
+  version: 1.0.0
+  description: |
+    재정합 정본 (US 07-15 기준). 봉투: 성공 {data, meta} / 실패 {error{code,message,details}}.
+    오류 코드 전수 목록은 exceptions.md. x-user-stories = US/SS 추적, x-lane = W5 소유 레인.
+    인증: httpOnly 쿠키 op_at(JWT access 30m) + op_rt(refresh 14d, Path=/api/v1/auth). ADR-0001.
+
+    ── D-16 인증 구축 순서 (ADR-0010) ──
+    인증(authN) 실구현은 4주차. 그 전에는 dev-auth 스텁이 고정 개발 사용자를 주입한다.
+    x-auth-phase: WEEK4-STUB = 4주차까지 501 {error.code: E-AUTH-011} 스텁 /
+    DEV-STUB-ACTIVE = 스텁 기간에도 dev 사용자 기준으로 동작 (FE 세션 복원 경로 보존).
+    본 파일의 인증 요청/응답 스키마는 그 자체로 확정 계약이다 — 4주차 교체 시 계약 변경 0.
+    dev 프로파일: devAuth(X-Dev-User 헤더, 생략 시 고정 dev 사용자) / 운영: cookieAuth.
+    상세 스텁 계약: api-contracts.md §4.
+servers:
+  - url: /api/v1
+security:
+  - cookieAuth: []
+  - devAuth: []   # dev 프로파일 한정 (D-16 dev-auth 스텁). 운영 빌드에서 필터 자체가 미등록
+
+# ─────────────────────────────────────────────── AUTH (BE-1)
+paths:
+  /auth/sessions:
+    post:
+      operationId: login
+      x-auth-phase: WEEK4-STUB   # D-16 — 4주차 전 501 E-AUTH-011
+      summary: 로컬 로그인 (쿠키 발급)
+      x-lane: BE-1
+      x-user-stories: [AUTH-01]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        "200":
+          description: 로그인 성공. Set-Cookie op_at/op_rt. NFR-001 5초.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/SessionInfo" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: E-AUTH-008 비활성화 계정(재활성화 가능) — details.reactivationTicket, details.recoverableUntil 포함 (ACCT-05)
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+        "410":
+          description: E-AUTH-009 삭제된 계정(복구 불가, ACCT-06)
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+  /auth/session:
+    get:
+      operationId: getSession
+      x-auth-phase: DEV-STUB-ACTIVE   # D-16 — 스텁 기간에도 dev 사용자로 정상 응답
+      summary: 세션 확인 (새로고침 시 로그인 상태 복원)
+      x-lane: BE-1
+      x-user-stories: [AUTH-07]
+      responses:
+        "200":
+          description: 유효 세션
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/SessionInfo" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    delete:
+      operationId: logout
+      x-auth-phase: DEV-STUB-ACTIVE   # D-16 — 스텁 기간에도 dev 사용자로 정상 응답
+      summary: 로그아웃 (세션 폐기 + 쿠키 만료)
+      x-lane: BE-1
+      x-user-stories: [ACCT-03]
+      responses:
+        "204": { description: 로그아웃 완료 }
+  /auth/token-refresh:
+    post:
+      operationId: refreshToken
+      x-auth-phase: WEEK4-STUB   # D-16 — 4주차 전 501 E-AUTH-011
+      summary: access 재발급 (refresh 회전 — AUTH-08 세션 만료 복귀)
+      x-lane: BE-1
+      x-user-stories: [AUTH-07, AUTH-08]
+      security: []
+      responses:
+        "200":
+          description: 재발급 성공. Set-Cookie 갱신. data.previousPath = 복귀 경로(NFR-004)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      previousPath: { type: [string, "null"] }
+        "401":
+          description: E-AUTH-007 refresh 무효/만료 → 재로그인
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+  /auth/oauth/{provider}:
+    get:
+      operationId: oauthStart
+      x-auth-phase: WEEK4-STUB   # D-16 — 4주차 전 501 E-AUTH-011
+      summary: 소셜 인가 시작 (302 → 제공자)
+      x-lane: BE-1
+      x-user-stories: [AUTH-02]
+      security: []
+      parameters: [{ $ref: "#/components/parameters/OAuthProvider" }]
+      responses:
+        "302": { description: 제공자 인가 페이지로 리다이렉트 (state 발급) }
+  /auth/oauth/{provider}/callback:
+    get:
+      operationId: oauthCallback
+      x-auth-phase: WEEK4-STUB   # D-16 — 4주차 전 501 E-AUTH-011
+      summary: 소셜 콜백 — 쿠키 발급 후 302 (쿼리스트링 토큰 전달 금지 — ADR-0001)
+      x-lane: BE-1
+      x-user-stories: [AUTH-02, ACCT-05]
+      security: []
+      parameters:
+        - { $ref: "#/components/parameters/OAuthProvider" }
+        - { name: code, in: query, required: true, schema: { type: string } }
+        - { name: state, in: query, required: true, schema: { type: string } }
+      responses:
+        "302":
+          description: >
+            성공 → /dashboard 또는 /onboarding. 비활성화 계정 → /auth/reactivate?ticket=…(1회용).
+            실패 → /login?error=E-AUTH-010.
+  /auth/reactivations:
+    post:
+      operationId: reactivateAccount
+      x-auth-phase: WEEK4-STUB   # D-16 — 4주차 전 501 E-AUTH-011
+      summary: 계정 재활성화 (30일 내 — SC-09)
+      x-lane: BE-1
+      x-user-stories: [ACCT-05]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              description: 로컬 = credentials / 소셜 = reactivationTicket 중 하나
+              type: object
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+                reactivationTicket: { type: string }
+      responses:
+        "200":
+          description: 재활성화 + 로그인 완료(쿠키 발급). 기존 데이터 보존.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/SessionInfo" }
+        "410":
+          description: E-AUTH-009 30일 경과 — 복구 불가
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+  /users:
+    post:
+      operationId: signUp
+      x-auth-phase: WEEK4-STUB   # D-16 — 4주차 전 501 E-AUTH-011
+      summary: 회원가입
+      x-lane: BE-1
+      x-user-stories: [AUTH-03]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, termsAgreed]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8 }
+                termsAgreed: { type: boolean }
+      responses:
+        "201":
+          description: 계정 생성 → 이메일 인증 단계 (해시 저장 — NFR-003)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      userId: { type: string, format: uuid }
+                      emailVerificationRequired: { type: boolean }
+        "409":
+          description: E-AUTH-003 이미 가입된 이메일
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+  /auth/email-verifications:
+    post:
+      operationId: sendEmailVerification
+      x-auth-phase: WEEK4-STUB   # D-16 — 4주차 전 501 E-AUTH-011
+      summary: 인증 메일 발송 (재발송 겸용, 429 제한)
+      x-lane: BE-1
+      x-user-stories: [AUTH-04]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [email], properties: { email: { type: string, format: email } } }
+      responses:
+        "202": { description: 발송 접수 }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+  /auth/email-verifications/confirmation:
+    post:
+      operationId: confirmEmailVerification
+      x-auth-phase: WEEK4-STUB   # D-16 — 4주차 전 501 E-AUTH-011
+      summary: 이메일 인증 완료
+      x-lane: BE-1
+      x-user-stories: [AUTH-04]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [token], properties: { token: { type: string } } }
+      responses:
+        "200": { description: 인증 완료(멱등 — 기인증도 200) }
+        "410":
+          description: E-AUTH-004 링크 만료
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+  /auth/password-resets:
+    post:
+      operationId: requestPasswordReset
+      x-auth-phase: WEEK4-STUB   # D-16 — 4주차 전 501 E-AUTH-011
+      summary: 비밀번호 재설정 메일 요청
+      x-lane: BE-1
+      x-user-stories: [AUTH-05]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [email], properties: { email: { type: string, format: email } } }
+      responses:
+        "202": { description: 접수 (존재 여부 무관 동일 응답 — 계정 열거 방지) }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+  /auth/password-resets/{token}:
+    patch:
+      operationId: completePasswordReset
+      x-auth-phase: WEEK4-STUB   # D-16 — 4주차 전 501 E-AUTH-011
+      summary: 재설정 완료 (링크 만료 + 1회용 — NFR-005)
+      x-lane: BE-1
+      x-user-stories: [AUTH-06]
+      security: []
+      parameters: [{ name: token, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [newPassword], properties: { newPassword: { type: string, minLength: 8 } } }
+      responses:
+        "200": { description: 변경 완료 → 로그인 화면 }
+        "410":
+          description: E-AUTH-006 만료 또는 이미 사용된 링크
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+
+  # ───────────────────────────────────────────── USER / ONBOARDING / SETTINGS (BE-1)
+  /users/me:
+    get:
+      operationId: getMe
+      summary: 내 계정+프로필
+      x-lane: BE-1
+      x-user-stories: [ACCT-01]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/UserProfile" }
+    delete:
+      operationId: deactivateMe
+      summary: 계정 비활성화 (30일 복구창 — 이후 배치 삭제, NFR-007)
+      x-lane: BE-1
+      x-user-stories: [ACCT-04, ACCT-06]
+      responses:
+        "200":
+          description: 비활성화 + 전 세션 종료. data.recoverableUntil 반환.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      recoverableUntil: { type: string, format: date-time }
+  /users/me/profile:
+    patch:
+      operationId: updateProfile
+      summary: 프로필 수정
+      x-lane: BE-1
+      x-user-stories: [ONB-02, ACCT-01]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, maxLength: 50 }
+                purpose: { type: string, maxLength: 100 }
+                timezone: { type: string, examples: [Asia/Seoul] }
+                weekStartDay: { $ref: "#/components/schemas/Weekday" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/UserProfile" }
+  /users/me/password:
+    patch:
+      operationId: changePassword
+      summary: 비밀번호 변경
+      x-lane: BE-1
+      x-user-stories: [ACCT-02]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currentPassword, newPassword]
+              properties:
+                currentPassword: { type: string }
+                newPassword: { type: string, minLength: 8 }
+      responses:
+        "200": { description: 변경 완료 }
+        "400": { description: E-USER-001 현재 비밀번호 불일치, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+  /users/me/onboarding-progress:
+    get:
+      operationId: getOnboardingProgress
+      summary: 온보딩·튜토리얼 진행 상태
+      x-lane: BE-1
+      x-user-stories: [ONB-01, TUT-08]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/OnboardingProgress" }
+    patch:
+      operationId: updateOnboardingProgress
+      summary: 단계 완료/건너뛰기 · 튜토리얼 재실행(tutorialDone=false 리셋 — TUT-09)
+      x-lane: BE-1
+      x-user-stories: [ONB-01, ONB-02, ONB-04, ONB-06, ONB-07, TUT-08, TUT-09]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OnboardingProgress" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/OnboardingProgress" }
+  /onboarding/contents:
+    get:
+      operationId: getOnboardingContents
+      summary: 소개·안내 콘텐츠 (2장 — SC-05/SC-11 교정 문구, 규칙 기반 검증 중심 명칭)
+      x-lane: BE-1
+      x-user-stories: [ONB-01, ONB-03, ONB-05, TUT-02]
+      parameters:
+        - { name: step, in: query, required: true, schema: { type: string, enum: [INTRO, AVAILABILITY_GUIDE, FIXED_SCHEDULE_GUIDE, TUTORIAL] } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        order: { type: integer }
+                        title: { type: string }
+                        body: { type: string }
+                        imageUrl: { type: [string, "null"] }
+  /users/me/availabilities:
+    get:
+      operationId: getAvailabilities
+      summary: 가용 시간 조회 (요일 7행 + 주간 총합)
+      x-lane: BE-1
+      x-user-stories: [FIX-01, ONB-04]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/AvailabilityView" }
+    put:
+      operationId: saveAvailabilities
+      summary: 가용 시간 전체 저장 (공통 패턴 일괄 적용은 FE가 7행 확장 — 5분 단위)
+      x-lane: BE-1
+      x-user-stories: [ONB-04, FIX-02, FIX-03, PLAN-32]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [patterns]
+              properties:
+                patterns:
+                  type: array
+                  minItems: 7
+                  maxItems: 7
+                  items: { $ref: "#/components/schemas/AvailabilityPattern" }
+      responses:
+        "200":
+          description: 저장 + 주간 총합 재계산
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/AvailabilityView" }
+        "422": { $ref: "#/components/responses/UnprocessableEntity" }
+  /users/me/preferences:
+    get:
+      operationId: getPreferences
+      summary: 사용자 기본 설정 조회
+      x-lane: BE-1
+      x-user-stories: [FIX-10]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Preferences" }
+    put:
+      operationId: savePreferences
+      summary: 기본 설정 저장 (예상 시간 기본값 5분 단위 · 재계획 대안 기본값)
+      x-lane: BE-1
+      x-user-stories: [FIX-11, FIX-12]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Preferences" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Preferences" }
+  /users/me/preference-suggestions:
+    get:
+      operationId: getPreferenceSuggestions
+      summary: 규칙 기반 기본값 제안 (SS-14 — 제안만, 적용은 사용자 PUT — C-2)
+      x-lane: BE-1
+      x-user-stories: [RB-FIX-01]
+      responses:
+        "200":
+          description: 이력 부족 시 data=null (오류 아님)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    oneOf:
+                      - { $ref: "#/components/schemas/PreferenceSuggestion" }
+                      - { type: "null" }
+  /settings:
+    get:
+      operationId: getSettingsHome
+      summary: 설정 홈 조립 응답 (D-12 레버 5)
+      x-lane: BE-1
+      x-user-stories: [FIX-01, FIX-10, FIX-13, NOTI-01]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      availability: { $ref: "#/components/schemas/AvailabilityView" }
+                      preferences: { $ref: "#/components/schemas/Preferences" }
+                      connections:
+                        type: array
+                        items: { $ref: "#/components/schemas/ExternalConnection" }
+                      notificationSettings:
+                        type: array
+                        items: { $ref: "#/components/schemas/NotificationSetting" }
+  /landing:
+    get:
+      operationId: getLanding
+      summary: 랜딩 콘텐츠 (비인증)
+      x-lane: BE-1
+      x-user-stories: [LANDING]
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      sections: { type: array, items: { type: object } }
+
+  # ───────────────────────────────────────────── EXTERNAL CALENDAR (BE-1)
+  /external-calendar-connections:
+    get:
+      operationId: listConnections
+      summary: 연동 목록·상태
+      x-lane: BE-1
+      x-user-stories: [FIX-13]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/ExternalConnection" }
+    post:
+      operationId: createConnection
+      summary: 연동 추가 (제공자 authCode 교환)
+      x-lane: BE-1
+      x-user-stories: [ONB-07, FIX-14]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider, authCode, redirectUri]
+              properties:
+                provider: { type: string, enum: [GOOGLE] }
+                authCode: { type: string }
+                redirectUri: { type: string }
+      responses:
+        "201":
+          description: 연결 완료
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/ExternalConnection" }
+        "409": { description: E-EXT-004 이미 연결된 계정, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "502": { description: E-EXT-001 제공자 오류, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+  /external-calendar-connections/{connectionId}:
+    patch:
+      operationId: updateConnection
+      summary: 연동 활성/비활성 (FIX-16)
+      x-lane: BE-1
+      x-user-stories: [FIX-16]
+      parameters: [{ $ref: "#/components/parameters/ConnectionId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [status], properties: { status: { type: string, enum: [CONNECTED, DISABLED] } } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/ExternalConnection" }
+    delete:
+      operationId: deleteConnection
+      summary: 연동 해제 (이후 해당 캘린더 일정 미반영 — FIX-17)
+      x-lane: BE-1
+      x-user-stories: [FIX-17]
+      parameters: [{ $ref: "#/components/parameters/ConnectionId" }]
+      responses:
+        "204": { description: 해제 완료 }
+  /external-calendar-connections/{connectionId}/calendars:
+    get:
+      operationId: listProviderCalendars
+      summary: 제공자 캘린더 목록 (ONB-08)
+      x-lane: BE-1
+      x-user-stories: [ONB-08]
+      parameters: [{ $ref: "#/components/parameters/ConnectionId" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        externalCalendarId: { type: string }
+                        name: { type: string }
+                        selected: { type: boolean }
+  /external-calendar-connections/{connectionId}/calendar-selections:
+    put:
+      operationId: saveCalendarSelections
+      summary: 가져올 캘린더 선택 전체 교체 (목록에서 제거 = 미포함 — FIX-15)
+      x-lane: BE-1
+      x-user-stories: [ONB-08, FIX-15]
+      parameters: [{ $ref: "#/components/parameters/ConnectionId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [selections]
+              properties:
+                selections:
+                  type: array
+                  items:
+                    type: object
+                    required: [externalCalendarId, name]
+                    properties:
+                      externalCalendarId: { type: string }
+                      name: { type: string }
+      responses:
+        "200": { description: 저장 완료 }
+  /external-calendar-connections/{connectionId}/events:
+    get:
+      operationId: listExternalEvents
+      summary: 가져온 일정 후보 목록 (선택 캘린더 기준 동기화 수행 후 반환)
+      x-lane: BE-1
+      x-user-stories: [ONB-08, ONB-09]
+      parameters:
+        - { $ref: "#/components/parameters/ConnectionId" }
+        - { name: applyStatus, in: query, schema: { type: string, enum: [CANDIDATE, APPLIED, EXCLUDED] } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/ExternalEvent" }
+  /external-calendar-events/{eventId}/application:
+    post:
+      operationId: applyExternalEvent
+      summary: 반영 방식 적용 — AS_IS/EDITED → 고정 일정(source=EXTERNAL) 생성, EXCLUDE → 제외 (ONB-09)
+      x-lane: BE-1
+      x-user-stories: [ONB-09]
+      parameters: [{ name: eventId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode: { type: string, enum: [AS_IS, EDITED, EXCLUDE] }
+                edited:
+                  type: object
+                  description: mode=EDITED일 때 고정 일정 필드 재정의
+                  properties:
+                    title: { type: string }
+                    weekday: { $ref: "#/components/schemas/Weekday" }
+                    startTime: { type: string, format: time }
+                    endTime: { type: string, format: time }
+      responses:
+        "201":
+          description: 반영 결과 (EXCLUDE는 fixedSchedule=null)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      applyStatus: { type: string, enum: [APPLIED, EXCLUDED] }
+                      fixedSchedule:
+                        oneOf:
+                          - { $ref: "#/components/schemas/FixedSchedule" }
+                          - { type: "null" }
+
+  # ───────────────────────────────────────────── NOTIFICATIONS / SUPPORT / ANNOUNCEMENTS (BE-1)
+  /users/me/notification-settings:
+    get:
+      operationId: getNotificationSettings
+      summary: 알림 설정 조회 (5유형)
+      x-lane: BE-1
+      x-user-stories: [NOTI-01]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/NotificationSetting" }
+    put:
+      operationId: saveNotificationSettings
+      summary: 알림 설정 저장
+      x-lane: BE-1
+      x-user-stories: [NOTI-01]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [settings]
+              properties:
+                settings:
+                  type: array
+                  items: { $ref: "#/components/schemas/NotificationSetting" }
+      responses:
+        "200": { description: 저장 완료 }
+  /notifications:
+    get:
+      operationId: listNotifications
+      summary: 알림 센터 (최신순 + 미읽음 수)
+      x-lane: BE-1
+      x-user-stories: [NOTI-02, NOTI-04]
+      parameters: [{ $ref: "#/components/parameters/Page" }, { $ref: "#/components/parameters/Size" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Notification" }
+                  meta:
+                    type: object
+                    properties:
+                      page: { $ref: "#/components/schemas/PageMeta" }
+                      unreadCount: { type: integer }
+  /notifications/{notificationId}/read:
+    patch:
+      operationId: markNotificationRead
+      summary: 읽음 처리
+      x-lane: BE-1
+      x-user-stories: [NOTI-03]
+      parameters: [{ name: notificationId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: 읽음 처리(멱등) }
+  /notifications/read-all:
+    patch:
+      operationId: markAllNotificationsRead
+      summary: 전체 읽음
+      x-lane: BE-1
+      x-user-stories: [NOTI-03]
+      responses:
+        "200": { description: 처리 완료 }
+  /support/tickets:
+    get:
+      operationId: listTickets
+      summary: 내 문의 목록 (답변 유무 필드 — HELP-02, 본인 것만 — NFR-030)
+      x-lane: BE-1
+      x-user-stories: [HELP-01, HELP-02]
+      parameters: [{ $ref: "#/components/parameters/Page" }, { $ref: "#/components/parameters/Size" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/SupportTicket" }
+                  meta:
+                    type: object
+                    properties:
+                      page: { $ref: "#/components/schemas/PageMeta" }
+    post:
+      operationId: createTicket
+      summary: 문의 등록
+      x-lane: BE-1
+      x-user-stories: [HELP-04, HELP-05]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [category, title, content]
+              properties:
+                category: { type: string, enum: [BUG, ACCOUNT, PLAN, ETC] }
+                title: { type: string, maxLength: 200 }
+                content: { type: string }
+      responses:
+        "201":
+          description: 접수 완료
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/SupportTicket" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+  /support/tickets/{ticketId}:
+    get:
+      operationId: getTicket
+      summary: 문의 상세 (타인 문의는 404 은닉 — NFR-030)
+      x-lane: BE-1
+      x-user-stories: [HELP-03]
+      parameters: [{ name: ticketId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/SupportTicket" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /support/help-articles:
+    get:
+      operationId: listHelpArticles
+      summary: FAQ/도움말 검색 (키워드·주제)
+      x-lane: BE-1
+      x-user-stories: [HELP-06]
+      security: []
+      parameters:
+        - { name: keyword, in: query, schema: { type: string } }
+        - { name: category, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/HelpArticle" }
+  /support/help-articles/{articleId}:
+    get:
+      operationId: getHelpArticle
+      summary: 도움말 상세
+      x-lane: BE-1
+      x-user-stories: [HELP-06]
+      security: []
+      parameters: [{ name: articleId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/HelpArticle" }
+  /announcements:
+    get:
+      operationId: listAnnouncements
+      summary: 공지 목록
+      x-lane: BE-1
+      x-user-stories: [OPS-01]
+      security: []
+      parameters: [{ $ref: "#/components/parameters/Page" }, { $ref: "#/components/parameters/Size" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Announcement" }
+                  meta:
+                    type: object
+                    properties:
+                      page: { $ref: "#/components/schemas/PageMeta" }
+  /announcements/{announcementId}:
+    get:
+      operationId: getAnnouncement
+      summary: 공지 상세
+      x-lane: BE-1
+      x-user-stories: [OPS-02]
+      security: []
+      parameters: [{ name: announcementId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Announcement" }
+
+  # ───────────────────────────────────────────── PROJECTS / TASKS / WBS (BE-2)
+  /projects:
+    get:
+      operationId: listProjects
+      summary: 프로젝트 목록 (탭·배지) — 자동 종료 지연 평가 지점 (ADR-0006)
+      x-lane: BE-2
+      x-user-stories: [PROJ-01, PROJ-08]
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [IN_PROGRESS, PAUSED, CLOSED] } }
+        - { $ref: "#/components/parameters/Page" }
+        - { $ref: "#/components/parameters/Size" }
+      responses:
+        "200":
+          description: OK (NFR-011 2초)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/ProjectSummary" }
+                  meta:
+                    type: object
+                    properties:
+                      page: { $ref: "#/components/schemas/PageMeta" }
+    post:
+      operationId: createProject
+      summary: 프로젝트 생성
+      x-lane: BE-2
+      x-user-stories: [PROJ-02, TUT-03]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, maxLength: 100 }
+                description: { type: string }
+                dueDate: { type: [string, "null"], format: date }
+      responses:
+        "201":
+          description: 생성 → 작업공간 이동
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Project" }
+  /projects/{projectId}:
+    get:
+      operationId: getProject
+      summary: 프로젝트 상세 (태스크 상태 집계 배지 포함)
+      x-lane: BE-2
+      x-user-stories: [PROJ-03, PROJ-04]
+      parameters: [{ $ref: "#/components/parameters/ProjectId" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Project" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updateProject
+      summary: 프로젝트 편집 (version 필수 — SYS-05)
+      x-lane: BE-2
+      x-user-stories: [PROJ-06]
+      parameters: [{ $ref: "#/components/parameters/ProjectId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              properties:
+                name: { type: string }
+                description: { type: string }
+                dueDate: { type: [string, "null"], format: date }
+                version: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Project" }
+        "409": { $ref: "#/components/responses/VersionConflict" }
+    delete:
+      operationId: deleteProject
+      summary: 삭제 — 태스크·계획 항목·수행 이력 일괄 제거 (NFR-008 일관 기준)
+      x-lane: BE-2
+      x-user-stories: [PROJ-09]
+      parameters: [{ $ref: "#/components/parameters/ProjectId" }]
+      responses:
+        "204": { description: 삭제 완료 }
+  /projects/{projectId}/status:
+    patch:
+      operationId: changeProjectStatus
+      summary: 상태 전환 (진행중/중지/종료 — 상태 기계는 service-sequences §3)
+      x-lane: BE-2
+      x-user-stories: [PROJ-05, PROJ-07]
+      parameters: [{ $ref: "#/components/parameters/ProjectId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status, version]
+              properties:
+                status: { type: string, enum: [IN_PROGRESS, PAUSED, CLOSED] }
+                version: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: OK (동일 상태 재요청도 200 — 멱등)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Project" }
+        "409": { $ref: "#/components/responses/VersionConflict" }
+        "422": { description: E-PROJ-003 허용되지 않는 전이, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+  /projects/{projectId}/duplication-preview:
+    get:
+      operationId: getDuplicationPreview
+      summary: 복제 항목 확인 (이름·설명·태스크·WBS 개요 — PROJ-11)
+      x-lane: BE-2
+      x-user-stories: [PROJ-10, PROJ-11]
+      parameters: [{ $ref: "#/components/parameters/ProjectId" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      name: { type: string }
+                      description: { type: string }
+                      taskCount: { type: integer }
+                      wbsItemCount: { type: integer }
+                      note: { type: string, description: "주간 계획 항목은 복제되지 않음(47행 열거 밖) — 복제본 태스크 전량 미배치" }
+  /projects/{projectId}/duplications:
+    post:
+      operationId: duplicateProject
+      summary: 복제 실행 (Idempotency-Key 수용 — 이중 클릭 방지)
+      x-lane: BE-2
+      x-user-stories: [PROJ-12]
+      parameters:
+        - { $ref: "#/components/parameters/ProjectId" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                newName: { type: string, description: "미지정 시 '원본명 (복제)'" }
+      responses:
+        "201":
+          description: 복제본 생성 — 원본 무변경, 태스크 전량 UNASSIGNED
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Project" }
+  /projects/{projectId}/tasks:
+    get:
+      operationId: listProjectTasks
+      summary: 태스크 목록 (전체/진행중/완료 필터 — PROJ-16)
+      x-lane: BE-2
+      x-user-stories: [PROJ-16]
+      parameters:
+        - { $ref: "#/components/parameters/ProjectId" }
+        - { name: status, in: query, schema: { type: string, enum: [UNASSIGNED, IN_PROGRESS, COMPLETED] } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Task" }
+    post:
+      operationId: createTask
+      summary: 태스크 생성 (카테고리 SC-01 · 예상시간 5분 단위 · 폼은 correction-proposals 제안 병기 — SS-11)
+      x-lane: BE-2
+      x-user-stories: [PROJ-17, TUT-04, RB-STAT-02]
+      parameters: [{ $ref: "#/components/parameters/ProjectId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TaskInput" }
+      responses:
+        "201":
+          description: 생성 — 미배치 상태로 배치 대상화
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Task" }
+        "422": { $ref: "#/components/responses/UnprocessableEntity" }
+  /projects/{projectId}/tasks/bulk:
+    post:
+      operationId: createTasksBulk
+      summary: 일괄 생성 (구조화 초안 채택 — draftId 지정 시 is_adopted 마킹)
+      x-lane: BE-2
+      x-user-stories: [RB-PROJ-01]
+      parameters: [{ $ref: "#/components/parameters/ProjectId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tasks]
+              properties:
+                tasks:
+                  type: array
+                  minItems: 1
+                  items:
+                    allOf:
+                      - { $ref: "#/components/schemas/TaskInput" }
+                      - type: object
+                        properties:
+                          draftId: { type: [string, "null"], format: uuid }
+      responses:
+        "201":
+          description: 생성 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Task" }
+  /tasks:
+    get:
+      operationId: listTasks
+      summary: 사용자 전체 태스크 (미배치 패널 — status=UNASSIGNED)
+      x-lane: BE-2
+      x-user-stories: [PLAN-05, PROJ-19]
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [UNASSIGNED, IN_PROGRESS, COMPLETED] } }
+        - { name: projectId, in: query, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Task" }
+  /tasks/{taskId}:
+    get:
+      operationId: getTask
+      summary: 태스크 상세 (편집 폼)
+      x-lane: BE-2
+      x-user-stories: [PROJ-18]
+      parameters: [{ $ref: "#/components/parameters/TaskId" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Task" }
+    patch:
+      operationId: updateTask
+      summary: 태스크 편집 — PROJ-18=PLAN-10 단일 정의 (D-10 통합, version 필수)
+      x-lane: BE-2
+      x-user-stories: [PROJ-18, PLAN-10]
+      parameters: [{ $ref: "#/components/parameters/TaskId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - { $ref: "#/components/schemas/TaskInput" }
+                - type: object
+                  required: [version]
+                  properties:
+                    version: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 프로젝트·주간 계획 표시에 동시 반영
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Task" }
+        "409": { $ref: "#/components/responses/VersionConflict" }
+    delete:
+      operationId: deleteTask
+      summary: 태스크 삭제 (블록·이력 연쇄 — NFR-008)
+      x-lane: BE-2
+      x-user-stories: [TUT-07]
+      parameters: [{ $ref: "#/components/parameters/TaskId" }]
+      responses:
+        "204": { description: 삭제 완료 }
+  /tasks/{taskId}/status:
+    patch:
+      operationId: changeTaskStatus
+      summary: 완료/미완료 전환 (블록 status 미러 동기 갱신)
+      x-lane: BE-2
+      x-user-stories: [PLAN-13, PLAN-14]
+      parameters: [{ $ref: "#/components/parameters/TaskId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [IN_PROGRESS, COMPLETED] }
+      responses:
+        "200":
+          description: OK (멱등)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Task" }
+  /tasks/{taskId}/wbs-range:
+    put:
+      operationId: saveWbsRange
+      summary: WBS 기간 설정/조정 (업서트 — PROJ-13/14)
+      x-lane: BE-2
+      x-user-stories: [PROJ-13, PROJ-14]
+      parameters: [{ $ref: "#/components/parameters/TaskId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [startDate, endDate]
+              properties:
+                startDate: { type: string, format: date }
+                endDate: { type: string, format: date }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/WbsItem" }
+        "422": { description: E-WBS-001 종료일 < 시작일, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+  /tasks/{taskId}/execution-logs:
+    post:
+      operationId: recordExecution
+      summary: 실제 시간 기록 (5분 단위 — PLAN-15, 통계 즉시 반영)
+      x-lane: BE-2
+      x-user-stories: [PLAN-15, DASH-05]
+      parameters: [{ $ref: "#/components/parameters/TaskId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [startedAt, endedAt, actualMinutes, result]
+              properties:
+                planBlockId: { type: [string, "null"], format: uuid }
+                startedAt: { type: string, format: date-time }
+                endedAt: { type: string, format: date-time }
+                actualMinutes: { type: integer, multipleOf: 5, minimum: 5 }
+                result: { type: string, enum: [COMPLETED, DELAYED, ABORTED] }
+                memo: { type: string }
+      responses:
+        "201":
+          description: 기록 완료
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/ExecutionLog" }
+        "422": { $ref: "#/components/responses/UnprocessableEntity" }
+  /task-categories:
+    get:
+      operationId: listTaskCategories
+      summary: 카테고리 프리셋 목록 (SC-01)
+      x-lane: BE-2
+      x-user-stories: [RB-STAT-01]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/TaskCategory" }
+    post:
+      operationId: createTaskCategory
+      summary: 프리셋 추가
+      x-lane: BE-2
+      x-user-stories: [RB-STAT-01]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [name], properties: { name: { type: string, maxLength: 50 } } }
+      responses:
+        "201":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/TaskCategory" }
+        "409": { description: 동일 이름 존재, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+  /task-categories/{categoryId}:
+    delete:
+      operationId: deleteTaskCategory
+      summary: 프리셋 삭제 — 연결 태스크는 '없음'(null) 전환 (FK SET NULL)
+      x-lane: BE-2
+      x-user-stories: [RB-STAT-01]
+      parameters: [{ name: categoryId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "204": { description: 삭제 완료 }
+  /projects/{projectId}/wbs:
+    get:
+      operationId: getProjectWbs
+      summary: WBS 뷰 (태스크별 기간 바)
+      x-lane: BE-2
+      x-user-stories: [PROJ-13]
+      parameters: [{ $ref: "#/components/parameters/ProjectId" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/WbsItem" }
+  /projects/{projectId}/structuring-drafts:
+    post:
+      operationId: generateStructuringDrafts
+      summary: 태스크 구조화 초안 생성 (SS-03 — 정적 규칙 사전, 초안만 · C-2)
+      x-lane: BE-2
+      x-user-stories: [RB-PROJ-01]
+      parameters: [{ $ref: "#/components/parameters/ProjectId" }]
+      responses:
+        "201":
+          description: 초안 목록 (사용자 수정 후 tasks/bulk로 채택)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/StructuringDraft" }
+  /projects/{projectId}/structure-warnings:
+    get:
+      operationId: getStructureWarnings
+      summary: 태스크 구조 부족 경고 (SS-04 — 임계값은 W3 확정 후 골든 고정)
+      x-lane: BE-2
+      x-user-stories: [RB-PROJ-02]
+      parameters: [{ $ref: "#/components/parameters/ProjectId" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        warningType: { type: string, enum: [TOO_FEW_TASKS, MISSING_ESTIMATES, DEADLINE_PRESSURE] }
+                        reason: { type: string }
+                        action: { type: string, enum: [ADD_TASK, EDIT_TASK] }
+
+  # ───────────────────────────────────────────── WEEKLY PLANS / BLOCKS / VALIDATION / REPLAN (BE-2)
+  /weekly-plans:
+    get:
+      operationId: getWeeklyPlanView
+      summary: 주간 화면 조립 응답 (계획+블록+고정일정+가용시간+미배치수+검증요약 — NFR-011/024)
+      x-lane: BE-2
+      x-user-stories: [PLAN-01, PLAN-02, PLAN-04, PLAN-05, PLAN-21]
+      parameters:
+        - { name: weekStartDate, in: query, required: true, schema: { type: string, format: date } }
+      responses:
+        "200":
+          description: 해당 주차 계획 미존재 시 data.plan=null (FE가 POST로 생성)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/WeeklyPlanView" }
+    post:
+      operationId: getOrCreateWeeklyPlan
+      summary: 주차 초안 get-or-create (UQ user+weekStartDate — 재호출 시 기존 반환)
+      x-lane: BE-2
+      x-user-stories: [PLAN-02, PLAN-20]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [weekStartDate]
+              properties:
+                weekStartDate: { type: string, format: date }
+      responses:
+        "200": { description: 기존 계획 반환, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/WeeklyPlan" } } } } } }
+        "201": { description: 초안 생성, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/WeeklyPlan" } } } } } }
+  /weekly-plans/{planId}/confirmation:
+    post:
+      operationId: confirmWeeklyPlan
+      summary: 주간 계획 저장=확정 (서버가 검증 재실행 — 차단 존재 시 409, PLAN-28 규칙)
+      x-lane: BE-2
+      x-user-stories: [PLAN-03, PLAN-28]
+      parameters: [{ $ref: "#/components/parameters/PlanId" }, { $ref: "#/components/parameters/IdempotencyKey" }]
+      responses:
+        "200":
+          description: 확정 완료 (경고 잔존 허용). 이후 편집 시 DRAFT 복귀 — ADR-0008
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/WeeklyPlan" }
+        "409":
+          description: E-PLAN-004 차단 항목 존재 — details.issues에 차단 목록
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+  /weekly-plans/{planId}/validations:
+    post:
+      operationId: validateWeeklyPlan
+      summary: >
+        검증 실행 (SS-06/RB-PLAN-02). body 없음 = 현재 초안 판정 + validation_issues 영속.
+        body.virtualBlocks 제공 = dry-run(무영속) — PLAN-11 미리보기·FIX-07이 소비 (C-4).
+      x-lane: BE-2
+      x-user-stories: [RB-PLAN-02, PLAN-11, PLAN-21, PLAN-22]
+      parameters: [{ $ref: "#/components/parameters/PlanId" }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                virtualBlocks:
+                  type: array
+                  description: 가상 배치(전체 대체 스냅샷). 지정 시 dry-run.
+                  items: { $ref: "#/components/schemas/PlanBlockInput" }
+                virtualTaskEdits:
+                  type: array
+                  description: 미저장 태스크 편집 반영 (PLAN-11)
+                  items:
+                    type: object
+                    properties:
+                      taskId: { type: string, format: uuid }
+                      estimatedMinutes: { type: integer, multipleOf: 5 }
+                      dueDate: { type: [string, "null"], format: date }
+      responses:
+        "200":
+          description: 판정 결과 — 동일 입력이면 완전 동일 (P1 골든 테스트 대상)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/ValidationReport" }
+  /weekly-plans/{planId}/auto-placements:
+    post:
+      operationId: proposeAutoPlacement
+      summary: 자동 배치 제안 (SS-05 — first-fit, 저장 아님 · C-2 · NFR-029 5초)
+      x-lane: BE-2
+      x-user-stories: [RB-PLAN-01]
+      parameters: [{ $ref: "#/components/parameters/PlanId" }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                taskIds:
+                  type: array
+                  description: 미지정 시 미배치 전량
+                  items: { type: string, format: uuid }
+      responses:
+        "200":
+          description: 제안 초안 (적용은 block-batches로 사용자가)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/PlacementProposal" }
+  /weekly-plans/{planId}/block-batches:
+    post:
+      operationId: applyBlockBatch
+      summary: 블록 일괄 적용 (제안 수용 = 사용자 확정 행위 — P2)
+      x-lane: BE-2
+      x-user-stories: [RB-PLAN-01, PLAN-29]
+      parameters: [{ $ref: "#/components/parameters/PlanId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operations]
+              properties:
+                operations:
+                  type: array
+                  items:
+                    type: object
+                    required: [op]
+                    properties:
+                      op: { type: string, enum: [CREATE, MOVE, DELETE] }
+                      block: { $ref: "#/components/schemas/PlanBlockInput" }
+                      planBlockId: { type: [string, "null"], format: uuid }
+      responses:
+        "200":
+          description: 적용 후 최신 블록 목록 + 검증 요약 재계산
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/WeeklyPlanView" }
+  /weekly-plans/{planId}/blocks:
+    post:
+      operationId: createPlanBlock
+      summary: 블록 생성 — blockType 분기 단일 정의 (D-10 통합). TASK=taskId 필수 / SCHEDULE=schedule 인라인 생성
+      x-lane: BE-2
+      x-user-stories: [PLAN-06, PLAN-07, PLAN-08, TUT-05, TUT-06]
+      parameters: [{ $ref: "#/components/parameters/PlanId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PlanBlockInput" }
+      responses:
+        "201":
+          description: 블록 생성 + 미배치 수 재계산 (NFR-025 — FE 낙관적 업데이트)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/PlanBlock" }
+        "422": { $ref: "#/components/responses/UnprocessableEntity" }
+  /plan-blocks/{blockId}:
+    patch:
+      operationId: movePlanBlock
+      summary: 블록 이동·시간 조정 (PLAN-19) · 주차 이동은 targetWeekStartDate (PLAN-20 — 대상 주차 초안 get-or-create)
+      x-lane: BE-2
+      x-user-stories: [PLAN-19, PLAN-20, PLAN-09]
+      parameters: [{ $ref: "#/components/parameters/BlockId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                startAt: { type: string, format: date-time }
+                endAt: { type: string, format: date-time }
+                targetWeekStartDate: { type: [string, "null"], format: date }
+      responses:
+        "200":
+          description: 이동 완료 (검증 상태 갱신 — PLAN-19 결과절)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/PlanBlock" }
+        "422": { description: "E-PLAN-002 시작>=종료 (NFR-009) · E-COM-009 5분 단위", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+    delete:
+      operationId: deletePlanBlock
+      summary: TASK 블록=배치 해제(태스크 UNASSIGNED 복귀 — PLAN-16) / SCHEDULE 블록=일정 삭제(schedules 행 연쇄 — PLAN-18)
+      x-lane: BE-2
+      x-user-stories: [PLAN-16, PLAN-18, TUT-07]
+      parameters: [{ $ref: "#/components/parameters/BlockId" }]
+      responses:
+        "204": { description: 완료 + 가용/여유 재계산 }
+  /schedules/{scheduleId}:
+    patch:
+      operationId: updateSchedule
+      summary: 일정 편집 (제목·예상시간·우선순위·메모 — B2 보강 컬럼, version 필수)
+      x-lane: BE-2
+      x-user-stories: [PLAN-17]
+      parameters: [{ name: scheduleId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              properties:
+                title: { type: string }
+                estimatedMinutes: { type: [integer, "null"], multipleOf: 5 }
+                priority: { type: [integer, "null"] }
+                memo: { type: string }
+                version: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Schedule" }
+        "409": { $ref: "#/components/responses/VersionConflict" }
+  /weekly-plans/{planId}/replan-options:
+    post:
+      operationId: generateReplanOptions
+      summary: 재계획 대안 생성 (SS-07~09 — 3전략 + 기준선, NFR-029 5초, SS-13 구간 우선 반영)
+      x-lane: BE-2
+      x-user-stories: [PLAN-29, RB-PLAN-03, RB-PLAN-04, RB-PLAN-05, RB-STAT-04]
+      parameters: [{ $ref: "#/components/parameters/PlanId" }]
+      responses:
+        "201":
+          description: 기준선(KEEP_CURRENT, 생성 로직 없음) + 대안 3종
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      baseline: { $ref: "#/components/schemas/ReplanOption" }
+                      options:
+                        type: array
+                        items: { $ref: "#/components/schemas/ReplanOption" }
+    get:
+      operationId: listReplanOptions
+      summary: 대안 재조회 (비교 화면 새로고침)
+      x-lane: BE-2
+      x-user-stories: [PLAN-29]
+      parameters: [{ $ref: "#/components/parameters/PlanId" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/ReplanOption" }
+  /replan-options/{optionId}/application:
+    post:
+      operationId: applyReplanOption
+      summary: 대안 선택+초안 반영 (is_selected/selected_at 기록 — SC-07 대체, SS-14 입력. 초안 반영이며 확정 아님 — P2)
+      x-lane: BE-2
+      x-user-stories: [PLAN-29, RB-FIX-01]
+      parameters: [{ name: optionId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200":
+          description: 반영 후 주간 화면 최신 상태
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/WeeklyPlanView" }
+
+  # ───────────────────────────────────────────── FIXED SCHEDULES (BE-2)
+  /fixed-schedules:
+    get:
+      operationId: listFixedSchedules
+      summary: 고정 일정 목록
+      x-lane: BE-2
+      x-user-stories: [FIX-04]
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [ACTIVE, INACTIVE] } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/FixedSchedule" }
+    post:
+      operationId: createFixedSchedule
+      summary: 고정 일정 생성 (이후 배치 불가 시간으로 반영)
+      x-lane: BE-2
+      x-user-stories: [FIX-05, ONB-06]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FixedScheduleInput" }
+      responses:
+        "201":
+          description: 생성 완료
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/FixedSchedule" }
+        "422": { $ref: "#/components/responses/UnprocessableEntity" }
+  /fixed-schedules/{fixedScheduleId}:
+    patch:
+      operationId: updateFixedSchedule
+      summary: 편집 (FIX-06, version 필수). 저장된 주간 계획 재검증 트리거 (FIX-07). 주차 한정 비활성화는 week-exceptions 리소스 (PLAN-33/34)
+      x-lane: BE-2
+      x-user-stories: [FIX-06]
+      parameters: [{ $ref: "#/components/parameters/FixedScheduleId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - { $ref: "#/components/schemas/FixedScheduleInput" }
+                - type: object
+                  required: [version]
+                  properties:
+                    version: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/FixedSchedule" }
+        "409": { $ref: "#/components/responses/VersionConflict" }
+    delete:
+      operationId: deleteFixedSchedule
+      summary: 삭제 (주간 계획 재검증 — FIX-09)
+      x-lane: BE-2
+      x-user-stories: [FIX-09]
+      parameters: [{ $ref: "#/components/parameters/FixedScheduleId" }]
+      responses:
+        "204": { description: 삭제 완료 }
+  /fixed-schedules/{fixedScheduleId}/week-exceptions:
+    post:
+      operationId: createFixedScheduleWeekException
+      summary: 주차 한정 비활성화 (PLAN-33 — 해당 주만 배치 제약 제외. 멱등, 해당 주 재검증 트리거)
+      x-lane: BE-2
+      x-user-stories: [PLAN-33]
+      parameters: [{ $ref: "#/components/parameters/FixedScheduleId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [weekStartDate]
+              properties:
+                weekStartDate: { type: string, format: date, description: "사용자 주 시작 요일 기준 주 시작일" }
+      responses:
+        "201":
+          description: 예외 생성 — 해당 주에서 이 고정 일정은 배치 제약·V2 판정에서 제외 (다른 주는 무영향)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      fixedScheduleId: { type: string, format: uuid }
+                      weekStartDate: { type: string, format: date }
+        "200": { description: 이미 존재 (멱등 — 무해) }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/UnprocessableEntity" }
+  /fixed-schedules/{fixedScheduleId}/week-exceptions/{weekStartDate}:
+    delete:
+      operationId: deleteFixedScheduleWeekException
+      summary: 주차 한정 재활성화 (PLAN-34 — 예외 제거. 멱등, 해당 주 재검증 트리거)
+      x-lane: BE-2
+      x-user-stories: [PLAN-34]
+      parameters:
+        - { $ref: "#/components/parameters/FixedScheduleId" }
+        - { name: weekStartDate, in: path, required: true, schema: { type: string, format: date } }
+      responses:
+        "204": { description: 재활성화 완료 (예외 부재여도 204 — 멱등) }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /fixed-schedules/conflict-previews:
+    post:
+      operationId: previewFixedScheduleConflicts
+      summary: 생성·편집 전 충돌 미리보기 (dry-run C-4 — 저장된 주간 계획 대상 V2 판정)
+      x-lane: BE-2
+      x-user-stories: [FIX-07, FIX-08]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [candidate]
+              properties:
+                candidate:
+                  allOf:
+                    - { $ref: "#/components/schemas/FixedScheduleInput" }
+                    - type: object
+                      properties:
+                        fixedScheduleId: { type: [string, "null"], format: uuid, description: "편집 시 기존 ID (자기 자신 제외 판정)" }
+      responses:
+        "200":
+          description: 주차별 충돌 목록 (무영속)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        weekStartDate: { type: string, format: date }
+                        issues:
+                          type: array
+                          items: { $ref: "#/components/schemas/ValidationIssue" }
+
+  # ───────────────────────────────────────────── DASHBOARD / STATS (BE-2)
+  /dashboard:
+    get:
+      operationId: getDashboard
+      summary: 대시보드 조립 응답 — 단일 GET (D-12 레버 5, NFR-011 2초)
+      x-lane: BE-2
+      x-user-stories: [DASH-01, DASH-02, DASH-03, DASH-04, DASH-05, DASH-06, DASH-07, RB-DASH-01, RB-DASH-02]
+      parameters:
+        - { name: baseDate, in: query, schema: { type: string, format: date }, description: "미지정 시 오늘(사용자 timezone)" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/DashboardView" }
+  /stats/summaries:
+    get:
+      operationId: getStatsSummaries
+      summary: 주간/월간 요약 (SC-06 유지 4종)
+      x-lane: BE-2
+      x-user-stories: [STATS-SCREEN]
+      parameters:
+        - { name: period, in: query, required: true, schema: { type: string, enum: [WEEKLY, MONTHLY] } }
+        - { name: baseDate, in: query, schema: { type: string, format: date } }
+      responses:
+        "200":
+          description: 이력 0건 = 빈 상태 (오류 아님)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/StatsSummary" }
+  /stats/deviations:
+    get:
+      operationId: getDeviations
+      summary: 편차 분석 (SS-10 — 프로젝트/카테고리 그룹, P1 결정적)
+      x-lane: BE-2
+      x-user-stories: [RB-STAT-01]
+      parameters:
+        - { name: period, in: query, required: true, schema: { type: string, enum: [WEEKLY, MONTHLY] } }
+        - { name: baseDate, in: query, schema: { type: string, format: date } }
+        - { name: groupBy, in: query, required: true, schema: { type: string, enum: [PROJECT, CATEGORY] } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/DeviationReport" }
+  /stats/time-patterns:
+    get:
+      operationId: getTimePatterns
+      summary: 구간별 완료율 (SS-12 — DAWN/MORNING/AFTERNOON/NIGHT 고정 경계)
+      x-lane: BE-2
+      x-user-stories: [RB-STAT-03]
+      parameters:
+        - { name: period, in: query, schema: { type: string, enum: [WEEKLY, MONTHLY] } }
+        - { name: baseDate, in: query, schema: { type: string, format: date } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/TimePatternReport" }
+  /stats/correction-proposals:
+    get:
+      operationId: getCorrectionProposals
+      summary: 예상 시간 보정 제안 (SS-11 — 태스크 폼 소비, 제안만 · C-2)
+      x-lane: BE-2
+      x-user-stories: [RB-STAT-02]
+      parameters:
+        - { name: categoryId, in: query, schema: { type: string, format: uuid } }
+        - { name: projectId, in: query, schema: { type: string, format: uuid } }
+        - { name: estimatedMinutes, in: query, schema: { type: integer }, description: "사용자 입력 중인 예상값" }
+      responses:
+        "200":
+          description: 편차 이력 부족 시 data=null
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    oneOf:
+                      - { $ref: "#/components/schemas/CorrectionProposal" }
+                      - { type: "null" }
+
+# ───────────────────────────────────────────────────────────── components
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: op_at
+      description: 운영 모드 — httpOnly JWT access 쿠키 (ADR-0001). 4주차부터 활성.
+    devAuth:
+      type: apiKey
+      in: header
+      name: X-Dev-User
+      description: |
+        dev-auth 스텁 (D-16, ADR-0010). dev 프로파일에서만 필터 등록.
+        헤더 생략 시 고정 dev 사용자(00000000-0000-0000-0000-000000000001)로 인증된 것으로 간주.
+        시드된 다른 테스트 사용자 UUID를 넣으면 그 사용자로 동작 (NFR-030 사용자 격리 테스트용).
+        미시드 UUID → 401 E-COM-002. 운영 프로파일에는 이 필터가 존재하지 않는다.
+  parameters:
+    Page: { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+    Size: { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+    IdempotencyKey: { name: Idempotency-Key, in: header, schema: { type: string, format: uuid } }
+    OAuthProvider: { name: provider, in: path, required: true, schema: { type: string, enum: [google, naver, kakao] } }
+    ProjectId: { name: projectId, in: path, required: true, schema: { type: string, format: uuid } }
+    TaskId: { name: taskId, in: path, required: true, schema: { type: string, format: uuid } }
+    PlanId: { name: planId, in: path, required: true, schema: { type: string, format: uuid } }
+    BlockId: { name: blockId, in: path, required: true, schema: { type: string, format: uuid } }
+    ConnectionId: { name: connectionId, in: path, required: true, schema: { type: string, format: uuid } }
+    FixedScheduleId: { name: fixedScheduleId, in: path, required: true, schema: { type: string, format: uuid } }
+  responses:
+    BadRequest:
+      description: E-COM-001 요청 형식 오류 — details.fields[]
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    Unauthorized:
+      description: E-COM-002 인증 필요 (NFR-004) / E-AUTH-001 자격 불일치
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    NotFound:
+      description: E-COM-004 리소스 없음 (타인 리소스 은닉 포함)
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    VersionConflict:
+      description: E-COM-006 저장 충돌 (SYS-05) — details.latest에 최신본 동봉 (3택 UI 재료)
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    UnprocessableEntity:
+      description: E-COM-009 값 의미 오류 (5분 단위·시간 역전 등)
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    TooManyRequests:
+      description: E-COM-007 요청 횟수 초과
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string, pattern: "^E-[A-Z]+-[0-9]{3}$" }
+            message: { type: string, description: "사용자 표시 가능 문구 (P4 준수)" }
+            details: { type: object, additionalProperties: true }
+    PageMeta:
+      type: object
+      properties:
+        number: { type: integer }
+        size: { type: integer }
+        totalElements: { type: integer }
+        totalPages: { type: integer }
+    Weekday: { type: string, enum: [MON, TUE, WED, THU, FRI, SAT, SUN] }
+    SessionInfo:
+      type: object
+      properties:
+        userId: { type: string, format: uuid }
+        name: { type: [string, "null"] }
+        email: { type: string }
+        onboardingCompleted: { type: boolean }
+        weekStartDay: { $ref: "#/components/schemas/Weekday" }
+        timezone: { type: string }
+    UserProfile:
+      type: object
+      properties:
+        userId: { type: string, format: uuid }
+        email: { type: string }
+        loginType: { type: string, enum: [LOCAL, SOCIAL] }
+        socialProvider: { type: [string, "null"], enum: [GOOGLE, NAVER, KAKAO, null] }
+        name: { type: string }
+        purpose: { type: [string, "null"] }
+        timezone: { type: string }
+        weekStartDay: { $ref: "#/components/schemas/Weekday" }
+    OnboardingProgress:
+      type: object
+      properties:
+        introDone: { type: boolean }
+        profileDone: { type: boolean }
+        availabilityDone: { type: boolean }
+        fixedScheduleDone: { type: boolean }
+        tutorialDone: { type: boolean }
+        calendarSyncDone: { type: boolean }
+        tutorialSampleProjectId: { type: [string, "null"], format: uuid, description: "잔존 튜토리얼 샘플 프로젝트 (TUT-09 재실행 확인 다이얼로그 재료 — GAP-1/B13. 삭제 시 서버가 null 처리)" }
+    AvailabilityPattern:
+      type: object
+      required: [weekday, startTime, endTime, isActive]
+      properties:
+        weekday: { $ref: "#/components/schemas/Weekday" }
+        startTime: { type: string, format: time, description: "5분 단위" }
+        endTime: { type: string, format: time }
+        isActive: { type: boolean }
+    AvailabilityView:
+      type: object
+      properties:
+        patterns:
+          type: array
+          items: { $ref: "#/components/schemas/AvailabilityPattern" }
+        weeklyTotalMinutes: { type: integer, description: "파생 계산 — FIX-01 주간 총 가용시간 (컬럼 아님, doc-consistency §3 간극4 판정)" }
+    Preferences:
+      type: object
+      properties:
+        defaultEstimatedMinutes: { type: [integer, "null"], multipleOf: 5, minimum: 5 }
+        defaultReplanStrategy: { type: [string, "null"], enum: [KEEP_CURRENT, MINIMAL_CHANGE, DEADLINE_FIRST, WORKLOAD_BALANCE, null] }
+    PreferenceSuggestion:
+      type: object
+      description: SS-14 출력 — 제안값 + 규칙 근거 (C-3)
+      properties:
+        suggestedEstimatedMinutes: { type: [integer, "null"], multipleOf: 5 }
+        suggestedReplanStrategy: { type: [string, "null"] }
+        suggestedAvailabilities:
+          type: array
+          items: { $ref: "#/components/schemas/AvailabilityPattern" }
+        reason: { type: string, description: "예: '최근 4주 실제 시간 중앙값 기준' — AI 표현 금지 (P4)" }
+    ExternalConnection:
+      type: object
+      properties:
+        connectionId: { type: string, format: uuid }
+        provider: { type: string }
+        accountIdentifier: { type: string }
+        syncMode: { type: string }
+        status: { type: string, enum: [CONNECTED, DISABLED] }
+        connectedAt: { type: string, format: date-time }
+        selectedCalendars:
+          type: array
+          items:
+            type: object
+            properties:
+              externalCalendarId: { type: string }
+              name: { type: string }
+    ExternalEvent:
+      type: object
+      properties:
+        externalCalendarEventId: { type: string, format: uuid }
+        title: { type: string }
+        startAt: { type: string, format: date-time }
+        endAt: { type: string, format: date-time }
+        sourceCalendar: { type: string }
+        applyStatus: { type: string, enum: [CANDIDATE, APPLIED, EXCLUDED] }
+    NotificationSetting:
+      type: object
+      required: [notificationType, isEnabled]
+      properties:
+        notificationType: { type: string, enum: [DEADLINE_SOON, TODAY_TASKS, PLAN_UNSAVED, RETROSPECT, SUPPORT_ANSWERED] }
+        isEnabled: { type: boolean }
+    Notification:
+      type: object
+      properties:
+        notificationId: { type: string, format: uuid }
+        notificationType: { type: string }
+        title: { type: string }
+        routePath: { type: string, description: "NOTI-04 이동 경로. SUPPORT_ANSWERED는 본인 문의 상세만 (NFR-030)" }
+        readAt: { type: [string, "null"], format: date-time }
+        createdAt: { type: string, format: date-time }
+    SupportTicket:
+      type: object
+      properties:
+        supportTicketId: { type: string, format: uuid }
+        category: { type: string }
+        title: { type: string }
+        content: { type: string }
+        status: { type: string, enum: [RECEIVED, IN_PROGRESS, ANSWERED, CLOSED] }
+        hasAnswer: { type: boolean, description: "HELP-02 답변 유무 시각 표시 (텍스트 병기 — NFR-017)" }
+        answerContent: { type: [string, "null"] }
+        answeredAt: { type: [string, "null"], format: date-time }
+        createdAt: { type: string, format: date-time }
+    HelpArticle:
+      type: object
+      properties:
+        helpArticleId: { type: string, format: uuid }
+        category: { type: string }
+        title: { type: string }
+        content: { type: string }
+    Announcement:
+      type: object
+      properties:
+        announcementId: { type: string, format: uuid }
+        announcementType: { type: string, enum: [MAINTENANCE, INCIDENT, CHANGE], description: "OPS-01 목록 유형 Badge" }
+        title: { type: string }
+        content: { type: string }
+        publishedStartAt: { type: string, format: date-time }
+    ProjectSummary:
+      type: object
+      properties:
+        projectId: { type: string, format: uuid }
+        name: { type: string }
+        dueDate: { type: [string, "null"], format: date }
+        status: { type: string, enum: [IN_PROGRESS, PAUSED, CLOSED] }
+        priority: { type: [integer, "null"] }
+        badges:
+          type: object
+          description: PROJ-01/04 배지 — 텍스트 병기 (NFR-017)
+          properties:
+            unassignedCount: { type: integer }
+            assignedCount: { type: integer }
+            deadlineSoon: { type: boolean }
+        version: { type: integer, format: int64 }
+    Project:
+      allOf:
+        - { $ref: "#/components/schemas/ProjectSummary" }
+        - type: object
+          properties:
+            description: { type: string }
+            closedAt: { type: [string, "null"], format: date-time }
+            taskStats:
+              type: object
+              properties:
+                total: { type: integer }
+                unassigned: { type: integer }
+                inProgress: { type: integer }
+                completed: { type: integer }
+    TaskInput:
+      type: object
+      required: [title, estimatedMinutes]
+      properties:
+        title: { type: string, maxLength: 200 }
+        memo: { type: string }
+        estimatedMinutes: { type: integer, multipleOf: 5, minimum: 5 }
+        priority: { type: [integer, "null"], minimum: 1, maximum: 5 }
+        dueDate: { type: [string, "null"], format: date }
+        categoryId: { type: [string, "null"], format: uuid, description: "SC-01 — null = '없음'" }
+    Task:
+      allOf:
+        - { $ref: "#/components/schemas/TaskInput" }
+        - type: object
+          properties:
+            taskId: { type: string, format: uuid }
+            projectId: { type: string, format: uuid }
+            projectName: { type: string }
+            categoryName: { type: [string, "null"] }
+            status: { type: string, enum: [UNASSIGNED, IN_PROGRESS, COMPLETED] }
+            wbsRange:
+              type: [object, "null"]
+              properties:
+                startDate: { type: string, format: date }
+                endDate: { type: string, format: date }
+            version: { type: integer, format: int64 }
+    TaskCategory:
+      type: object
+      properties:
+        taskCategoryId: { type: string, format: uuid }
+        name: { type: string }
+        sortOrder: { type: integer }
+    WbsItem:
+      type: object
+      properties:
+        wbsItemId: { type: string, format: uuid }
+        taskId: { type: string, format: uuid }
+        taskTitle: { type: string }
+        startDate: { type: string, format: date }
+        endDate: { type: string, format: date }
+    StructuringDraft:
+      type: object
+      properties:
+        draftId: { type: string, format: uuid }
+        title: { type: string }
+        proposedEstimatedMinutes: { type: [integer, "null"] }
+        proposedPriority: { type: [integer, "null"] }
+        reason: { type: string, description: "매칭된 규칙 사전 항목 (C-3)" }
+    Schedule:
+      type: object
+      properties:
+        scheduleId: { type: string, format: uuid }
+        title: { type: string }
+        startAt: { type: string, format: date-time }
+        endAt: { type: string, format: date-time }
+        estimatedMinutes: { type: [integer, "null"] }
+        priority: { type: [integer, "null"] }
+        memo: { type: [string, "null"] }
+        version: { type: integer, format: int64 }
+    FixedScheduleInput:
+      type: object
+      required: [title, weekday, startTime, endTime]
+      properties:
+        title: { type: string, maxLength: 255 }
+        weekday: { $ref: "#/components/schemas/Weekday" }
+        startTime: { type: string, format: time }
+        endTime: { type: string, format: time }
+        startDate: { type: [string, "null"], format: date }
+        endDate: { type: [string, "null"], format: date }
+    FixedSchedule:
+      allOf:
+        - { $ref: "#/components/schemas/FixedScheduleInput" }
+        - type: object
+          properties:
+            fixedScheduleId: { type: string, format: uuid }
+            source: { type: string, enum: [MANUAL, EXTERNAL] }
+            status: { type: string, enum: [ACTIVE, INACTIVE], description: "서버 관리 — EXTERNAL 유래의 연동 활성 상태 미러(FIX-16). MANUAL은 항상 ACTIVE. PLAN-33/34 주차 한정 제외는 week-exceptions 리소스 (이 필드 아님)" }
+            version: { type: integer, format: int64 }
+    WeeklyPlan:
+      type: object
+      properties:
+        weeklyPlanId: { type: string, format: uuid }
+        weekStartDate: { type: string, format: date }
+        weekEndDate: { type: string, format: date }
+        status: { type: string, enum: [DRAFT, CONFIRMED] }
+        totalPlannedMinutes: { type: integer }
+        confirmedAt: { type: [string, "null"], format: date-time }
+        version: { type: integer, format: int64 }
+    PlanBlockInput:
+      type: object
+      required: [blockType, startAt, endAt]
+      properties:
+        blockType: { type: string, enum: [TASK, SCHEDULE] }
+        taskId: { type: [string, "null"], format: uuid, description: "TASK 필수" }
+        schedule:
+          type: [object, "null"]
+          description: SCHEDULE 필수 — 일정 인라인 생성 (PLAN-08)
+          properties:
+            title: { type: string }
+            estimatedMinutes: { type: [integer, "null"], multipleOf: 5 }
+            priority: { type: [integer, "null"] }
+            memo: { type: string }
+        startAt: { type: string, format: date-time }
+        endAt: { type: string, format: date-time }
+    PlanBlock:
+      type: object
+      properties:
+        planBlockId: { type: string, format: uuid }
+        weeklyPlanId: { type: string, format: uuid }
+        blockType: { type: string, enum: [TASK, SCHEDULE] }
+        taskId: { type: [string, "null"], format: uuid }
+        scheduleId: { type: [string, "null"], format: uuid }
+        title: { type: string, description: "task/schedule 제목 조인 파생 (plan_blocks.title 컬럼 삭제 — data-model §2.2)" }
+        projectId: { type: [string, "null"], format: uuid }
+        startAt: { type: string, format: date-time }
+        endAt: { type: string, format: date-time }
+        status: { type: string, enum: [SCHEDULED, COMPLETED] }
+    WeeklyPlanView:
+      type: object
+      description: 주간 화면 조립 (PLAN-01/04/05/21 한 번에 — NFR-011/024)
+      properties:
+        plan:
+          oneOf:
+            - { $ref: "#/components/schemas/WeeklyPlan" }
+            - { type: "null" }
+        blocks:
+          type: array
+          items: { $ref: "#/components/schemas/PlanBlock" }
+        fixedSchedules:
+          type: array
+          items:
+            allOf:
+              - { $ref: "#/components/schemas/FixedSchedule" }
+              - type: object
+                properties:
+                  activeThisWeek: { type: boolean, description: "false = 이 주 배치 제약 미적용 (주차 예외 PLAN-33 또는 INACTIVE) — 고스트 표시 + 재활성화 액션 (PLAN-34)" }
+        availability: { $ref: "#/components/schemas/AvailabilityView" }
+        summary:
+          type: object
+          description: PLAN-01 — 가용·사용·여유·배치 수
+          properties:
+            availableMinutes: { type: integer }
+            plannedMinutes: { type: integer }
+            freeMinutes: { type: integer }
+            placedTaskCount: { type: integer }
+        unassignedCount: { type: integer }
+        validationSummary:
+          type: object
+          description: PLAN-21 개수 배지
+          properties:
+            blockCount: { type: integer }
+            warningCount: { type: integer }
+    ValidationIssue:
+      type: object
+      description: SS-06 출력 항목 = validation_issues 스키마 (C-3 사유 동반)
+      required: [ruleId, severity, reason]
+      properties:
+        validationIssueId: { type: [string, "null"], format: uuid, description: "dry-run은 null (무영속)" }
+        ruleId: { type: string, enum: [V1_OVERLAP, V2_FIXED_CONFLICT, V3_CAPACITY_EXCEEDED, V4_OUT_OF_AVAILABILITY, V5_OUT_OF_WBS, V6_AFTER_DUE_DATE, V7_BUFFER_SHORTAGE] }
+        severity: { type: string, enum: [BLOCK, WARNING] }
+        planBlockId: { type: [string, "null"], format: uuid }
+        taskId: { type: [string, "null"], format: uuid }
+        weekday: { type: [string, "null"], description: "V3/V4 요일 수준 이슈" }
+        reason: { type: string, description: "규칙 근거 문구 — '규칙 N에 의해' (P4)" }
+        resolutionStatus: { type: string, enum: [OPEN, RESOLVED] }
+    ValidationReport:
+      type: object
+      properties:
+        dryRun: { type: boolean }
+        savable: { type: boolean, description: "차단 0건 여부 (PLAN-28)" }
+        issues:
+          type: array
+          items: { $ref: "#/components/schemas/ValidationIssue" }
+        evaluatedAt: { type: string, format: date-time, description: "판정에 사용된 기준 시각 (입력 파라미터 — C-1)" }
+    PlacementProposal:
+      type: object
+      description: SS-05 출력 — 저장되지 않은 초안 (C-2)
+      properties:
+        proposedBlocks:
+          type: array
+          items: { $ref: "#/components/schemas/PlanBlockInput" }
+        unplacedTaskIds:
+          type: array
+          description: 가용 슬롯 부족으로 배치 못 한 태스크
+          items: { type: string, format: uuid }
+        reason: { type: string, description: "정렬 규칙 설명 (우선순위→마감일→예상시간, first-fit)" }
+    ReplanOption:
+      type: object
+      properties:
+        replanOptionId: { type: [string, "null"], format: uuid, description: "KEEP_CURRENT 기준선은 null (행 미생성)" }
+        strategyType: { type: string, enum: [KEEP_CURRENT, MINIMAL_CHANGE, DEADLINE_FIRST, WORKLOAD_BALANCE] }
+        changeSummary: { type: string }
+        recommendationReason: { type: [string, "null"], description: "규칙 근거 (C-3, P4 준수)" }
+        score: { type: [number, "null"] }
+        proposedBlocks:
+          type: array
+          items: { $ref: "#/components/schemas/PlanBlockInput" }
+        isSelected: { type: boolean }
+    ExecutionLog:
+      type: object
+      properties:
+        executionLogId: { type: string, format: uuid }
+        taskId: { type: string, format: uuid }
+        startedAt: { type: string, format: date-time }
+        endedAt: { type: string, format: date-time }
+        actualMinutes: { type: integer }
+        result: { type: string, enum: [COMPLETED, DELAYED, ABORTED] }
+        memo: { type: [string, "null"] }
+    DashboardView:
+      type: object
+      description: 대시보드 단일 조립 (D-12 레버 5)
+      properties:
+        statusBoard:
+          type: object
+          description: DASH-01 — 과부하/여유 판단
+          properties:
+            weekStartDate: { type: string, format: date }
+            plannedMinutes: { type: integer }
+            availableMinutes: { type: integer }
+            deltaMinutes: { type: integer, description: "양수=여유, 음수=초과 — 텍스트 병기 (NFR-017)" }
+        priorityAction:
+          type: [object, "null"]
+          description: RB-DASH-01/SS-01 — 최상위 1행동 (전순서 Q3, W3 확정)
+          properties:
+            actionType: { type: string, enum: [RESOLVE_FIXED_CONFLICT, PLACE_UNASSIGNED, REPLACE_TODAY_INCOMPLETE, FIX_OUT_OF_WBS, RESOLVE_CAPACITY, HANDLE_DEADLINE] }
+            reason: { type: string }
+            routePath: { type: string }
+        riskIssues:
+          type: array
+          description: DASH-03/04 — 위험 목록 + 해결 이동
+          items:
+            type: object
+            properties:
+              riskType: { type: string, enum: [UNASSIGNED_TASKS, OUT_OF_WBS, FIXED_CONFLICT, DEADLINE_SOON] }
+              count: { type: integer }
+              description: { type: string }
+              routePath: { type: string }
+        todayBoard:
+          type: object
+          description: DASH-05 + RB-DASH-02/SS-02
+          properties:
+            items:
+              type: array
+              items:
+                type: object
+                properties:
+                  planBlockId: { type: string, format: uuid }
+                  taskId: { type: [string, "null"], format: uuid }
+                  title: { type: string }
+                  startAt: { type: string, format: date-time }
+                  endAt: { type: string, format: date-time }
+                  estimatedMinutes: { type: [integer, "null"] }
+                  completed: { type: boolean }
+                  selectionRank: { type: [integer, "null"], description: "SS-02 선정 순위 (규칙 정렬)" }
+            remainingMinutes: { type: integer }
+        weeklyImpactProjects:
+          type: array
+          description: DASH-06
+          items:
+            type: object
+            properties:
+              projectId: { type: string, format: uuid }
+              name: { type: string }
+              impactBadges: { type: array, items: { type: string, enum: [DEADLINE_SOON, HAS_UNASSIGNED, ACTUAL_OVERRUN] } }
+        busyWeekdays:
+          type: array
+          description: DASH-07 — 손 볼 요일 % (P1 결정적, 텍스트 병기)
+          items:
+            type: object
+            properties:
+              weekday: { $ref: "#/components/schemas/Weekday" }
+              remainingAvailabilityPercent: { type: number }
+    StatsSummary:
+      type: object
+      properties:
+        period: { type: string, enum: [WEEKLY, MONTHLY] }
+        rangeStart: { type: string, format: date }
+        rangeEnd: { type: string, format: date }
+        totalEstimatedMinutes: { type: integer }
+        totalActualMinutes: { type: integer }
+        completionRate: { type: [number, "null"] }
+        varianceRate: { type: [number, "null"] }
+        empty: { type: boolean, description: "이력 0건 빈 상태 플래그 (RB-STAT-01 GWT)" }
+    DeviationReport:
+      type: object
+      description: SS-10 출력 (P1 — 동일 이력 = 동일 수치)
+      properties:
+        groupBy: { type: string, enum: [PROJECT, CATEGORY] }
+        empty: { type: boolean }
+        rows:
+          type: array
+          items:
+            type: object
+            properties:
+              groupId: { type: [string, "null"], format: uuid }
+              groupName: { type: string, description: "카테고리 null 그룹은 '없음'" }
+              estimatedMinutes: { type: integer }
+              actualMinutes: { type: integer }
+              deviationMinutes: { type: integer }
+              deviationRate: { type: [number, "null"] }
+    TimePatternReport:
+      type: object
+      description: SS-12 출력 — 고정 4구간
+      properties:
+        empty: { type: boolean }
+        slots:
+          type: array
+          items:
+            type: object
+            properties:
+              slot: { type: string, enum: [DAWN, MORNING, AFTERNOON, NIGHT] }
+              totalCount: { type: integer }
+              completedCount: { type: integer }
+              completionRate: { type: [number, "null"] }
+    CorrectionProposal:
+      type: object
+      description: SS-11 출력 — 제안일 뿐 자동 적용 없음 (P2)
+      properties:
+        proposedEstimatedMinutes: { type: integer, multipleOf: 5 }
+        basis: { type: string, description: "산출 근거 (예: '해당 카테고리 최근 편차율 +20% 반영') — P4 준수" }
+        sampleSize: { type: integer }

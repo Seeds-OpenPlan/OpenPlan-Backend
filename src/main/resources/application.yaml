@@ -37,6 +37,8 @@ springdoc:
     # 진입 경로. `/swagger-ui/index.html`로 두면 springdoc이 여기에 UI 리소스 경로를 한 번 더
     # 붙여 `/swagger-ui/swagger-ui/index.html`로 리다이렉트한다(실측). 기본값을 쓴다.
     path: /swagger-ui.html
+    # 정본 API 계약(정적 openapi.yaml)을 Swagger UI로 서빙. 코드생성(/v3/api-docs)은 대조·검증용.
+    url: /openapi.yaml
 
 op:
   auth:
