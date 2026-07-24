@@ -7,6 +7,7 @@ import com.openplan.backend.project.domain.Project;
 import com.openplan.backend.project.domain.ProjectStatus;
 import com.openplan.backend.project.repository.ProjectRepository;
 import com.openplan.backend.project.service.ProjectAutoCloseEvaluator;
+import com.openplan.backend.project.service.port.WeeklyPlanTotalsRecalculator;
 import com.openplan.backend.task.domain.Task;
 import com.openplan.backend.task.domain.TaskStatus;
 import com.openplan.backend.task.dto.TaskCreateRequest;
@@ -45,18 +46,20 @@ public class TaskService {
     private final ProjectAutoCloseEvaluator autoCloseEvaluator;
     private final TaskCategoryChecker categoryChecker;
     private final PlanBlockStatusMirror planBlockStatusMirror;
+    private final WeeklyPlanTotalsRecalculator weeklyPlanTotalsRecalculator;
     private final UserClock clock;
 
     public TaskService(TaskRepository taskRepository, TaskValidator validator,
                        ProjectRepository projectRepository, ProjectAutoCloseEvaluator autoCloseEvaluator,
                        TaskCategoryChecker categoryChecker, PlanBlockStatusMirror planBlockStatusMirror,
-                       UserClock clock) {
+                       WeeklyPlanTotalsRecalculator weeklyPlanTotalsRecalculator, UserClock clock) {
         this.taskRepository = taskRepository;
         this.validator = validator;
         this.projectRepository = projectRepository;
         this.autoCloseEvaluator = autoCloseEvaluator;
         this.categoryChecker = categoryChecker;
         this.planBlockStatusMirror = planBlockStatusMirror;
+        this.weeklyPlanTotalsRecalculator = weeklyPlanTotalsRecalculator;
         this.clock = clock;
     }
 
@@ -220,5 +223,31 @@ public class TaskService {
 
         taskRepository.flush(); // @Version 증가 + 블록 미러 UPDATE 동일 tx 커밋 (TB-1 원자성)
         return TaskResponse.from(task);
+    }
+
+    /**
+     * 태스크 삭제 (TUT-07 / EP-6 · AC-D-1~4). hard delete(D-4b) — 연관 데이터는 DB FK cascade에 위임(TB-3).
+     * 검사 순서: 평가 선행 → 404 → 422(CLOSED) → 수집 → delete → <b>flush</b> → 재계산. version 불요(D-4a).
+     *
+     * <p><b>C1 순서(필수)</b>: ① 삭제 전 영향 주차 수집(taskId 스코프 — ADR-006) → ② delete → ③ <b>명시적 flush</b>
+     * (DELETE·cascade를 DB에 반영) → ④ 재계산(TB-4). flush 없이는 JdbcTemplate 재계산이 삭제 전 plan_blocks를
+     * 합산해 캐시가 오염된다([T1] 값 단언). 태스크 status는 삭제 가드가 아니다 — CLOSED 프로젝트만 막는다(D-10).
+     */
+    @Transactional
+    public void delete(UUID userId, UUID taskId) {
+        autoCloseEvaluator.closeOverdue(userId);
+
+        OwnedTask owned = taskRepository.findOwnedWithProjectStatus(taskId, userId)
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404 (AC-D-4: 부재·타인·재삭제)
+
+        if (owned.projectStatus() == ProjectStatus.CLOSED) { // 422 (D-10, AC-D-4)
+            throw new OpenPlanException(ErrorCode.E_PROJ_003,
+                    Map.of("fields", List.of(Map.of("field", "project.status"))));
+        }
+
+        List<UUID> affected = weeklyPlanTotalsRecalculator.captureAffectedWeeklyPlanIdsByTask(taskId); // 삭제 전 수집(C1)
+        taskRepository.delete(owned.task());
+        taskRepository.flush();                                    // C1 — cascade가 DB 반영되어야 재계산이 삭제 후를 봄
+        weeklyPlanTotalsRecalculator.recalculate(affected);       // TB-4 잔여 블록 절대값 재계산 (AC-D-2)
     }
 }
