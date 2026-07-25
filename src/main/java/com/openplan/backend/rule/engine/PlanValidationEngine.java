@@ -28,7 +28,13 @@ import java.util.Map;
  */
 public final class PlanValidationEngine implements PlanValidationPort {
 
-    /** 이슈 정렬(출력 결정성): severity(BLOCK 먼저) → ruleId → planBlockId(UUID ASC, null 최후) → weekday(null 최후). */
+    /**
+     * 이슈 전순서(출력 결정성) — 계약 §3.3 확정(2026-07-25):
+     * severity(BLOCK 먼저) → ruleId(enum 선언 순 V1..V7) → planBlockId(UUID ASC, null 최후)
+     * → weekday(월→일, null 최후).
+     * weekday 가 4번째 키인 이유: V3 는 요일 단위 이슈라 planBlockId 가 null 이고,
+     * 3키(계약 초안)만으로는 초과 요일이 2개 이상일 때 동률이 생겨 P1(결정성)이 깨진다.
+     */
     private static final Comparator<ValidationIssue> ORDER =
             Comparator.comparingInt((ValidationIssue i) -> i.severity().ordinal())
                     .thenComparingInt(i -> i.ruleId().ordinal())
@@ -77,7 +83,7 @@ public final class PlanValidationEngine implements PlanValidationPort {
                 issues.add(new ValidationIssue(
                         RuleId.V3_CAPACITY_EXCEEDED, Severity.WARNING,
                         null, null, e.getKey(),
-                        RuleMessages.v3CapacityExceeded(e.getKey())));
+                        RuleMessages.v3CapacityExceeded(e.getKey(), capacity, e.getValue())));
             }
         }
         return issues;
