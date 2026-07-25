@@ -1,23 +1,29 @@
 package com.openplan.backend.task.controller;
 
 import com.openplan.backend.global.response.ApiResponse;
+import com.openplan.backend.global.response.PageMeta;
 import com.openplan.backend.global.security.CurrentUser;
 import com.openplan.backend.task.dto.TaskResponse;
 import com.openplan.backend.task.dto.TaskStatusToggleRequest;
 import com.openplan.backend.task.dto.TaskUpdateRequest;
+import com.openplan.backend.task.dto.UnassignedTaskQuery;
+import com.openplan.backend.task.dto.UnassignedTaskResponse;
 import com.openplan.backend.task.service.TaskService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springframework.data.domain.Page;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -81,5 +87,17 @@ public class TaskController {
             @PathVariable UUID taskId) {
         taskService.delete(userId, taskId);
         return ResponseEntity.noContent().build();
+    }
+
+    @GetMapping
+    @Operation(summary = "미배치 태스크 조회 (PROJ-19 · PLAN-05/07 피커)",
+            description = "사용자 전체 스코프 + 프로젝트명 조인. IN_PROGRESS 프로젝트의 UNASSIGNED 태스크만"
+                    + "(PAUSED·CLOSED 제외). status 생략 시 UNASSIGNED 기본값, UNASSIGNED 외 값 → 422. 조회 전 자동종료"
+                    + " 평가 선행(stale IN_PROGRESS 프로젝트 태스크 비노출). 정렬 created_at DESC, task_id DESC 고정.")
+    public ApiResponse<List<UnassignedTaskResponse>> listUnassigned(
+            @CurrentUser UUID userId,
+            @Valid @ModelAttribute UnassignedTaskQuery query) {
+        Page<UnassignedTaskResponse> result = taskService.listUnassigned(userId, query);
+        return ApiResponse.ok(result.getContent(), PageMeta.from(result));
     }
 }
