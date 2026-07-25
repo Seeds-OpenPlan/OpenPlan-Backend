@@ -15,6 +15,8 @@ import com.openplan.backend.task.dto.TaskListQuery;
 import com.openplan.backend.task.dto.TaskResponse;
 import com.openplan.backend.task.dto.TaskStatusToggleRequest;
 import com.openplan.backend.task.dto.TaskUpdateRequest;
+import com.openplan.backend.task.dto.UnassignedTaskQuery;
+import com.openplan.backend.task.dto.UnassignedTaskResponse;
 import com.openplan.backend.task.repository.OwnedTask;
 import com.openplan.backend.task.repository.TaskRepository;
 import com.openplan.backend.task.service.port.PlanBlockStatusMirror;
@@ -116,6 +118,30 @@ public class TaskService {
                 ? taskRepository.findByProjectId(projectId, pageable)
                 : taskRepository.findByProjectIdAndStatus(projectId, statusFilter, pageable);
         return page.map(TaskResponse::from);
+    }
+
+    /**
+     * 미배치 태스크 조회 (PROJ-19 / EP-7 · AC-U-1~4). 사용자 전체(전 프로젝트) 스코프 + 프로젝트명 조인(D-5a).
+     * IN_PROGRESS 프로젝트의 UNASSIGNED 태스크만(D-5b — PAUSED·CLOSED 제외).
+     *
+     * <p><b>평가 경유 조회 의무</b>(TB-5): 조회 전 {@code closeOverdue} 선행 — 기한 경과 stale IN_PROGRESS 프로젝트가
+     * CLOSED로 선반영되어야 그 프로젝트의 태스크가 노출되지 않는다(AC-U-2). status는 <b>생략 시 UNASSIGNED 기본값</b>
+     * (D-5c 완화 — 유효값이 UNASSIGNED 하나뿐이라 생략을 기본값으로 수용). UNASSIGNED 외 값만 422 E-COM-009
+     * (전용 라우트, 바인딩 500 회피 위해 String 수신 후 서비스 검증).
+     */
+    public Page<UnassignedTaskResponse> listUnassigned(UUID userId, UnassignedTaskQuery query) {
+        String status = query.getStatus();
+        if (status != null && !status.isBlank() && !"UNASSIGNED".equals(status.trim())) { // 422 — 타 값만 거부(AC-U-3)
+            throw new OpenPlanException(ErrorCode.E_COM_009, Map.of("fields", List.of(Map.of(
+                    "field", "status", "rule", "allowed", "message", "status는 UNASSIGNED만 허용됩니다."))));
+        }
+        // 생략·빈 값 = UNASSIGNED 기본값(쿼리 자체가 UNASSIGNED 필터라 별도 세팅 불요)
+
+        autoCloseEvaluator.closeOverdue(userId); // TB-5 — 평가 경유 조회 의무 (stale IN_PROGRESS 우회 차단)
+
+        Pageable pageable = PageRequest.of(query.getPage() - 1, query.getSize()); // 정렬은 쿼리에 고정(D-9)
+        return taskRepository.findUnassignedWithProjectName(userId, pageable)
+                .map(UnassignedTaskResponse::from);
     }
 
     /** status 필터 문자열 → enum. null/빈 값 = 전체(null 반환). 미정의 열거값 → 422 E-COM-009(AC-L-2). */
