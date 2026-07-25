@@ -35,13 +35,22 @@ class PlanValidationEngineTest {
     private static final Instant REF = Instant.parse("2026-07-27T00:00:00Z");
 
     private BlockView blockOnMonday(int startHour, int minutes) {
-        Instant start = MONDAY.atTime(startHour, 0).atZone(ZONE).toInstant();
+        return blockOnDay(0, startHour, minutes);
+    }
+
+    /** 주 시작(월요일)로부터 {@code plusDays} 일째에 배치된 블록. */
+    private BlockView blockOnDay(int plusDays, int startHour, int minutes) {
+        Instant start = MONDAY.plusDays(plusDays).atTime(startHour, 0).atZone(ZONE).toInstant();
         Instant end = start.plus(Duration.ofMinutes(minutes));
         return new BlockView(UUID.randomUUID(), BlockType.TASK, UUID.randomUUID(), null, start, end);
     }
 
     private AvailabilityWindow mondayAvail(int startHour, int endHour) {
-        return new AvailabilityWindow(DayOfWeek.MONDAY, LocalTime.of(startHour, 0), LocalTime.of(endHour, 0), true);
+        return avail(DayOfWeek.MONDAY, startHour, endHour);
+    }
+
+    private AvailabilityWindow avail(DayOfWeek weekday, int startHour, int endHour) {
+        return new AvailabilityWindow(weekday, LocalTime.of(startHour, 0), LocalTime.of(endHour, 0), true);
     }
 
     private PlanSnapshot snapshot(List<BlockView> blocks, List<AvailabilityWindow> avails) {
@@ -69,6 +78,29 @@ class PlanValidationEngineTest {
 
         assertTrue(r.issues().isEmpty());
         assertTrue(r.savable());
+    }
+
+    @Test
+    @DisplayName("사유 문구 정본 고정 — 한글 요일 + 가용/배치/초과 수치 (계약 §3.3)")
+    void 사유_문구_정본_고정() {
+        ValidationReport r = engine.validate(
+                snapshot(List.of(blockOnMonday(9, 90)), List.of(mondayAvail(9, 10))));
+
+        assertEquals("월요일 배치 시간이 가용 시간을 초과했습니다. (가용 60분 / 배치 90분, 30분 초과)",
+                r.issues().get(0).reason());
+    }
+
+    @Test
+    @DisplayName("초과 요일 2개 → weekday 오름차순(월→수) 고정, 입력 순서 무관 (전순서 4번째 키)")
+    void 초과_요일_복수면_요일_오름차순_고정() {
+        // 수요일 블록을 먼저 넣어도 출력은 월 → 수 여야 한다 (planBlockId 가 null 이라 weekday 가 유일한 전순서 키)
+        ValidationReport r = engine.validate(snapshot(
+                List.of(blockOnDay(2, 9, 90), blockOnDay(0, 9, 90)),
+                List.of(avail(DayOfWeek.WEDNESDAY, 9, 10), mondayAvail(9, 10))));
+
+        assertEquals(2, r.issues().size());
+        assertEquals(DayOfWeek.MONDAY, r.issues().get(0).weekday());
+        assertEquals(DayOfWeek.WEDNESDAY, r.issues().get(1).weekday());
     }
 
     @Test
