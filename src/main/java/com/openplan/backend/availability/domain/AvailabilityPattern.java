@@ -7,6 +7,7 @@ import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import lombok.Getter;
 
 import java.time.LocalTime;
 import java.util.UUID;
@@ -19,6 +20,7 @@ import java.util.UUID;
  * 서버는 저장 전에 같은 조건을 검증해 422 E-COM-009로 안내한다(NFR-010/009).
  */
 @Entity
+@Getter
 @Table(name = "availability_patterns")
 public class AvailabilityPattern {
 
@@ -60,29 +62,5 @@ public class AvailabilityPattern {
         p.endTime = endTime;
         p.active = active;
         return p;
-    }
-
-    public UUID getAvailabilityPatternId() {
-        return availabilityPatternId;
-    }
-
-    public UUID getUserId() {
-        return userId;
-    }
-
-    public Weekday getWeekday() {
-        return weekday;
-    }
-
-    public LocalTime getStartTime() {
-        return startTime;
-    }
-
-    public LocalTime getEndTime() {
-        return endTime;
-    }
-
-    public boolean isActive() {
-        return active;
     }
 }
