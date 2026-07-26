@@ -21,6 +21,11 @@ public class HelpArticle {
     @Column(name = "help_article_id", nullable = false, updatable = false)
     private UUID helpArticleId;
 
+    /**
+     * 주제(FAQ 분류). enum이 아닌 String인 이유 — 코드가 값에 따라 분기하지 않고(검색 필터로 넘기는 게 전부),
+     * 콘텐츠는 Flyway 시드로 넣는 데이터라 enum이면 주제 추가에 배포가 필요하다.
+     * FAQ 콘텐츠 시드가 확정되면 값 집합을 고정하고 DB CHECK 추가를 검토한다.
+     */
     @Column(name = "category", nullable = false, length = 50)
     private String category;
 

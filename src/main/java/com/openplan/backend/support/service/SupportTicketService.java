@@ -17,8 +17,11 @@ import java.util.UUID;
 /**
  * 문의 서비스(ST-B1-13) — 등록·본인 목록·본인 상세. 모든 조회는 userId로 스코핑하며,
  * 타인 티켓은 존재를 숨겨 404로 응답한다(NFR-030).
+ *
+ * <p>조회가 기본이라 트랜잭션은 클래스 레벨 {@code readOnly}로 두고, 쓰기 메서드만 오버라이드한다.
  */
 @Service
+@Transactional(readOnly = true)
 public class SupportTicketService {
 
     private final SupportTicketRepository repository;
@@ -36,13 +39,11 @@ public class SupportTicketService {
         return SupportTicketResponse.from(ticket);
     }
 
-    @Transactional(readOnly = true)
     public Page<SupportTicketResponse> getMyTickets(UUID userId, Pageable pageable) {
         return repository.findByUserIdOrderByCreatedAtDesc(userId, pageable)
                 .map(SupportTicketResponse::from);
     }
 
-    @Transactional(readOnly = true)
     public SupportTicketResponse getMyTicket(UUID userId, UUID ticketId) {
         // (id, userId) 동시 조건 — 타인 티켓은 조회 결과 없음 → 404 은닉(403 아님).
         SupportTicket ticket = repository.findBySupportTicketIdAndUserId(ticketId, userId)

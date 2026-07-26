@@ -14,8 +14,11 @@ import java.util.UUID;
 /**
  * 도움말 서비스(ST-B1-13 · HELP-06) — 공개 콘텐츠 검색·상세. PUBLISHED만 노출.
  * 검색 0건은 빈 목록(200)이다(AC4). 현재 help_articles에 시드가 없어 실제 결과는 비어 있다(콘텐츠 후속).
+ *
+ * <p>조회 전용 서비스라 트랜잭션은 클래스 레벨 {@code readOnly}가 기본이다.
  */
 @Service
+@Transactional(readOnly = true)
 public class HelpArticleService {
 
     private final HelpArticleRepository repository;
@@ -24,14 +27,12 @@ public class HelpArticleService {
         this.repository = repository;
     }
 
-    @Transactional(readOnly = true)
     public List<HelpArticleResponse> search(String keyword, String category) {
         return repository.search(blankToNull(keyword), blankToNull(category)).stream()
                 .map(HelpArticleResponse::from)
                 .toList();
     }
 
-    @Transactional(readOnly = true)
     public HelpArticleResponse getArticle(UUID articleId) {
         return repository.findByHelpArticleIdAndStatus(articleId, HelpArticleStatus.PUBLISHED)
                 .map(HelpArticleResponse::from)
