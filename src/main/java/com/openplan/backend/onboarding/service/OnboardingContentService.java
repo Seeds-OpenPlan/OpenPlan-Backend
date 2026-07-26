@@ -23,6 +23,9 @@ import java.util.Map;
 @Service
 public class OnboardingContentService {
 
+    /** 온보딩 문구 정본 리소스 경로 — 로드 지점과 실패 메시지가 같은 값을 참조한다. */
+    private static final String CONTENTS_RESOURCE_PATH = "onboarding/contents.json";
+
     private final Map<OnboardingStep, List<OnboardingContentItem>> contentsByStep;
 
     public OnboardingContentService(ObjectMapper objectMapper) {
@@ -34,7 +37,7 @@ public class OnboardingContentService {
     }
 
     private Map<OnboardingStep, List<OnboardingContentItem>> load(ObjectMapper objectMapper) {
-        try (InputStream is = new ClassPathResource("onboarding/contents.json").getInputStream()) {
+        try (InputStream is = new ClassPathResource(CONTENTS_RESOURCE_PATH).getInputStream()) {
             Map<String, List<OnboardingContentItem>> raw =
                     objectMapper.readValue(is, new TypeReference<>() {
                     });
@@ -44,7 +47,7 @@ public class OnboardingContentService {
             return result;
         } catch (IOException e) {
             // 콘텐츠 리소스는 필수 산출물 — 없으면 부팅을 세운다(조용한 빈 응답보다 낫다).
-            throw new IllegalStateException("온보딩 콘텐츠 리소스 로드 실패: onboarding/contents.json", e);
+            throw new IllegalStateException("온보딩 콘텐츠 리소스 로드 실패: " + CONTENTS_RESOURCE_PATH, e);
         }
     }
 }
