@@ -1,0 +1,26 @@
+{
+  "project_id": "bathos-openplan",
+  "codename": "openplan",
+  "current_level": 1,
+  "status": "active",
+  "lang": "ko",
+  "created": "2026-07-27T23:35:20Z",
+  "routing": [],
+  "waves": [],
+  "roles": [],
+  "tasks": [],
+  "gates": [],
+  "risks": [],
+  "modules": [],
+  "artifacts": [],
+  "stale_story_keys": [],
+  "approved_fingerprints": [
+    {
+      "fingerprint_id": "fp-0743b37cabd0",
+      "hash": "0743b37cabd085d7821b868afc4ae99ac8ea48149ab19d6ef5e238c531cbcda4",
+      "actor": "xkzhdiRLfnr",
+      "scope": "unspecified",
+      "approved": "2026-07-27T14:36:04.087460370Z"
+    }
+  ]
+}
