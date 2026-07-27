@@ -2214,6 +2214,7 @@ components:
         name: { type: string }
         dueDate: { type: [string, "null"], format: date }
         status: { type: string, enum: [IN_PROGRESS, PAUSED, CLOSED] }
+        priority: { type: [integer, "null"], deprecated: true, description: "미사용 — 프로젝트 우선순위는 요구사항에 없다(FR-141·148). 항상 null. 코드 정리 후 삭제 예정" }
         badges:
           type: object
           description: PROJ-01/04 배지 — 텍스트 병기 (NFR-017)
