@@ -1278,7 +1278,7 @@ paths:
   /tasks/{taskId}/status:
     patch:
       operationId: changeTaskStatus
-      summary: 완료/미완료 전환 (블록 status 미러 동기 갱신)
+      summary: 완료/미완료 전환 (블록 status 미러 동기 갱신 · version 필수 · 미완료 착지 상태는 서버 결정)
       x-lane: BE-2
       x-user-stories: [PLAN-13, PLAN-14]
       parameters: [{ $ref: "#/components/parameters/TaskId" }]
@@ -1288,9 +1288,10 @@ paths:
           application/json:
             schema:
               type: object
-              required: [status]
+              required: [completed, version]
               properties:
-                status: { type: string, enum: [IN_PROGRESS, COMPLETED] }
+                completed: { type: boolean }
+                version: { type: integer, format: int64 }
       responses:
         "200":
           description: OK (멱등)
@@ -1300,6 +1301,7 @@ paths:
                 type: object
                 properties:
                   data: { $ref: "#/components/schemas/Task" }
+        "409": { $ref: "#/components/responses/VersionConflict" }
   /tasks/{taskId}/wbs-range:
     put:
       operationId: saveWbsRange
