@@ -86,6 +86,7 @@ public class TaskService {
 
         String title = validator.validateTitle(req.title());          // 422 (AC-C-3)
         validator.validateEstimatedMinutes(req.estimatedMinutes());    // 422 (AC-C-4)
+        validator.validatePriority(req.priority());                    // 422 — 1·2·3만 (제품 3단계)
 
         if (req.categoryId() != null && !categoryChecker.existsOwned(req.categoryId(), userId)) {
             throw new OpenPlanException(ErrorCode.E_COM_004);           // 404 (AC-C-5, D-8)
@@ -196,6 +197,7 @@ public class TaskService {
 
         String title = validator.validateTitle(req.title());          // 422 (AC-E-3, 생성과 동일 코드)
         validator.validateEstimatedMinutes(req.estimatedMinutes());    // 422
+        validator.validatePriority(req.priority());                    // 422 — 생성과 동일 (AC-E-3)
 
         if (req.categoryId() != null && !categoryChecker.existsOwned(req.categoryId(), userId)) {
             throw new OpenPlanException(ErrorCode.E_COM_004);           // 404 (AC-E-3 categoryId, D-8)
