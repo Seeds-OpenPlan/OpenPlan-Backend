@@ -72,7 +72,7 @@ class TaskUpdateApiTest {
     // ---------- AC-E-1 정상 편집 ----------
 
     @Test
-    @DisplayName("AC-E-1 전체 폼 교체 → 200 · version 증가 · categoryId null=해제")
+    @DisplayName("AC-E-1 전 필드 제출 → 200 · 전부 반영 · version 증가 · categoryId null=해제")
     void updateOk() throws Exception {
         UUID id = insertTask(inProgress, myCategory, "원제목", "원메모", 30, 1,
                 LocalDate.of(2099, 1, 1), TaskStatus.UNASSIGNED, 0);
@@ -90,6 +90,41 @@ class TaskUpdateApiTest {
                 .andExpect(jsonPath("$.data.categoryId").doesNotExist())   // null=해제
                 .andExpect(jsonPath("$.data.version").value(1))            // 증가 반영
                 .andExpect(jsonPath("$.data.status").value("UNASSIGNED")); // 편집으로 불변
+    }
+
+    // ---------- AC-E-1 부분 수정 (true PATCH) ----------
+
+    @Test
+    @DisplayName("AC-E-1 부분 수정 — 제목만 보내면 memo·priority·dueDate·categoryId 유지")
+    void partialUpdateKeepsUnsentFields() throws Exception {
+        UUID id = insertTask(inProgress, myCategory, "원제목", "원메모", 30, 2,
+                LocalDate.of(2099, 1, 1), TaskStatus.UNASSIGNED, 0);
+
+        patch(id, "{\"title\":\"제목만 변경\",\"version\":0}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.title").value("제목만 변경"))   // 변경
+                .andExpect(jsonPath("$.data.memo").value("원메모"))          // 유지
+                .andExpect(jsonPath("$.data.estimatedMinutes").value(30))    // 유지
+                .andExpect(jsonPath("$.data.priority").value(2))            // 유지
+                .andExpect(jsonPath("$.data.dueDate").value("2099-01-01"))   // 유지
+                .andExpect(jsonPath("$.data.categoryId").value(myCategory.toString())) // 유지
+                .andExpect(jsonPath("$.data.version").value(1));
+    }
+
+    @Test
+    @DisplayName("AC-E-1 명시적 null = 해제 — memo:null·categoryId:null 보내면 그 필드만 비워지고 나머지 유지")
+    void nullClearsOnlyThatField() throws Exception {
+        UUID id = insertTask(inProgress, myCategory, "원제목", "원메모", 30, 2,
+                LocalDate.of(2099, 1, 1), TaskStatus.UNASSIGNED, 0);
+
+        patch(id, "{\"memo\":null,\"categoryId\":null,\"version\":0}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.memo").doesNotExist())          // 해제
+                .andExpect(jsonPath("$.data.categoryId").doesNotExist())     // 해제
+                .andExpect(jsonPath("$.data.title").value("원제목"))         // 유지
+                .andExpect(jsonPath("$.data.estimatedMinutes").value(30))    // 유지
+                .andExpect(jsonPath("$.data.priority").value(2))            // 유지
+                .andExpect(jsonPath("$.data.dueDate").value("2099-01-01"));  // 유지
     }
 
     // ---------- AC-E-2 status 금지 ----------

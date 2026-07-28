@@ -1,28 +1,75 @@
 package com.openplan.backend.task.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Null;
+import lombok.Getter;
 
 import java.time.LocalDate;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.UUID;
 
-/**
- * 태스크 편집 요청 (PROJ-18=PLAN-10 / EP-4). <b>전체 폼 교체 의미론</b>(James 확정) — 6필드를 전부 제출하며
- * null 가능 필드의 null은 "비움/해제"를 뜻한다(tri-state 회피, record DTO 유지). {@code categoryId=null} = 해제(AC-E-1).
- *
- * <p>title은 <b>@NotBlank를 두지 않는다</b> — 규칙은 서비스({@code TaskValidator})가 422로 판정(생성과 동일 코드, AC-E-3).
- * dueDate는 검증하지 않는다 — 과거 허용(D-11).
- *
- * <p>{@code version}은 낙관락 입력이라 <b>필수</b>(@NotNull — 누락 시 400, AC-E-4). status는 편집으로 못 바꾼다 —
- * 포함되면 {@code @Null} 위반 400(D-3 · AC-E-2, 상태는 /status 전용). String 타입이라 값이 실려도 파싱 문제 없이 400([M1]).
- */
-public record TaskUpdateRequest(
-        String title,
-        String memo,
-        Integer estimatedMinutes,
-        Integer priority,
-        LocalDate dueDate,
-        UUID categoryId,
-        @NotNull(message = "version은 필수입니다.") Long version,
-        @Null(message = "status는 지정할 수 없습니다.") String status) {
+@Getter
+public class TaskUpdateRequest {
+
+    private String title;
+    private String memo;
+    private Integer estimatedMinutes;
+    private Integer priority;
+    private LocalDate dueDate;
+    private UUID categoryId;
+
+    @NotNull(message = "version은 필수입니다.")
+    private Long version;
+
+    @Null(message = "status는 지정할 수 없습니다.")
+    private String status;
+
+    /** JSON에 담겨 온(=수정 대상) 필드 이름 집합. setter 호출로 채워진다. */
+    @JsonIgnore
+    private final Set<String> provided = new HashSet<>();
+
+    /** 해당 필드가 요청 JSON에 담겨 왔는가(값이 null이어도 true — "해제"). 미포함이면 false — "유지". */
+    public boolean isProvided(String field) {
+        return provided.contains(field);
+    }
+
+    public void setTitle(String title) {
+        this.title = title;
+        provided.add("title");
+    }
+
+    public void setMemo(String memo) {
+        this.memo = memo;
+        provided.add("memo");
+    }
+
+    public void setEstimatedMinutes(Integer estimatedMinutes) {
+        this.estimatedMinutes = estimatedMinutes;
+        provided.add("estimatedMinutes");
+    }
+
+    public void setPriority(Integer priority) {
+        this.priority = priority;
+        provided.add("priority");
+    }
+
+    public void setDueDate(LocalDate dueDate) {
+        this.dueDate = dueDate;
+        provided.add("dueDate");
+    }
+
+    public void setCategoryId(UUID categoryId) {
+        this.categoryId = categoryId;
+        provided.add("categoryId");
+    }
+
+    public void setVersion(Long version) {
+        this.version = version;
+    }
+
+    public void setStatus(String status) {
+        this.status = status;
+    }
 }
