@@ -43,7 +43,7 @@ public class ProjectTaskController {
     @PostMapping
     @Operation(summary = "태스크 생성 (PROJ-17)",
             description = "title만 required · 생성 status=UNASSIGNED(version=0). 요청에 status 포함 시 400. "
-                    + "과거 dueDate 허용(D-11). 평가 선행 후 CLOSED 프로젝트 → 422 E-PROJ-003, PAUSED 허용. "
+                    + "과거 dueDate 허용(D-11). 평가 선행 후 CLOSED 프로젝트 → 422 E-PROJ-005, PAUSED 허용. "
                     + "부재·타인 projectId/categoryId → 404.")
     public ResponseEntity<ApiResponse<TaskResponse>> create(
             @CurrentUser UUID userId,

@@ -80,7 +80,7 @@ public class TaskService {
                 .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404 (AC-C-7)
 
         if (project.getStatus() == ProjectStatus.CLOSED) { // D-10 가드 → 422 (PAUSED 통과, AC-C-7)
-            throw new OpenPlanException(ErrorCode.E_PROJ_003,
+            throw new OpenPlanException(ErrorCode.E_PROJ_005,
                     Map.of("fields", List.of(Map.of("field", "project.status"))));
         }
 
@@ -186,7 +186,7 @@ public class TaskService {
         Task task = owned.task();
 
         if (owned.projectStatus() == ProjectStatus.CLOSED) { // 422 — version보다 먼저 (D-10, AC-E-5)
-            throw new OpenPlanException(ErrorCode.E_PROJ_003,
+            throw new OpenPlanException(ErrorCode.E_PROJ_005,
                     Map.of("fields", List.of(Map.of("field", "project.status"))));
         }
         if (req.version() != task.getVersion()) { // 409 — 최신 TaskResponse 동봉 (AC-E-4)
@@ -222,7 +222,7 @@ public class TaskService {
         Task task = owned.task();
 
         if (owned.projectStatus() == ProjectStatus.CLOSED) { // ① 422 — no-op보다 먼저 (D-10, AC-S-6)
-            throw new OpenPlanException(ErrorCode.E_PROJ_003,
+            throw new OpenPlanException(ErrorCode.E_PROJ_005,
                     Map.of("fields", List.of(Map.of("field", "project.status"))));
         }
 
@@ -267,7 +267,7 @@ public class TaskService {
                 .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404 (AC-D-4: 부재·타인·재삭제)
 
         if (owned.projectStatus() == ProjectStatus.CLOSED) { // 422 (D-10, AC-D-4)
-            throw new OpenPlanException(ErrorCode.E_PROJ_003,
+            throw new OpenPlanException(ErrorCode.E_PROJ_005,
                     Map.of("fields", List.of(Map.of("field", "project.status"))));
         }
 

@@ -56,7 +56,7 @@ public class TaskController {
     @Operation(summary = "태스크 편집 단일 폼 (PROJ-18=PLAN-10)",
             description = "6필드(title·memo·estimatedMinutes·priority·dueDate·categoryId) 전체 폼 교체 + version 낙관락. "
                     + "categoryId null=해제. status 포함 시 400(상태는 /status 전용). 평가 선행 후 CLOSED 프로젝트 태스크 "
-                    + "→ 422 E-PROJ-003(COMPLETED 태스크·PAUSED 프로젝트는 성공). stale version → 409 + details.latest.")
+                    + "→ 422 E-PROJ-005(COMPLETED 태스크·PAUSED 프로젝트는 성공). stale version → 409 + details.latest.")
     public ApiResponse<TaskResponse> update(
             @CurrentUser UUID userId,
             @PathVariable UUID taskId,
@@ -80,7 +80,7 @@ public class TaskController {
     @DeleteMapping("/{taskId}")
     @Operation(summary = "태스크 삭제 (TUT-07)",
             description = "hard delete + FK cascade(wbs·blocks·validation·logs) 위임 + 같은 tx 주간계획 캐시 재계산(TB-4). "
-                    + "version 불요·태스크 status 무관. 평가 선행 후 CLOSED 프로젝트 태스크 → 422 E-PROJ-003. "
+                    + "version 불요·태스크 status 무관. 평가 선행 후 CLOSED 프로젝트 태스크 → 422 E-PROJ-005. "
                     + "부재·타인·재삭제 → 404. 성공 204(봉투 없음).")
     public ResponseEntity<Void> delete(
             @CurrentUser UUID userId,
