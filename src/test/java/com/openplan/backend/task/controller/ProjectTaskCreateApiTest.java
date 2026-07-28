@@ -165,7 +165,7 @@ class ProjectTaskCreateApiTest {
     // ---------- AC-C-7 프로젝트 스코프/상태 가드(D-10) ----------
 
     @Test
-    @DisplayName("AC-C-7 부재·타인 projectId → 404 · PAUSED → 201 · CLOSED → 422 E-PROJ-003")
+    @DisplayName("AC-C-7 부재·타인 projectId → 404 · PAUSED → 201 · CLOSED → 422 E-PROJ-005")
     void projectScopeAndClosedGuard() throws Exception {
         post(UUID.randomUUID(), "{\"title\":\"t\"}").andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("E-COM-004"));
@@ -177,7 +177,7 @@ class ProjectTaskCreateApiTest {
                 .andExpect(jsonPath("$.data.status").value("UNASSIGNED"));
 
         post(closed, "{\"title\":\"종료중 생성\"}").andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.error.code").value("E-PROJ-003"))
+                .andExpect(jsonPath("$.error.code").value("E-PROJ-005"))
                 .andExpect(jsonPath("$.error.details.fields[0].field").value("project.status"));
     }
 

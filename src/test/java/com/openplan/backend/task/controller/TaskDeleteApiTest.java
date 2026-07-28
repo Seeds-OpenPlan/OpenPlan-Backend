@@ -133,12 +133,12 @@ class TaskDeleteApiTest {
     }
 
     @Test
-    @DisplayName("AC-D-4 CLOSED 프로젝트 하위 태스크 삭제 → 422 E-PROJ-003 (D-10) · 미삭제")
+    @DisplayName("AC-D-4 CLOSED 프로젝트 하위 태스크 삭제 → 422 E-PROJ-005 (D-10) · 미삭제")
     void closedProjectGuard() throws Exception {
         UUID task = insertTask(closed, "종료프로젝트 태스크", TaskStatus.UNASSIGNED);
 
         del(task).andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.error.code").value("E-PROJ-003"))
+                .andExpect(jsonPath("$.error.code").value("E-PROJ-005"))
                 .andExpect(jsonPath("$.error.details.fields[0].field").value("project.status"));
 
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM tasks WHERE task_id = ?", Integer.class, task))

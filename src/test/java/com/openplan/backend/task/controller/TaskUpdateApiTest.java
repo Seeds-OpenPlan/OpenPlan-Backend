@@ -141,7 +141,7 @@ class TaskUpdateApiTest {
     // ---------- AC-E-5 태스크 상태 무관 · 프로젝트 상태 가드 ----------
 
     @Test
-    @DisplayName("AC-E-5 COMPLETED 태스크 편집 성공 · PAUSED 프로젝트 성공 · CLOSED 프로젝트 → 422 E-PROJ-003")
+    @DisplayName("AC-E-5 COMPLETED 태스크 편집 성공 · PAUSED 프로젝트 성공 · CLOSED 프로젝트 → 422 E-PROJ-005")
     void editByStatus() throws Exception {
         UUID completed = insertTask(inProgress, null, "완료태스크", null, null, null, null, TaskStatus.COMPLETED, 0);
         patch(completed, "{\"title\":\"완료중 수정\",\"version\":0}")
@@ -155,17 +155,17 @@ class TaskUpdateApiTest {
         UUID inClosed = insertTask(closed, null, "종료프로젝트 태스크", null, null, null, null, TaskStatus.UNASSIGNED, 0);
         patch(inClosed, "{\"title\":\"종료중 수정\",\"version\":0}")
                 .andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.error.code").value("E-PROJ-003"))
+                .andExpect(jsonPath("$.error.code").value("E-PROJ-005"))
                 .andExpect(jsonPath("$.error.details.fields[0].field").value("project.status"));
     }
 
     @Test
-    @DisplayName("검사 순서 — CLOSED 프로젝트 태스크는 stale version이어도 409 아닌 422 E-PROJ-003 (CLOSED 먼저)")
+    @DisplayName("검사 순서 — CLOSED 프로젝트 태스크는 stale version이어도 409 아닌 422 E-PROJ-005 (CLOSED 먼저)")
     void closedGuardBeforeVersion() throws Exception {
         UUID inClosed = insertTask(closed, null, "종료-v3", null, null, null, null, TaskStatus.UNASSIGNED, 3);
         patch(inClosed, "{\"title\":\"수정 시도\",\"version\":0}") // stale version=0
                 .andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.error.code").value("E-PROJ-003")); // 409 아님
+                .andExpect(jsonPath("$.error.code").value("E-PROJ-005")); // 409 아님
     }
 
     @Test

@@ -171,14 +171,14 @@ class TaskToggleApiTest {
     }
 
     @Test
-    @DisplayName("[T6] CLOSED ∩ no-op 교차 — CLOSED 프로젝트 COMPLETED 태스크에 완료 요청(no-op) → 422 E-PROJ-003 (CLOSED 먼저)")
+    @DisplayName("[T6] CLOSED ∩ no-op 교차 — CLOSED 프로젝트 COMPLETED 태스크에 완료 요청(no-op) → 422 E-PROJ-005 (CLOSED 먼저)")
     void closedGuardBeatsNoop() throws Exception {
         UUID task = insertTask(closed, "종료-완료태스크", TaskStatus.COMPLETED, 0);
 
         // completed=true == 이미 COMPLETED (no-op 대상)이지만 CLOSED 가드가 먼저 → 200 no-op 아님, 422
         toggle(task, "{\"completed\":true,\"version\":0}")
                 .andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.error.code").value("E-PROJ-003"))
+                .andExpect(jsonPath("$.error.code").value("E-PROJ-005"))
                 .andExpect(jsonPath("$.error.details.fields[0].field").value("project.status"));
     }
 
