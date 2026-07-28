@@ -111,6 +111,8 @@ class ProjectUpdateApiTest {
         putExpect422(id, "{\"description\":\"no name\",\"version\":0}");
         // 과거 마감일 (Q-J, FIXED_TODAY=2026-07-15)
         putExpect422(id, "{\"name\":\"x\",\"dueDate\":\"2000-01-01\",\"version\":0}");
+        // priority 범위 밖 (1·2·3만 — 생성과 동일)
+        putExpect422(id, "{\"name\":\"x\",\"priority\":9999,\"version\":0}");
     }
 
     @Test

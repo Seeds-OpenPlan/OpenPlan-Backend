@@ -134,6 +134,28 @@ class ProjectTaskCreateApiTest {
                 .andExpect(jsonPath("$.data.estimatedMinutes").value(5));
     }
 
+    // ---------- priority 3단계(1·2·3) ----------
+
+    @Test
+    @DisplayName("priority 9999·0·-3 → 422 E-COM-009 · 1·2·3 성공 · null 허용")
+    void priorityRules() throws Exception {
+        post(inProgress, "{\"title\":\"t\",\"priority\":9999}").andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.code").value("E-COM-009"))
+                // 문구가 errors.properties(validation.priority.range)에서 해석되는지 고정 — 키 오타 시 폴백으로 새면 실패
+                .andExpect(jsonPath("$.error.details.fields[0].message")
+                        .value("우선순위는 1(높음)·2(보통)·3(낮음) 중 하나여야 합니다."));
+        post(inProgress, "{\"title\":\"t\",\"priority\":0}").andExpect(status().isUnprocessableEntity());
+        post(inProgress, "{\"title\":\"t\",\"priority\":-3}").andExpect(status().isUnprocessableEntity());
+
+        for (int p = 1; p <= 3; p++) {
+            post(inProgress, "{\"title\":\"t\",\"priority\":" + p + "}").andExpect(status().isCreated())
+                    .andExpect(jsonPath("$.data.priority").value(p));
+        }
+        // priority 생략(null) 허용
+        post(inProgress, "{\"title\":\"t\"}").andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.priority").doesNotExist());
+    }
+
     // ---------- AC-C-5 카테고리 소유(D-8) ----------
 
     @Test

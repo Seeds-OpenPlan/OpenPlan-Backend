@@ -115,6 +115,9 @@ class TaskUpdateApiTest {
         patch(id, "{\"title\":\"x\",\"estimatedMinutes\":47,\"version\":0}")
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.error.code").value("E-COM-009"));
+        patch(id, "{\"title\":\"x\",\"priority\":9999,\"version\":0}") // priority 3단계 검증도 생성과 동일
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.code").value("E-COM-009"));
         patch(id, "{\"title\":\"x\",\"categoryId\":\"" + othersCategory + "\",\"version\":0}")
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("E-COM-004"));
