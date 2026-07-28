@@ -7,7 +7,7 @@ import jakarta.validation.constraints.NotNull;
  *
  * <p>{@code completed=true} = 완료로 표시(PLAN-13), {@code false} = 미완료로 되돌리기(PLAN-14). 착지 상태는
  * 서버가 결정한다(UNASSIGNED 직접 지정 불가 — 바디에 상태값 자체가 없음). completed·version 모두 필수
- * (@NotNull — 누락·비불리언 시 400, AC-S-6).
+ * (@NotNull — 누락 시 400, AC-S-6).
  */
 public record TaskStatusToggleRequest(
         @NotNull(message = "completed는 필수입니다.") Boolean completed,
