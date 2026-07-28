@@ -41,10 +41,14 @@ public class ErrorMessages {
 
     /** 카탈로그 문구. 키가 없으면 ERROR 로그 후 일반 문구로 폴백한다. */
     public String resolve(ErrorCode errorCode) {
+        return resolve(errorCode.code());
+    }
+
+    public String resolve(String key) {
         try {
-            return messageSource.getMessage(errorCode.code(), null, Locale.KOREAN);
+            return messageSource.getMessage(key, null, Locale.KOREAN);
         } catch (NoSuchMessageException ex) {
-            log.error("오류 메시지 카탈로그에 키 없음: {} — messages/errors.properties 갱신 필요", errorCode.code());
+            log.error("오류 메시지 카탈로그에 키 없음: {} — messages/errors.properties 갱신 필요", key);
             return FALLBACK;
         }
     }
