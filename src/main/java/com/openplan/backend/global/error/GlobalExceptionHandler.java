@@ -4,11 +4,13 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.NoHandlerFoundException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
@@ -22,6 +24,7 @@ import java.util.Map;
  * <p>매핑 규칙(§3):
  * <ul>
  *   <li>{@link MethodArgumentNotValidException} → E-COM-001 (+fields)</li>
+ *   <li>{@link HttpMessageNotReadableException}·{@link MethodArgumentTypeMismatchException} → E-COM-001 (fields 없음)</li>
  *   <li>{@link ObjectOptimisticLockingFailureException} → E-COM-006 (latest 재조회는 도메인 예외로 승격 시 동봉)</li>
  *   <li>{@link OpenPlanException} → 지정 ErrorCode 그대로</li>
  *   <li>미분류 Exception → E-COM-005</li>
@@ -69,6 +72,24 @@ public class GlobalExceptionHandler {
         log.warn("[{}] optimistic lock uri={}", code.code(), req.getRequestURI());
         // details.latest(최신본)는 도메인 서비스가 OpenPlanException으로 승격해 동봉하는 것이 원칙.
         // 여기 도달한 경우는 최신본 없이 충돌만 안내(SYS-05 재시도 유도).
+        return build(code, errorMessages.resolve(code), null);
+    }
+
+    /**
+     * 바디를 아예 못 읽는 경우(깨진 JSON)와 값 타입이 어긋나는 경우 → 400.
+     *
+     * <p>둘 다 Bean Validation 이전 단계라 {@link MethodArgumentNotValidException}으로 잡히지 않고
+     * 미분류 Exception 으로 새어 500이 되고 있었다(이슈 #9). 클라이언트 잘못을 서버 장애로 알리면
+     * 호출 측이 "일시적 오류"로 읽고 재시도하게 된다.
+     *
+     * <p>{@code fields} 는 동봉하지 않는다 — 역직렬화가 실패한 시점이라 어느 필드가 문제인지
+     * 신뢰할 수 있게 특정되지 않는다(값 창작 금지).
+     */
+    @ExceptionHandler({HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class})
+    public ResponseEntity<ErrorResponse> handleUnreadableRequest(Exception ex, HttpServletRequest req) {
+        ErrorCode code = ErrorCode.E_COM_001;
+        log.info("[{}] unreadable request uri={} cause={}", code.code(), req.getRequestURI(),
+                ex.getClass().getSimpleName());
         return build(code, errorMessages.resolve(code), null);
     }
 
