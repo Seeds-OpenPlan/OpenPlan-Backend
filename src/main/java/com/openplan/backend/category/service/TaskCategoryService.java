@@ -10,6 +10,7 @@ import com.openplan.backend.global.time.UserClock;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -47,5 +48,14 @@ public class TaskCategoryService {
         TaskCategory category = new TaskCategory(userId, name, 0, clock.now());
         repository.save(category);
         return TaskCategoryResponse.from(category);
+    }
+
+    /**
+     * 카테고리 목록 (SC-01 / AC③). 사용자 전체를 sort_order ASC, name ASC로 반환. 읽기 — 서비스 tx 없음.
+     */
+    public List<TaskCategoryResponse> list(UUID userId) {
+        return repository.findByUserIdOrderBySortOrderAscNameAsc(userId).stream()
+                .map(TaskCategoryResponse::from)
+                .toList();
     }
 }
