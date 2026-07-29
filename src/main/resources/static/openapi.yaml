@@ -1136,10 +1136,12 @@ paths:
       x-user-stories: [PROJ-16]
       parameters:
         - { $ref: "#/components/parameters/ProjectId" }
-        - { name: status, in: query, schema: { type: string, enum: [UNASSIGNED, IN_PROGRESS, COMPLETED] } }
+        - { name: status, in: query, description: 생략 시 전체. 미정의 값 → 422, schema: { type: string, enum: [UNASSIGNED, IN_PROGRESS, COMPLETED] } }
+        - { $ref: "#/components/parameters/Page" }
+        - { $ref: "#/components/parameters/Size" }
       responses:
         "200":
-          description: OK
+          description: OK — 정렬 created_at DESC, task_id DESC 서버 고정
           content:
             application/json:
               schema:
@@ -1148,6 +1150,10 @@ paths:
                   data:
                     type: array
                     items: { $ref: "#/components/schemas/Task" }
+                  meta:
+                    type: object
+                    properties:
+                      page: { $ref: "#/components/schemas/PageMeta" }
     post:
       operationId: createTask
       summary: 태스크 생성 (카테고리 SC-01 · 예상시간 5분 단위 · 폼은 correction-proposals 제안 병기 — SS-11)
@@ -1211,11 +1217,24 @@ paths:
       x-lane: BE-2
       x-user-stories: [PLAN-05, PROJ-19]
       parameters:
-        - { name: status, in: query, schema: { type: string, enum: [UNASSIGNED, IN_PROGRESS, COMPLETED] } }
-        - { name: projectId, in: query, schema: { type: string, format: uuid } }
+        - name: status
+          in: query
+          description: 생략 시 UNASSIGNED 기본값. UNASSIGNED 외 값 → 422 (미배치 패널 전용 라우트)
+          schema: { type: string, enum: [UNASSIGNED], default: UNASSIGNED }
+        - name: projectId
+          in: query
+          deprecated: true
+          description: >-
+            서버 미수용 — 전달해도 무시된다(필터 적용 안 됨). 프로젝트별 태스크는
+            GET /projects/{projectId}/tasks 를 사용할 것. 제거 예정.
+          schema: { type: string, format: uuid }
+        - { $ref: "#/components/parameters/Page" }
+        - { $ref: "#/components/parameters/Size" }
       responses:
         "200":
-          description: OK
+          description: >-
+            OK — IN_PROGRESS 프로젝트의 UNASSIGNED 태스크만(PAUSED·CLOSED 제외).
+            정렬 created_at DESC, task_id DESC 서버 고정
           content:
             application/json:
               schema:
@@ -1224,6 +1243,10 @@ paths:
                   data:
                     type: array
                     items: { $ref: "#/components/schemas/Task" }
+                  meta:
+                    type: object
+                    properties:
+                      page: { $ref: "#/components/schemas/PageMeta" }
   /tasks/{taskId}:
     get:
       operationId: getTask
