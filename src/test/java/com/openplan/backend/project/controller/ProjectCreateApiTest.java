@@ -105,6 +105,34 @@ class ProjectCreateApiTest {
     }
 
     @Test
+    @DisplayName("priority 9999·0·-3 → 422 E-COM-009 · 1·2·3 성공 · null 허용")
+    void priorityRules() throws Exception {
+        for (int bad : new int[]{9999, 0, -3}) {
+            mockMvc.perform(post(PATH).header("X-Dev-User", DEV_USER)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"name\":\"p\",\"priority\":" + bad + "}"))
+                    .andExpect(status().isUnprocessableEntity())
+                    .andExpect(jsonPath("$.error.code").value("E-COM-009"))
+                    // errors.properties(validation.priority.range) 해석 확인 — 키 오타 시 폴백으로 새면 실패
+                    .andExpect(jsonPath("$.error.details.fields[0].message")
+                            .value("우선순위는 1(높음)·2(보통)·3(낮음) 중 하나여야 합니다."));
+        }
+        for (int p = 1; p <= 3; p++) {
+            mockMvc.perform(post(PATH).header("X-Dev-User", DEV_USER)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"name\":\"p\",\"priority\":" + p + "}"))
+                    .andExpect(status().isCreated())
+                    .andExpect(jsonPath("$.data.priority").value(p));
+        }
+        // priority 생략(null) 허용
+        mockMvc.perform(post(PATH).header("X-Dev-User", DEV_USER)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"p\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.priority").doesNotExist());
+    }
+
+    @Test
     @DisplayName("금지 필드 status 포함 → 400 E-COM-001 (침묵 무시 금지)")
     void forbiddenStatusFieldRejected() throws Exception {
         mockMvc.perform(post(PATH)
