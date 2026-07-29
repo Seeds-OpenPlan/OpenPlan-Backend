@@ -1,4 +1,4 @@
-package com.openplan.backend.plan.controller;
+package com.openplan.backend.validation.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -30,13 +30,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * 접합 스텁 HTTP 왕복 테스트(standalone MockMvc, DB 불요).
+ * 규칙 엔진 dry-run 표면의 HTTP 왕복 테스트(standalone MockMvc, DB 불요).
  *
  * <p>엔진 판정 자체는 {@code PlanValidationEngineTest}가 검증한다. 여기서 증명하는 것은
  * <b>스냅샷 JSON → 엔진 → ValidationReport JSON</b> 경로가 실제로 뚫려 있다는 사실뿐이다.
  * 즉 라우팅·역직렬화(Instant·ZoneId·DayOfWeek)·응답 봉투가 맞는지를 본다.
  */
-class PlanValidationStubControllerTest {
+class RuleValidationStubControllerTest {
 
     private static final ZoneId SEOUL = ZoneId.of("Asia/Seoul");
     /** 2026-07-27 은 월요일. C-1: 시각은 referenceTime 으로만 주입한다. */
@@ -55,7 +55,7 @@ class PlanValidationStubControllerTest {
         MappingJackson2HttpMessageConverter converter = new MappingJackson2HttpMessageConverter(objectMapper);
 
         mockMvc = MockMvcBuilders
-                .standaloneSetup(new PlanValidationStubController(new PlanValidationEngine()))
+                .standaloneSetup(new RuleValidationStubController(new PlanValidationEngine()))
                 .setMessageConverters(converter)
                 .build();
     }
@@ -68,7 +68,7 @@ class PlanValidationStubControllerTest {
                 block("2026-07-27T00:00:00Z", "2026-07-27T05:00:00Z"),
                 availability(DayOfWeek.MONDAY, LocalTime.of(9, 0), LocalTime.of(11, 0)));
 
-        mockMvc.perform(post("/weekly-plans/{planId}/validations", UUID.randomUUID())
+        mockMvc.perform(post("/validations/dry-run")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(snapshot)))
                 .andExpect(status().isOk())
@@ -92,7 +92,7 @@ class PlanValidationStubControllerTest {
                 block("2026-07-27T00:00:00Z", "2026-07-27T02:00:00Z"),
                 availability(DayOfWeek.MONDAY, LocalTime.of(9, 0), LocalTime.of(18, 0)));
 
-        mockMvc.perform(post("/weekly-plans/{planId}/validations", UUID.randomUUID())
+        mockMvc.perform(post("/validations/dry-run")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(snapshot)))
                 .andExpect(status().isOk())
