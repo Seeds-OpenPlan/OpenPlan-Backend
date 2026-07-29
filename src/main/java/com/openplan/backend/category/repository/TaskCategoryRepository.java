@@ -20,4 +20,7 @@ public interface TaskCategoryRepository extends JpaRepository<TaskCategory, UUID
 
     /** 소유자 스코프 단건 — 삭제 공용. 부재·타인 → empty → 404 E-COM-004. */
     Optional<TaskCategory> findByIdAndUserId(UUID id, UUID userId);
+
+    /** 소유 카테고리 존재 판정 — task 도메인의 {@code TaskCategoryChecker} 정품 구현 입력(TB-6 이관). */
+    boolean existsByIdAndUserId(UUID id, UUID userId);
 }
