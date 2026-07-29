@@ -1016,9 +1016,12 @@ paths:
                 properties:
                   data: { $ref: "#/components/schemas/Project" }
         "404": { $ref: "#/components/responses/NotFound" }
-    patch:
+    put:
       operationId: updateProject
       summary: 프로젝트 편집 (version 필수 — SYS-05)
+      description: >-
+        전체 교체다(부분 갱신 아님). 편집 가능 4필드(name·description·dueDate·priority)를 모두 실어
+        보내야 하며, 생략한 필드는 null로 교체된다. status·closedAt은 편집으로 못 바꾼다(포함 시 400).
       x-lane: BE-2
       x-user-stories: [PROJ-06]
       parameters: [{ $ref: "#/components/parameters/ProjectId" }]
@@ -1033,6 +1036,7 @@ paths:
                 name: { type: string }
                 description: { type: string }
                 dueDate: { type: [string, "null"], format: date }
+                priority: { type: [integer, "null"], minimum: 1, maximum: 3 }
                 version: { type: integer, format: int64 }
       responses:
         "200":
@@ -1044,6 +1048,7 @@ paths:
                 properties:
                   data: { $ref: "#/components/schemas/Project" }
         "409": { $ref: "#/components/responses/VersionConflict" }
+        "422": { $ref: "#/components/responses/UnprocessableEntity" }
     delete:
       operationId: deleteProject
       summary: 삭제 — 태스크·계획 항목·수행 이력 일괄 제거 (NFR-008 일관 기준)
