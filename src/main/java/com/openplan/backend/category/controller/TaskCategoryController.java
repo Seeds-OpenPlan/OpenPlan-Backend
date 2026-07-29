@@ -10,7 +10,9 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -50,5 +52,16 @@ public class TaskCategoryController {
             description = "내 카테고리 전체를 sort_order ASC, name ASC로 반환. 페이지네이션 없음.")
     public ApiResponse<List<TaskCategoryResponse>> list(@CurrentUser UUID userId) {
         return ApiResponse.ok(taskCategoryService.list(userId));
+    }
+
+    @DeleteMapping("/{taskCategoryId}")
+    @Operation(summary = "카테고리 삭제 (SC-01)",
+            description = "hard delete. 연결된 태스크의 category_id는 FK ON DELETE SET NULL로 자동 '없음' 전환. "
+                    + "부재·타인 → 404. 성공 204(봉투 없음).")
+    public ResponseEntity<Void> delete(
+            @CurrentUser UUID userId,
+            @PathVariable UUID taskCategoryId) {
+        taskCategoryService.delete(userId, taskCategoryId);
+        return ResponseEntity.noContent().build();
     }
 }

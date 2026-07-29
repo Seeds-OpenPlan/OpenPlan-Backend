@@ -58,4 +58,15 @@ public class TaskCategoryService {
                 .map(TaskCategoryResponse::from)
                 .toList();
     }
+
+    /**
+     * 카테고리 삭제 (SC-01 / AC②). hard delete. 연결된 {@code tasks.category_id}는 FK ON DELETE SET NULL로
+     * DB가 자동 '없음'(null) 전환한다 — <b>앱 코드 별도 갱신 불요</b>(FR-305). 부재·타인 → 404 E-COM-004.
+     */
+    @Transactional
+    public void delete(UUID userId, UUID id) {
+        TaskCategory category = repository.findByIdAndUserId(id, userId)
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404
+        repository.delete(category);
+    }
 }
