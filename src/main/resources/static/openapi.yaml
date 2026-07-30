@@ -1543,8 +1543,9 @@ paths:
                 type: object
                 properties:
                   data: { $ref: "#/components/schemas/TaskCategory" }
-        "409": { description: 동일 이름 존재, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
-  /task-categories/{categoryId}:
+        "409": { description: E-CAT-001 동일 이름 존재 (UNIQUE user_id+name), content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "422": { $ref: "#/components/responses/UnprocessableEntity" }
+  /task-categories/{taskCategoryId}:
     delete:
       tags: [task-categories]
       x-implementation-status: not-implemented
@@ -1552,9 +1553,10 @@ paths:
       summary: "[미구현] 프리셋 삭제 — 연결 태스크는 '없음'(null) 전환 (FK SET NULL)"
       x-lane: BE-2
       x-user-stories: [RB-STAT-01]
-      parameters: [{ name: categoryId, in: path, required: true, schema: { type: string, format: uuid } }]
+      parameters: [{ name: taskCategoryId, in: path, required: true, schema: { type: string, format: uuid } }]
       responses:
         "204": { description: 삭제 완료 }
+        "404": { $ref: "#/components/responses/NotFound" }
   /projects/{projectId}/wbs:
     get:
       tags: [projects]
@@ -2474,6 +2476,7 @@ components:
         taskCategoryId: { type: string, format: uuid }
         name: { type: string }
         sortOrder: { type: integer }
+        createdAt: { type: string, format: date-time }
     WbsItem:
       type: object
       properties:
