@@ -20,10 +20,33 @@ security:
   - cookieAuth: []
   - devAuth: []   # dev 프로파일 한정 (D-16 dev-auth 스텁). 운영 빌드에서 필터 자체가 미등록
 
+tags:
+  - name: auth
+  - name: users
+  - name: onboarding
+  - name: settings
+  - name: landing
+  - name: external-calendar-connections
+  - name: external-calendar-events
+  - name: notifications
+  - name: support
+  - name: announcements
+  - name: projects
+  - name: tasks
+  - name: task-categories
+  - name: weekly-plans
+  - name: plan-blocks
+  - name: schedules
+  - name: replan-options
+  - name: fixed-schedules
+  - name: dashboard
+  - name: stats
+
 # ─────────────────────────────────────────────── AUTH (BE-1)
 paths:
   /auth/sessions:
     post:
+      tags: [auth]
       operationId: login
       x-auth-phase: WEEK4-STUB   # D-16 — 4주차 전 501 E-AUTH-011
       summary: 로컬 로그인 (쿠키 발급)
@@ -58,6 +81,7 @@ paths:
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
   /auth/session:
     get:
+      tags: [auth]
       operationId: getSession
       x-auth-phase: DEV-STUB-ACTIVE   # D-16 — 스텁 기간에도 dev 사용자로 정상 응답
       summary: 세션 확인 (새로고침 시 로그인 상태 복원)
@@ -74,6 +98,7 @@ paths:
                   data: { $ref: "#/components/schemas/SessionInfo" }
         "401": { $ref: "#/components/responses/Unauthorized" }
     delete:
+      tags: [auth]
       operationId: logout
       x-auth-phase: DEV-STUB-ACTIVE   # D-16 — 스텁 기간에도 dev 사용자로 정상 응답
       summary: 로그아웃 (세션 폐기 + 쿠키 만료)
@@ -83,6 +108,7 @@ paths:
         "204": { description: 로그아웃 완료 }
   /auth/token-refresh:
     post:
+      tags: [auth]
       operationId: refreshToken
       x-auth-phase: WEEK4-STUB   # D-16 — 4주차 전 501 E-AUTH-011
       summary: access 재발급 (refresh 회전 — AUTH-08 세션 만료 복귀)
@@ -106,6 +132,7 @@ paths:
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
   /auth/oauth/{provider}:
     get:
+      tags: [auth]
       operationId: oauthStart
       x-auth-phase: WEEK4-STUB   # D-16 — 4주차 전 501 E-AUTH-011
       summary: 소셜 인가 시작 (302 → 제공자)
@@ -117,6 +144,7 @@ paths:
         "302": { description: 제공자 인가 페이지로 리다이렉트 (state 발급) }
   /auth/oauth/{provider}/callback:
     get:
+      tags: [auth]
       operationId: oauthCallback
       x-auth-phase: WEEK4-STUB   # D-16 — 4주차 전 501 E-AUTH-011
       summary: 소셜 콜백 — 쿠키 발급 후 302 (쿼리스트링 토큰 전달 금지 — ADR-0001)
@@ -134,6 +162,7 @@ paths:
             실패 → /login?error=E-AUTH-010.
   /auth/reactivations:
     post:
+      tags: [auth]
       operationId: reactivateAccount
       x-auth-phase: WEEK4-STUB   # D-16 — 4주차 전 501 E-AUTH-011
       summary: 계정 재활성화 (30일 내 — SC-09)
@@ -165,9 +194,11 @@ paths:
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
   /users:
     post:
+      tags: [users]
+      x-implementation-status: not-implemented
       operationId: signUp
       x-auth-phase: WEEK4-STUB   # D-16 — 4주차 전 501 E-AUTH-011
-      summary: 회원가입
+      summary: "[미구현] 회원가입"
       x-lane: BE-1
       x-user-stories: [AUTH-03]
       security: []
@@ -200,6 +231,7 @@ paths:
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
   /auth/email-verifications:
     post:
+      tags: [auth]
       operationId: sendEmailVerification
       x-auth-phase: WEEK4-STUB   # D-16 — 4주차 전 501 E-AUTH-011
       summary: 인증 메일 발송 (재발송 겸용, 429 제한)
@@ -216,6 +248,7 @@ paths:
         "429": { $ref: "#/components/responses/TooManyRequests" }
   /auth/email-verifications/confirmation:
     post:
+      tags: [auth]
       operationId: confirmEmailVerification
       x-auth-phase: WEEK4-STUB   # D-16 — 4주차 전 501 E-AUTH-011
       summary: 이메일 인증 완료
@@ -234,6 +267,7 @@ paths:
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
   /auth/password-resets:
     post:
+      tags: [auth]
       operationId: requestPasswordReset
       x-auth-phase: WEEK4-STUB   # D-16 — 4주차 전 501 E-AUTH-011
       summary: 비밀번호 재설정 메일 요청
@@ -250,9 +284,11 @@ paths:
         "429": { $ref: "#/components/responses/TooManyRequests" }
   /auth/password-resets/{token}:
     patch:
+      tags: [auth]
+      x-implementation-status: not-implemented
       operationId: completePasswordReset
       x-auth-phase: WEEK4-STUB   # D-16 — 4주차 전 501 E-AUTH-011
-      summary: 재설정 완료 (링크 만료 + 1회용 — NFR-005)
+      summary: "[미구현] 재설정 완료 (링크 만료 + 1회용 — NFR-005)"
       x-lane: BE-1
       x-user-stories: [AUTH-06]
       security: []
@@ -271,6 +307,7 @@ paths:
   # ───────────────────────────────────────────── USER / ONBOARDING / SETTINGS (BE-1)
   /users/me:
     get:
+      tags: [users]
       operationId: getMe
       summary: 내 계정+프로필
       x-lane: BE-1
@@ -285,8 +322,10 @@ paths:
                 properties:
                   data: { $ref: "#/components/schemas/UserProfile" }
     delete:
+      tags: [users]
+      x-implementation-status: not-implemented
       operationId: deactivateMe
-      summary: 계정 비활성화 (30일 복구창 — 이후 배치 삭제, NFR-007)
+      summary: "[미구현] 계정 비활성화 (30일 복구창 — 이후 배치 삭제, NFR-007)"
       x-lane: BE-1
       x-user-stories: [ACCT-04, ACCT-06]
       responses:
@@ -303,6 +342,7 @@ paths:
                       recoverableUntil: { type: string, format: date-time }
   /users/me/profile:
     patch:
+      tags: [users]
       operationId: updateProfile
       summary: 프로필 수정
       x-lane: BE-1
@@ -329,8 +369,10 @@ paths:
                   data: { $ref: "#/components/schemas/UserProfile" }
   /users/me/password:
     patch:
+      tags: [users]
+      x-implementation-status: not-implemented
       operationId: changePassword
-      summary: 비밀번호 변경
+      summary: "[미구현] 비밀번호 변경"
       x-lane: BE-1
       x-user-stories: [ACCT-02]
       requestBody:
@@ -348,6 +390,7 @@ paths:
         "400": { description: E-USER-001 현재 비밀번호 불일치, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
   /users/me/onboarding-progress:
     get:
+      tags: [users]
       operationId: getOnboardingProgress
       summary: 온보딩·튜토리얼 진행 상태
       x-lane: BE-1
@@ -362,6 +405,7 @@ paths:
                 properties:
                   data: { $ref: "#/components/schemas/OnboardingProgress" }
     patch:
+      tags: [users]
       operationId: updateOnboardingProgress
       summary: 단계 완료/건너뛰기 · 튜토리얼 재실행(tutorialDone=false 리셋 — TUT-09)
       x-lane: BE-1
@@ -382,6 +426,7 @@ paths:
                   data: { $ref: "#/components/schemas/OnboardingProgress" }
   /onboarding/contents:
     get:
+      tags: [onboarding]
       operationId: getOnboardingContents
       summary: 소개·안내 콘텐츠 (2장 — SC-05/SC-11 교정 문구, 규칙 기반 검증 중심 명칭)
       x-lane: BE-1
@@ -407,6 +452,7 @@ paths:
                         imageUrl: { type: [string, "null"] }
   /users/me/availabilities:
     get:
+      tags: [users]
       operationId: getAvailabilities
       summary: 가용 시간 조회 (요일 7행 + 주간 총합)
       x-lane: BE-1
@@ -421,6 +467,7 @@ paths:
                 properties:
                   data: { $ref: "#/components/schemas/AvailabilityView" }
     put:
+      tags: [users]
       operationId: saveAvailabilities
       summary: 가용 시간 전체 저장 (공통 패턴 일괄 적용은 FE가 7행 확장 — 5분 단위)
       x-lane: BE-1
@@ -450,8 +497,10 @@ paths:
         "422": { $ref: "#/components/responses/UnprocessableEntity" }
   /users/me/preferences:
     get:
+      tags: [users]
+      x-implementation-status: not-implemented
       operationId: getPreferences
-      summary: 사용자 기본 설정 조회
+      summary: "[미구현] 사용자 기본 설정 조회"
       x-lane: BE-1
       x-user-stories: [FIX-10]
       responses:
@@ -464,8 +513,10 @@ paths:
                 properties:
                   data: { $ref: "#/components/schemas/Preferences" }
     put:
+      tags: [users]
+      x-implementation-status: not-implemented
       operationId: savePreferences
-      summary: 기본 설정 저장 (예상 시간 기본값 5분 단위 · 재계획 대안 기본값)
+      summary: "[미구현] 기본 설정 저장 (예상 시간 기본값 5분 단위 · 재계획 대안 기본값)"
       x-lane: BE-1
       x-user-stories: [FIX-11, FIX-12]
       requestBody:
@@ -484,8 +535,10 @@ paths:
                   data: { $ref: "#/components/schemas/Preferences" }
   /users/me/preference-suggestions:
     get:
+      tags: [users]
+      x-implementation-status: not-implemented
       operationId: getPreferenceSuggestions
-      summary: 규칙 기반 기본값 제안 (SS-14 — 제안만, 적용은 사용자 PUT — C-2)
+      summary: "[미구현] 규칙 기반 기본값 제안 (SS-14 — 제안만, 적용은 사용자 PUT — C-2)"
       x-lane: BE-1
       x-user-stories: [RB-FIX-01]
       responses:
@@ -502,8 +555,10 @@ paths:
                       - { type: "null" }
   /settings:
     get:
+      tags: [settings]
+      x-implementation-status: not-implemented
       operationId: getSettingsHome
-      summary: 설정 홈 조립 응답 (D-12 레버 5)
+      summary: "[미구현] 설정 홈 조립 응답 (D-12 레버 5)"
       x-lane: BE-1
       x-user-stories: [FIX-01, FIX-10, FIX-13, NOTI-01]
       responses:
@@ -527,8 +582,10 @@ paths:
                         items: { $ref: "#/components/schemas/NotificationSetting" }
   /landing:
     get:
+      tags: [landing]
+      x-implementation-status: not-implemented
       operationId: getLanding
-      summary: 랜딩 콘텐츠 (비인증)
+      summary: "[미구현] 랜딩 콘텐츠 (비인증)"
       x-lane: BE-1
       x-user-stories: [LANDING]
       security: []
@@ -548,8 +605,10 @@ paths:
   # ───────────────────────────────────────────── EXTERNAL CALENDAR (BE-1)
   /external-calendar-connections:
     get:
+      tags: [external-calendar-connections]
+      x-implementation-status: not-implemented
       operationId: listConnections
-      summary: 연동 목록·상태
+      summary: "[미구현] 연동 목록·상태"
       x-lane: BE-1
       x-user-stories: [FIX-13]
       responses:
@@ -564,8 +623,10 @@ paths:
                     type: array
                     items: { $ref: "#/components/schemas/ExternalConnection" }
     post:
+      tags: [external-calendar-connections]
+      x-implementation-status: not-implemented
       operationId: createConnection
-      summary: 연동 추가 (제공자 authCode 교환)
+      summary: "[미구현] 연동 추가 (제공자 authCode 교환)"
       x-lane: BE-1
       x-user-stories: [ONB-07, FIX-14]
       requestBody:
@@ -592,8 +653,10 @@ paths:
         "502": { description: E-EXT-001 제공자 오류, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
   /external-calendar-connections/{connectionId}:
     patch:
+      tags: [external-calendar-connections]
+      x-implementation-status: not-implemented
       operationId: updateConnection
-      summary: 연동 활성/비활성 (FIX-16)
+      summary: "[미구현] 연동 활성/비활성 (FIX-16)"
       x-lane: BE-1
       x-user-stories: [FIX-16]
       parameters: [{ $ref: "#/components/parameters/ConnectionId" }]
@@ -612,8 +675,10 @@ paths:
                 properties:
                   data: { $ref: "#/components/schemas/ExternalConnection" }
     delete:
+      tags: [external-calendar-connections]
+      x-implementation-status: not-implemented
       operationId: deleteConnection
-      summary: 연동 해제 (이후 해당 캘린더 일정 미반영 — FIX-17)
+      summary: "[미구현] 연동 해제 (이후 해당 캘린더 일정 미반영 — FIX-17)"
       x-lane: BE-1
       x-user-stories: [FIX-17]
       parameters: [{ $ref: "#/components/parameters/ConnectionId" }]
@@ -621,8 +686,10 @@ paths:
         "204": { description: 해제 완료 }
   /external-calendar-connections/{connectionId}/calendars:
     get:
+      tags: [external-calendar-connections]
+      x-implementation-status: not-implemented
       operationId: listProviderCalendars
-      summary: 제공자 캘린더 목록 (ONB-08)
+      summary: "[미구현] 제공자 캘린더 목록 (ONB-08)"
       x-lane: BE-1
       x-user-stories: [ONB-08]
       parameters: [{ $ref: "#/components/parameters/ConnectionId" }]
@@ -644,8 +711,10 @@ paths:
                         selected: { type: boolean }
   /external-calendar-connections/{connectionId}/calendar-selections:
     put:
+      tags: [external-calendar-connections]
+      x-implementation-status: not-implemented
       operationId: saveCalendarSelections
-      summary: 가져올 캘린더 선택 전체 교체 (목록에서 제거 = 미포함 — FIX-15)
+      summary: "[미구현] 가져올 캘린더 선택 전체 교체 (목록에서 제거 = 미포함 — FIX-15)"
       x-lane: BE-1
       x-user-stories: [ONB-08, FIX-15]
       parameters: [{ $ref: "#/components/parameters/ConnectionId" }]
@@ -669,8 +738,10 @@ paths:
         "200": { description: 저장 완료 }
   /external-calendar-connections/{connectionId}/events:
     get:
+      tags: [external-calendar-connections]
+      x-implementation-status: not-implemented
       operationId: listExternalEvents
-      summary: 가져온 일정 후보 목록 (선택 캘린더 기준 동기화 수행 후 반환)
+      summary: "[미구현] 가져온 일정 후보 목록 (선택 캘린더 기준 동기화 수행 후 반환)"
       x-lane: BE-1
       x-user-stories: [ONB-08, ONB-09]
       parameters:
@@ -689,8 +760,10 @@ paths:
                     items: { $ref: "#/components/schemas/ExternalEvent" }
   /external-calendar-events/{eventId}/application:
     post:
+      tags: [external-calendar-events]
+      x-implementation-status: not-implemented
       operationId: applyExternalEvent
-      summary: 반영 방식 적용 — AS_IS/EDITED → 고정 일정(source=EXTERNAL) 생성, EXCLUDE → 제외 (ONB-09)
+      summary: "[미구현] 반영 방식 적용 — AS_IS/EDITED → 고정 일정(source=EXTERNAL) 생성, EXCLUDE → 제외 (ONB-09)"
       x-lane: BE-1
       x-user-stories: [ONB-09]
       parameters: [{ name: eventId, in: path, required: true, schema: { type: string, format: uuid } }]
@@ -731,8 +804,10 @@ paths:
   # ───────────────────────────────────────────── NOTIFICATIONS / SUPPORT / ANNOUNCEMENTS (BE-1)
   /users/me/notification-settings:
     get:
+      tags: [users]
+      x-implementation-status: not-implemented
       operationId: getNotificationSettings
-      summary: 알림 설정 조회 (5유형)
+      summary: "[미구현] 알림 설정 조회 (5유형)"
       x-lane: BE-1
       x-user-stories: [NOTI-01]
       responses:
@@ -747,8 +822,10 @@ paths:
                     type: array
                     items: { $ref: "#/components/schemas/NotificationSetting" }
     put:
+      tags: [users]
+      x-implementation-status: not-implemented
       operationId: saveNotificationSettings
-      summary: 알림 설정 저장
+      summary: "[미구현] 알림 설정 저장"
       x-lane: BE-1
       x-user-stories: [NOTI-01]
       requestBody:
@@ -766,8 +843,10 @@ paths:
         "200": { description: 저장 완료 }
   /notifications:
     get:
+      tags: [notifications]
+      x-implementation-status: not-implemented
       operationId: listNotifications
-      summary: 알림 센터 (최신순 + 미읽음 수)
+      summary: "[미구현] 알림 센터 (최신순 + 미읽음 수)"
       x-lane: BE-1
       x-user-stories: [NOTI-02, NOTI-04]
       parameters: [{ $ref: "#/components/parameters/Page" }, { $ref: "#/components/parameters/Size" }]
@@ -789,8 +868,10 @@ paths:
                       unreadCount: { type: integer }
   /notifications/{notificationId}/read:
     patch:
+      tags: [notifications]
+      x-implementation-status: not-implemented
       operationId: markNotificationRead
-      summary: 읽음 처리
+      summary: "[미구현] 읽음 처리"
       x-lane: BE-1
       x-user-stories: [NOTI-03]
       parameters: [{ name: notificationId, in: path, required: true, schema: { type: string, format: uuid } }]
@@ -798,14 +879,17 @@ paths:
         "200": { description: 읽음 처리(멱등) }
   /notifications/read-all:
     patch:
+      tags: [notifications]
+      x-implementation-status: not-implemented
       operationId: markAllNotificationsRead
-      summary: 전체 읽음
+      summary: "[미구현] 전체 읽음"
       x-lane: BE-1
       x-user-stories: [NOTI-03]
       responses:
         "200": { description: 처리 완료 }
   /support/tickets:
     get:
+      tags: [support]
       operationId: listTickets
       summary: 내 문의 목록 (답변 유무 필드 — HELP-02, 본인 것만 — NFR-030)
       x-lane: BE-1
@@ -827,6 +911,7 @@ paths:
                     properties:
                       page: { $ref: "#/components/schemas/PageMeta" }
     post:
+      tags: [support]
       operationId: createTicket
       summary: 문의 등록
       x-lane: BE-1
@@ -854,6 +939,7 @@ paths:
         "429": { $ref: "#/components/responses/TooManyRequests" }
   /support/tickets/{ticketId}:
     get:
+      tags: [support]
       operationId: getTicket
       summary: 문의 상세 (타인 문의는 404 은닉 — NFR-030)
       x-lane: BE-1
@@ -871,6 +957,7 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
   /support/help-articles:
     get:
+      tags: [support]
       operationId: listHelpArticles
       summary: FAQ/도움말 검색 (키워드·주제)
       x-lane: BE-1
@@ -892,6 +979,7 @@ paths:
                     items: { $ref: "#/components/schemas/HelpArticle" }
   /support/help-articles/{articleId}:
     get:
+      tags: [support]
       operationId: getHelpArticle
       summary: 도움말 상세
       x-lane: BE-1
@@ -909,8 +997,10 @@ paths:
                   data: { $ref: "#/components/schemas/HelpArticle" }
   /announcements:
     get:
+      tags: [announcements]
+      x-implementation-status: not-implemented
       operationId: listAnnouncements
-      summary: 공지 목록
+      summary: "[미구현] 공지 목록"
       x-lane: BE-1
       x-user-stories: [OPS-01]
       security: []
@@ -932,8 +1022,10 @@ paths:
                       page: { $ref: "#/components/schemas/PageMeta" }
   /announcements/{announcementId}:
     get:
+      tags: [announcements]
+      x-implementation-status: not-implemented
       operationId: getAnnouncement
-      summary: 공지 상세
+      summary: "[미구현] 공지 상세"
       x-lane: BE-1
       x-user-stories: [OPS-02]
       security: []
@@ -951,6 +1043,7 @@ paths:
   # ───────────────────────────────────────────── PROJECTS / TASKS / WBS (BE-2)
   /projects:
     get:
+      tags: [projects]
       operationId: listProjects
       summary: 프로젝트 목록 (탭·배지) — 자동 종료 지연 평가 지점 (ADR-0006)
       x-lane: BE-2
@@ -975,6 +1068,7 @@ paths:
                     properties:
                       page: { $ref: "#/components/schemas/PageMeta" }
     post:
+      tags: [projects]
       operationId: createProject
       summary: 프로젝트 생성
       x-lane: BE-2
@@ -1001,6 +1095,7 @@ paths:
                   data: { $ref: "#/components/schemas/Project" }
   /projects/{projectId}:
     get:
+      tags: [projects]
       operationId: getProject
       summary: 프로젝트 상세 (태스크 상태 집계 배지 포함)
       x-lane: BE-2
@@ -1017,6 +1112,7 @@ paths:
                   data: { $ref: "#/components/schemas/Project" }
         "404": { $ref: "#/components/responses/NotFound" }
     put:
+      tags: [projects]
       operationId: updateProject
       summary: 프로젝트 편집 (version 필수 — SYS-05)
       description: >-
@@ -1050,6 +1146,7 @@ paths:
         "409": { $ref: "#/components/responses/VersionConflict" }
         "422": { $ref: "#/components/responses/UnprocessableEntity" }
     delete:
+      tags: [projects]
       operationId: deleteProject
       summary: 삭제 — 태스크·계획 항목·수행 이력 일괄 제거 (NFR-008 일관 기준)
       x-lane: BE-2
@@ -1059,6 +1156,7 @@ paths:
         "204": { description: 삭제 완료 }
   /projects/{projectId}/status:
     patch:
+      tags: [projects]
       operationId: changeProjectStatus
       summary: 상태 전환 (진행중/중지/종료 — 상태 기계는 service-sequences §3)
       x-lane: BE-2
@@ -1087,8 +1185,10 @@ paths:
         "422": { description: E-PROJ-003 허용되지 않는 전이, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
   /projects/{projectId}/duplication-preview:
     get:
+      tags: [projects]
+      x-implementation-status: not-implemented
       operationId: getDuplicationPreview
-      summary: 복제 항목 확인 (이름·설명·태스크·WBS 개요 — PROJ-11)
+      summary: "[미구현] 복제 항목 확인 (이름·설명·태스크·WBS 개요 — PROJ-11)"
       x-lane: BE-2
       x-user-stories: [PROJ-10, PROJ-11]
       parameters: [{ $ref: "#/components/parameters/ProjectId" }]
@@ -1110,8 +1210,10 @@ paths:
                       note: { type: string, description: "주간 계획 항목은 복제되지 않음(47행 열거 밖) — 복제본 태스크 전량 미배치" }
   /projects/{projectId}/duplications:
     post:
+      tags: [projects]
+      x-implementation-status: not-implemented
       operationId: duplicateProject
-      summary: 복제 실행 (Idempotency-Key 수용 — 이중 클릭 방지)
+      summary: "[미구현] 복제 실행 (Idempotency-Key 수용 — 이중 클릭 방지)"
       x-lane: BE-2
       x-user-stories: [PROJ-12]
       parameters:
@@ -1135,6 +1237,7 @@ paths:
                   data: { $ref: "#/components/schemas/Project" }
   /projects/{projectId}/tasks:
     get:
+      tags: [projects]
       operationId: listProjectTasks
       summary: 태스크 목록 (전체/진행중/완료 필터 — PROJ-16)
       x-lane: BE-2
@@ -1160,6 +1263,7 @@ paths:
                     properties:
                       page: { $ref: "#/components/schemas/PageMeta" }
     post:
+      tags: [projects]
       operationId: createTask
       summary: 태스크 생성 (카테고리 SC-01 · 예상시간 5분 단위 · 폼은 correction-proposals 제안 병기 — SS-11)
       x-lane: BE-2
@@ -1182,8 +1286,10 @@ paths:
         "422": { $ref: "#/components/responses/UnprocessableEntity" }
   /projects/{projectId}/tasks/bulk:
     post:
+      tags: [projects]
+      x-implementation-status: not-implemented
       operationId: createTasksBulk
-      summary: 일괄 생성 (구조화 초안 채택 — draftId 지정 시 is_adopted 마킹)
+      summary: "[미구현] 일괄 생성 (구조화 초안 채택 — draftId 지정 시 is_adopted 마킹)"
       x-lane: BE-2
       x-user-stories: [RB-PROJ-01]
       parameters: [{ $ref: "#/components/parameters/ProjectId" }]
@@ -1217,6 +1323,7 @@ paths:
                     items: { $ref: "#/components/schemas/Task" }
   /tasks:
     get:
+      tags: [tasks]
       operationId: listTasks
       summary: 사용자 전체 태스크 (미배치 패널 — status=UNASSIGNED)
       x-lane: BE-2
@@ -1254,6 +1361,7 @@ paths:
                       page: { $ref: "#/components/schemas/PageMeta" }
   /tasks/{taskId}:
     get:
+      tags: [tasks]
       operationId: getTask
       summary: 태스크 상세 (편집 폼)
       x-lane: BE-2
@@ -1269,6 +1377,7 @@ paths:
                 properties:
                   data: { $ref: "#/components/schemas/Task" }
     patch:
+      tags: [tasks]
       operationId: updateTask
       summary: 태스크 편집 — PROJ-18=PLAN-10 단일 정의 (D-10 통합, version 필수)
       x-lane: BE-2
@@ -1296,6 +1405,7 @@ paths:
                   data: { $ref: "#/components/schemas/Task" }
         "409": { $ref: "#/components/responses/VersionConflict" }
     delete:
+      tags: [tasks]
       operationId: deleteTask
       summary: 태스크 삭제 (블록·이력 연쇄 — NFR-008)
       x-lane: BE-2
@@ -1305,6 +1415,7 @@ paths:
         "204": { description: 삭제 완료 }
   /tasks/{taskId}/status:
     patch:
+      tags: [tasks]
       operationId: changeTaskStatus
       summary: 완료/미완료 전환 (블록 status 미러 동기 갱신 · version 필수 · 미완료 착지 상태는 서버 결정)
       x-lane: BE-2
@@ -1332,8 +1443,10 @@ paths:
         "409": { $ref: "#/components/responses/VersionConflict" }
   /tasks/{taskId}/wbs-range:
     put:
+      tags: [tasks]
+      x-implementation-status: not-implemented
       operationId: saveWbsRange
-      summary: WBS 기간 설정/조정 (업서트 — PROJ-13/14)
+      summary: "[미구현] WBS 기간 설정/조정 (업서트 — PROJ-13/14)"
       x-lane: BE-2
       x-user-stories: [PROJ-13, PROJ-14]
       parameters: [{ $ref: "#/components/parameters/TaskId" }]
@@ -1359,8 +1472,10 @@ paths:
         "422": { description: E-WBS-001 종료일 < 시작일, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
   /tasks/{taskId}/execution-logs:
     post:
+      tags: [tasks]
+      x-implementation-status: not-implemented
       operationId: recordExecution
-      summary: 실제 시간 기록 (5분 단위 — PLAN-15, 통계 즉시 반영)
+      summary: "[미구현] 실제 시간 기록 (5분 단위 — PLAN-15, 통계 즉시 반영)"
       x-lane: BE-2
       x-user-stories: [PLAN-15, DASH-05]
       parameters: [{ $ref: "#/components/parameters/TaskId" }]
@@ -1390,8 +1505,10 @@ paths:
         "422": { $ref: "#/components/responses/UnprocessableEntity" }
   /task-categories:
     get:
+      tags: [task-categories]
+      x-implementation-status: not-implemented
       operationId: listTaskCategories
-      summary: 카테고리 프리셋 목록 (SC-01)
+      summary: "[미구현] 카테고리 프리셋 목록 (SC-01)"
       x-lane: BE-2
       x-user-stories: [RB-STAT-01]
       responses:
@@ -1406,8 +1523,10 @@ paths:
                     type: array
                     items: { $ref: "#/components/schemas/TaskCategory" }
     post:
+      tags: [task-categories]
+      x-implementation-status: not-implemented
       operationId: createTaskCategory
-      summary: 프리셋 추가
+      summary: "[미구현] 프리셋 추가"
       x-lane: BE-2
       x-user-stories: [RB-STAT-01]
       requestBody:
@@ -1427,8 +1546,10 @@ paths:
         "409": { description: 동일 이름 존재, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
   /task-categories/{categoryId}:
     delete:
+      tags: [task-categories]
+      x-implementation-status: not-implemented
       operationId: deleteTaskCategory
-      summary: 프리셋 삭제 — 연결 태스크는 '없음'(null) 전환 (FK SET NULL)
+      summary: "[미구현] 프리셋 삭제 — 연결 태스크는 '없음'(null) 전환 (FK SET NULL)"
       x-lane: BE-2
       x-user-stories: [RB-STAT-01]
       parameters: [{ name: categoryId, in: path, required: true, schema: { type: string, format: uuid } }]
@@ -1436,8 +1557,10 @@ paths:
         "204": { description: 삭제 완료 }
   /projects/{projectId}/wbs:
     get:
+      tags: [projects]
+      x-implementation-status: not-implemented
       operationId: getProjectWbs
-      summary: WBS 뷰 (태스크별 기간 바)
+      summary: "[미구현] WBS 뷰 (태스크별 기간 바)"
       x-lane: BE-2
       x-user-stories: [PROJ-13]
       parameters: [{ $ref: "#/components/parameters/ProjectId" }]
@@ -1454,8 +1577,10 @@ paths:
                     items: { $ref: "#/components/schemas/WbsItem" }
   /projects/{projectId}/structuring-drafts:
     post:
+      tags: [projects]
+      x-implementation-status: not-implemented
       operationId: generateStructuringDrafts
-      summary: 태스크 구조화 초안 생성 (SS-03 — 정적 규칙 사전, 초안만 · C-2)
+      summary: "[미구현] 태스크 구조화 초안 생성 (SS-03 — 정적 규칙 사전, 초안만 · C-2)"
       x-lane: BE-2
       x-user-stories: [RB-PROJ-01]
       parameters: [{ $ref: "#/components/parameters/ProjectId" }]
@@ -1472,8 +1597,10 @@ paths:
                     items: { $ref: "#/components/schemas/StructuringDraft" }
   /projects/{projectId}/structure-warnings:
     get:
+      tags: [projects]
+      x-implementation-status: not-implemented
       operationId: getStructureWarnings
-      summary: 태스크 구조 부족 경고 (SS-04 — 임계값은 W3 확정 후 골든 고정)
+      summary: "[미구현] 태스크 구조 부족 경고 (SS-04 — 임계값은 W3 확정 후 골든 고정)"
       x-lane: BE-2
       x-user-stories: [RB-PROJ-02]
       parameters: [{ $ref: "#/components/parameters/ProjectId" }]
@@ -1497,8 +1624,10 @@ paths:
   # ───────────────────────────────────────────── WEEKLY PLANS / BLOCKS / VALIDATION / REPLAN (BE-2)
   /weekly-plans:
     get:
+      tags: [weekly-plans]
+      x-implementation-status: not-implemented
       operationId: getWeeklyPlanView
-      summary: 주간 화면 조립 응답 (계획+블록+고정일정+가용시간+미배치수+검증요약 — NFR-011/024)
+      summary: "[미구현] 주간 화면 조립 응답 (계획+블록+고정일정+가용시간+미배치수+검증요약 — NFR-011/024)"
       x-lane: BE-2
       x-user-stories: [PLAN-01, PLAN-02, PLAN-04, PLAN-05, PLAN-21]
       parameters:
@@ -1513,8 +1642,10 @@ paths:
                 properties:
                   data: { $ref: "#/components/schemas/WeeklyPlanView" }
     post:
+      tags: [weekly-plans]
+      x-implementation-status: not-implemented
       operationId: getOrCreateWeeklyPlan
-      summary: 주차 초안 get-or-create (UQ user+weekStartDate — 재호출 시 기존 반환)
+      summary: "[미구현] 주차 초안 get-or-create (UQ user+weekStartDate — 재호출 시 기존 반환)"
       x-lane: BE-2
       x-user-stories: [PLAN-02, PLAN-20]
       requestBody:
@@ -1531,8 +1662,10 @@ paths:
         "201": { description: 초안 생성, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/WeeklyPlan" } } } } } }
   /weekly-plans/{planId}/confirmation:
     post:
+      tags: [weekly-plans]
+      x-implementation-status: not-implemented
       operationId: confirmWeeklyPlan
-      summary: 주간 계획 저장=확정 (서버가 검증 재실행 — 차단 존재 시 409, PLAN-28 규칙)
+      summary: "[미구현] 주간 계획 저장=확정 (서버가 검증 재실행 — 차단 존재 시 409, PLAN-28 규칙)"
       x-lane: BE-2
       x-user-stories: [PLAN-03, PLAN-28]
       parameters: [{ $ref: "#/components/parameters/PlanId" }, { $ref: "#/components/parameters/IdempotencyKey" }]
@@ -1550,9 +1683,11 @@ paths:
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
   /weekly-plans/{planId}/validations:
     post:
+      tags: [weekly-plans]
+      x-implementation-status: not-implemented
       operationId: validateWeeklyPlan
       summary: >
-        검증 실행 (SS-06/RB-PLAN-02). body 없음 = 현재 초안 판정 + validation_issues 영속.
+        [미구현] 검증 실행 (SS-06/RB-PLAN-02). body 없음 = 현재 초안 판정 + validation_issues 영속.
         body.virtualBlocks 제공 = dry-run(무영속) — PLAN-11 미리보기·FIX-07이 소비 (C-4).
       x-lane: BE-2
       x-user-stories: [RB-PLAN-02, PLAN-11, PLAN-21, PLAN-22]
@@ -1587,8 +1722,10 @@ paths:
                   data: { $ref: "#/components/schemas/ValidationReport" }
   /weekly-plans/{planId}/auto-placements:
     post:
+      tags: [weekly-plans]
+      x-implementation-status: not-implemented
       operationId: proposeAutoPlacement
-      summary: 자동 배치 제안 (SS-05 — first-fit, 저장 아님 · C-2 · NFR-029 5초)
+      summary: "[미구현] 자동 배치 제안 (SS-05 — first-fit, 저장 아님 · C-2 · NFR-029 5초)"
       x-lane: BE-2
       x-user-stories: [RB-PLAN-01]
       parameters: [{ $ref: "#/components/parameters/PlanId" }]
@@ -1613,8 +1750,10 @@ paths:
                   data: { $ref: "#/components/schemas/PlacementProposal" }
   /weekly-plans/{planId}/block-batches:
     post:
+      tags: [weekly-plans]
+      x-implementation-status: not-implemented
       operationId: applyBlockBatch
-      summary: 블록 일괄 적용 (제안 수용 = 사용자 확정 행위 — P2)
+      summary: "[미구현] 블록 일괄 적용 (제안 수용 = 사용자 확정 행위 — P2)"
       x-lane: BE-2
       x-user-stories: [RB-PLAN-01, PLAN-29]
       parameters: [{ $ref: "#/components/parameters/PlanId" }]
@@ -1646,8 +1785,10 @@ paths:
                   data: { $ref: "#/components/schemas/WeeklyPlanView" }
   /weekly-plans/{planId}/blocks:
     post:
+      tags: [weekly-plans]
+      x-implementation-status: not-implemented
       operationId: createPlanBlock
-      summary: 블록 생성 — blockType 분기 단일 정의 (D-10 통합). TASK=taskId 필수 / SCHEDULE=schedule 인라인 생성
+      summary: "[미구현] 블록 생성 — blockType 분기 단일 정의 (D-10 통합). TASK=taskId 필수 / SCHEDULE=schedule 인라인 생성"
       x-lane: BE-2
       x-user-stories: [PLAN-06, PLAN-07, PLAN-08, TUT-05, TUT-06]
       parameters: [{ $ref: "#/components/parameters/PlanId" }]
@@ -1668,8 +1809,10 @@ paths:
         "422": { $ref: "#/components/responses/UnprocessableEntity" }
   /plan-blocks/{blockId}:
     patch:
+      tags: [plan-blocks]
+      x-implementation-status: not-implemented
       operationId: movePlanBlock
-      summary: 블록 이동·시간 조정 (PLAN-19) · 주차 이동은 targetWeekStartDate (PLAN-20 — 대상 주차 초안 get-or-create)
+      summary: "[미구현] 블록 이동·시간 조정 (PLAN-19) · 주차 이동은 targetWeekStartDate (PLAN-20 — 대상 주차 초안 get-or-create)"
       x-lane: BE-2
       x-user-stories: [PLAN-19, PLAN-20, PLAN-09]
       parameters: [{ $ref: "#/components/parameters/BlockId" }]
@@ -1694,8 +1837,10 @@ paths:
                   data: { $ref: "#/components/schemas/PlanBlock" }
         "422": { description: "E-PLAN-002 시작>=종료 (NFR-009) · E-COM-009 5분 단위", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
     delete:
+      tags: [plan-blocks]
+      x-implementation-status: not-implemented
       operationId: deletePlanBlock
-      summary: TASK 블록=배치 해제(태스크 UNASSIGNED 복귀 — PLAN-16) / SCHEDULE 블록=일정 삭제(schedules 행 연쇄 — PLAN-18)
+      summary: "[미구현] TASK 블록=배치 해제(태스크 UNASSIGNED 복귀 — PLAN-16) / SCHEDULE 블록=일정 삭제(schedules 행 연쇄 — PLAN-18)"
       x-lane: BE-2
       x-user-stories: [PLAN-16, PLAN-18, TUT-07]
       parameters: [{ $ref: "#/components/parameters/BlockId" }]
@@ -1703,8 +1848,10 @@ paths:
         "204": { description: 완료 + 가용/여유 재계산 }
   /schedules/{scheduleId}:
     patch:
+      tags: [schedules]
+      x-implementation-status: not-implemented
       operationId: updateSchedule
-      summary: 일정 편집 (제목·예상시간·우선순위·메모 — B2 보강 컬럼, version 필수)
+      summary: "[미구현] 일정 편집 (제목·예상시간·우선순위·메모 — B2 보강 컬럼, version 필수)"
       x-lane: BE-2
       x-user-stories: [PLAN-17]
       parameters: [{ name: scheduleId, in: path, required: true, schema: { type: string, format: uuid } }]
@@ -1733,8 +1880,10 @@ paths:
         "409": { $ref: "#/components/responses/VersionConflict" }
   /weekly-plans/{planId}/replan-options:
     post:
+      tags: [weekly-plans]
+      x-implementation-status: not-implemented
       operationId: generateReplanOptions
-      summary: 재계획 대안 생성 (SS-07~09 — 3전략 + 기준선, NFR-029 5초, SS-13 구간 우선 반영)
+      summary: "[미구현] 재계획 대안 생성 (SS-07~09 — 3전략 + 기준선, NFR-029 5초, SS-13 구간 우선 반영)"
       x-lane: BE-2
       x-user-stories: [PLAN-29, RB-PLAN-03, RB-PLAN-04, RB-PLAN-05, RB-STAT-04]
       parameters: [{ $ref: "#/components/parameters/PlanId" }]
@@ -1754,8 +1903,10 @@ paths:
                         type: array
                         items: { $ref: "#/components/schemas/ReplanOption" }
     get:
+      tags: [weekly-plans]
+      x-implementation-status: not-implemented
       operationId: listReplanOptions
-      summary: 대안 재조회 (비교 화면 새로고침)
+      summary: "[미구현] 대안 재조회 (비교 화면 새로고침)"
       x-lane: BE-2
       x-user-stories: [PLAN-29]
       parameters: [{ $ref: "#/components/parameters/PlanId" }]
@@ -1772,8 +1923,10 @@ paths:
                     items: { $ref: "#/components/schemas/ReplanOption" }
   /replan-options/{optionId}/application:
     post:
+      tags: [replan-options]
+      x-implementation-status: not-implemented
       operationId: applyReplanOption
-      summary: 대안 선택+초안 반영 (is_selected/selected_at 기록 — SC-07 대체, SS-14 입력. 초안 반영이며 확정 아님 — P2)
+      summary: "[미구현] 대안 선택+초안 반영 (is_selected/selected_at 기록 — SC-07 대체, SS-14 입력. 초안 반영이며 확정 아님 — P2)"
       x-lane: BE-2
       x-user-stories: [PLAN-29, RB-FIX-01]
       parameters: [{ name: optionId, in: path, required: true, schema: { type: string, format: uuid } }]
@@ -1790,8 +1943,10 @@ paths:
   # ───────────────────────────────────────────── FIXED SCHEDULES (BE-2)
   /fixed-schedules:
     get:
+      tags: [fixed-schedules]
+      x-implementation-status: not-implemented
       operationId: listFixedSchedules
-      summary: 고정 일정 목록
+      summary: "[미구현] 고정 일정 목록"
       x-lane: BE-2
       x-user-stories: [FIX-04]
       parameters:
@@ -1808,8 +1963,10 @@ paths:
                     type: array
                     items: { $ref: "#/components/schemas/FixedSchedule" }
     post:
+      tags: [fixed-schedules]
+      x-implementation-status: not-implemented
       operationId: createFixedSchedule
-      summary: 고정 일정 생성 (이후 배치 불가 시간으로 반영)
+      summary: "[미구현] 고정 일정 생성 (이후 배치 불가 시간으로 반영)"
       x-lane: BE-2
       x-user-stories: [FIX-05, ONB-06]
       requestBody:
@@ -1829,8 +1986,10 @@ paths:
         "422": { $ref: "#/components/responses/UnprocessableEntity" }
   /fixed-schedules/{fixedScheduleId}:
     patch:
+      tags: [fixed-schedules]
+      x-implementation-status: not-implemented
       operationId: updateFixedSchedule
-      summary: 편집 (FIX-06, version 필수). 저장된 주간 계획 재검증 트리거 (FIX-07). 주차 한정 비활성화는 week-exceptions 리소스 (PLAN-33/34)
+      summary: "[미구현] 편집 (FIX-06, version 필수). 저장된 주간 계획 재검증 트리거 (FIX-07). 주차 한정 비활성화는 week-exceptions 리소스 (PLAN-33/34)"
       x-lane: BE-2
       x-user-stories: [FIX-06]
       parameters: [{ $ref: "#/components/parameters/FixedScheduleId" }]
@@ -1856,8 +2015,10 @@ paths:
                   data: { $ref: "#/components/schemas/FixedSchedule" }
         "409": { $ref: "#/components/responses/VersionConflict" }
     delete:
+      tags: [fixed-schedules]
+      x-implementation-status: not-implemented
       operationId: deleteFixedSchedule
-      summary: 삭제 (주간 계획 재검증 — FIX-09)
+      summary: "[미구현] 삭제 (주간 계획 재검증 — FIX-09)"
       x-lane: BE-2
       x-user-stories: [FIX-09]
       parameters: [{ $ref: "#/components/parameters/FixedScheduleId" }]
@@ -1865,8 +2026,10 @@ paths:
         "204": { description: 삭제 완료 }
   /fixed-schedules/{fixedScheduleId}/week-exceptions:
     post:
+      tags: [fixed-schedules]
+      x-implementation-status: not-implemented
       operationId: createFixedScheduleWeekException
-      summary: 주차 한정 비활성화 (PLAN-33 — 해당 주만 배치 제약 제외. 멱등, 해당 주 재검증 트리거)
+      summary: "[미구현] 주차 한정 비활성화 (PLAN-33 — 해당 주만 배치 제약 제외. 멱등, 해당 주 재검증 트리거)"
       x-lane: BE-2
       x-user-stories: [PLAN-33]
       parameters: [{ $ref: "#/components/parameters/FixedScheduleId" }]
@@ -1897,8 +2060,10 @@ paths:
         "422": { $ref: "#/components/responses/UnprocessableEntity" }
   /fixed-schedules/{fixedScheduleId}/week-exceptions/{weekStartDate}:
     delete:
+      tags: [fixed-schedules]
+      x-implementation-status: not-implemented
       operationId: deleteFixedScheduleWeekException
-      summary: 주차 한정 재활성화 (PLAN-34 — 예외 제거. 멱등, 해당 주 재검증 트리거)
+      summary: "[미구현] 주차 한정 재활성화 (PLAN-34 — 예외 제거. 멱등, 해당 주 재검증 트리거)"
       x-lane: BE-2
       x-user-stories: [PLAN-34]
       parameters:
@@ -1909,8 +2074,10 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
   /fixed-schedules/conflict-previews:
     post:
+      tags: [fixed-schedules]
+      x-implementation-status: not-implemented
       operationId: previewFixedScheduleConflicts
-      summary: 생성·편집 전 충돌 미리보기 (dry-run C-4 — 저장된 주간 계획 대상 V2 판정)
+      summary: "[미구현] 생성·편집 전 충돌 미리보기 (dry-run C-4 — 저장된 주간 계획 대상 V2 판정)"
       x-lane: BE-2
       x-user-stories: [FIX-07, FIX-08]
       requestBody:
@@ -1948,8 +2115,10 @@ paths:
   # ───────────────────────────────────────────── DASHBOARD / STATS (BE-2)
   /dashboard:
     get:
+      tags: [dashboard]
+      x-implementation-status: not-implemented
       operationId: getDashboard
-      summary: 대시보드 조립 응답 — 단일 GET (D-12 레버 5, NFR-011 2초)
+      summary: "[미구현] 대시보드 조립 응답 — 단일 GET (D-12 레버 5, NFR-011 2초)"
       x-lane: BE-2
       x-user-stories: [DASH-01, DASH-02, DASH-03, DASH-04, DASH-05, DASH-06, DASH-07, RB-DASH-01, RB-DASH-02]
       parameters:
@@ -1965,8 +2134,10 @@ paths:
                   data: { $ref: "#/components/schemas/DashboardView" }
   /stats/summaries:
     get:
+      tags: [stats]
+      x-implementation-status: not-implemented
       operationId: getStatsSummaries
-      summary: 주간/월간 요약 (SC-06 유지 4종)
+      summary: "[미구현] 주간/월간 요약 (SC-06 유지 4종)"
       x-lane: BE-2
       x-user-stories: [STATS-SCREEN]
       parameters:
@@ -1983,8 +2154,10 @@ paths:
                   data: { $ref: "#/components/schemas/StatsSummary" }
   /stats/deviations:
     get:
+      tags: [stats]
+      x-implementation-status: not-implemented
       operationId: getDeviations
-      summary: 편차 분석 (SS-10 — 프로젝트/카테고리 그룹, P1 결정적)
+      summary: "[미구현] 편차 분석 (SS-10 — 프로젝트/카테고리 그룹, P1 결정적)"
       x-lane: BE-2
       x-user-stories: [RB-STAT-01]
       parameters:
@@ -2002,8 +2175,10 @@ paths:
                   data: { $ref: "#/components/schemas/DeviationReport" }
   /stats/time-patterns:
     get:
+      tags: [stats]
+      x-implementation-status: not-implemented
       operationId: getTimePatterns
-      summary: 구간별 완료율 (SS-12 — DAWN/MORNING/AFTERNOON/NIGHT 고정 경계)
+      summary: "[미구현] 구간별 완료율 (SS-12 — DAWN/MORNING/AFTERNOON/NIGHT 고정 경계)"
       x-lane: BE-2
       x-user-stories: [RB-STAT-03]
       parameters:
@@ -2020,8 +2195,10 @@ paths:
                   data: { $ref: "#/components/schemas/TimePatternReport" }
   /stats/correction-proposals:
     get:
+      tags: [stats]
+      x-implementation-status: not-implemented
       operationId: getCorrectionProposals
-      summary: 예상 시간 보정 제안 (SS-11 — 태스크 폼 소비, 제안만 · C-2)
+      summary: "[미구현] 예상 시간 보정 제안 (SS-11 — 태스크 폼 소비, 제안만 · C-2)"
       x-lane: BE-2
       x-user-stories: [RB-STAT-02]
       parameters:
