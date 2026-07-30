@@ -2430,6 +2430,7 @@ components:
             assignedCount: { type: integer }
             deadlineSoon: { type: boolean }
         version: { type: integer, format: int64 }
+        createdAt: { type: string, format: date-time }
     Project:
       allOf:
         - { $ref: "#/components/schemas/ProjectSummary" }
@@ -2470,6 +2471,7 @@ components:
                 startDate: { type: string, format: date }
                 endDate: { type: string, format: date }
             version: { type: integer, format: int64 }
+            createdAt: { type: string, format: date-time }
     TaskCategory:
       type: object
       properties:
