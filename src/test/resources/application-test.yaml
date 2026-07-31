@@ -1,0 +1,25 @@
+# =====================================================================================
+# 테스트 프로파일 (ST-B2-01 C3 — 리드 확정: Testcontainers)
+#
+# datasource url/username/password는 @ServiceConnection(PostgreSQLContainer)이 런타임에 주입한다
+# — 여기서 고정하지 않는다. base application.yaml의 localhost:5433 값은 컨테이너 값으로 덮인다.
+#
+# 이 파일은 `local` 프로파일을 켜지 않으면서 dev 시드·dev-auth 스텁을 여는 유일한 테스트 경로다:
+#  · flyway가 migration-dev(R__dev_seed)를 포함 → 시드 사용자(…0001/…0002) 확보(DevSeededUserVerifier 요구)
+#  · op.auth.dev-stub=true → DevUserAuthFilter 등록 → X-Dev-User 헤더로 스코핑
+# =====================================================================================
+spring:
+  jpa:
+    hibernate:
+      # 스키마 정본은 Flyway. 엔티티는 검증만(스키마 손대지 않음) — base와 동일.
+      ddl-auto: validate
+  flyway:
+    enabled: true
+    # V1 baseline + R__dev_seed(시드 사용자·프로필 timezone). base는 migration만 → 여기서 migration-dev 추가.
+    locations: classpath:db/migration,classpath:db/migration-dev
+
+op:
+  auth:
+    # SecurityConfig는 이 값 기본 false → 미설정 시 DevUserAuthFilter 미등록 → 전 요청 401.
+    # 테스트 인증이 성립하려면 반드시 true.
+    dev-stub: true
