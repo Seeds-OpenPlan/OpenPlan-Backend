@@ -1513,7 +1513,10 @@ paths:
       x-user-stories: [RB-STAT-01]
       responses:
         "200":
-          description: OK
+          description: >-
+            OK — 내 카테고리 전체. 정렬은 sortOrder ASC, name ASC 서버 고정.
+            페이지네이션 없음(전량 반환) — 카테고리는 사용자당 소수라 page/size 파라미터가 없다.
+            0건이면 data: [] (오류 아님).
           content:
             application/json:
               schema:
@@ -1527,16 +1530,24 @@ paths:
       x-implementation-status: not-implemented
       operationId: createTaskCategory
       summary: "[미구현] 프리셋 추가"
+      description: >-
+        name은 서버가 trim한 뒤 검증·저장한다. trim 후 1~50자를 벗어나면 422 E-COM-009
+        (null·키 부재·공백만 포함). 중복 판정도 trim된 값 기준이라 "  업무  "는 "업무"와 같다.
+        sortOrder는 재정렬 엔드포인트가 없어 생성 시 항상 0이다.
       x-lane: BE-2
       x-user-stories: [RB-STAT-01]
       requestBody:
         required: true
         content:
           application/json:
-            schema: { type: object, required: [name], properties: { name: { type: string, maxLength: 50 } } }
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 50, description: "trim 후 1~50자" }
       responses:
         "201":
-          description: OK
+          description: 생성됨 — sortOrder는 항상 0
           content:
             application/json:
               schema:
@@ -1551,11 +1562,16 @@ paths:
       x-implementation-status: not-implemented
       operationId: deleteTaskCategory
       summary: "[미구현] 프리셋 삭제 — 연결 태스크는 '없음'(null) 전환 (FK SET NULL)"
+      description: >-
+        hard delete. 연결된 태스크는 삭제되지 않고 categoryId만 null('없음')이 된다 —
+        DB의 FK ON DELETE SET NULL이 처리하므로 태스크를 따로 갱신할 필요가 없다.
+        부재·타인 소유 모두 404 E-COM-004로 동일하게 응답한다(존재 은닉). 재삭제도 404 —
+        멱등이 아니다.
       x-lane: BE-2
       x-user-stories: [RB-STAT-01]
       parameters: [{ name: taskCategoryId, in: path, required: true, schema: { type: string, format: uuid } }]
       responses:
-        "204": { description: 삭제 완료 }
+        "204": { description: "삭제 완료 — 본문 없음(성공 봉투 없음)" }
         "404": { $ref: "#/components/responses/NotFound" }
   /projects/{projectId}/wbs:
     get:
@@ -2489,11 +2505,14 @@ components:
           properties:
             projectName: { type: string }
     TaskCategory:
+      description: >-
+        사용자별 카테고리 프리셋. (userId, name) UNIQUE라 같은 이름은 사용자 안에서만 유일하다.
+        updatedAt·version은 스키마에 없으므로 응답에도 없다.
       type: object
       properties:
         taskCategoryId: { type: string, format: uuid }
-        name: { type: string }
-        sortOrder: { type: integer }
+        name: { type: string, maxLength: 50 }
+        sortOrder: { type: integer, description: "정렬 우선순위. 재정렬 엔드포인트가 없어 현재는 항상 0" }
         createdAt: { type: string, format: date-time }
     WbsItem:
       type: object
