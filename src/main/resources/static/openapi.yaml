@@ -1354,7 +1354,7 @@ paths:
                 properties:
                   data:
                     type: array
-                    items: { $ref: "#/components/schemas/Task" }
+                    items: { $ref: "#/components/schemas/UnassignedTask" }
                   meta:
                     type: object
                     properties:
@@ -2459,22 +2459,35 @@ components:
         dueDate: { type: [string, "null"], format: date }
         categoryId: { type: [string, "null"], format: uuid, description: "SC-01 — null = '없음'" }
     Task:
+      description: >-
+        태스크 응답 (상세·목록 항목·쓰기 공용). 카테고리·프로젝트의 **이름은 내려가지 않는다** —
+        categoryId·projectId만 있으므로, 표시명은 FE가 GET /task-categories·프로젝트 목록을 받아
+        클라이언트에서 조인한다 (ADR-0012 ④).
       allOf:
         - { $ref: "#/components/schemas/TaskInput" }
         - type: object
           properties:
             taskId: { type: string, format: uuid }
             projectId: { type: string, format: uuid }
-            projectName: { type: string }
-            categoryName: { type: [string, "null"] }
             status: { type: string, enum: [UNASSIGNED, IN_PROGRESS, COMPLETED] }
             wbsRange:
               type: [object, "null"]
+              x-implementation-status: not-implemented
+              description: "[미구현] ST-B2-05 WBS 기간 — 응답에 아직 없음. FE는 부재 시 null로 폴백"
               properties:
                 startDate: { type: string, format: date }
                 endDate: { type: string, format: date }
             version: { type: integer, format: int64 }
             createdAt: { type: string, format: date-time }
+    UnassignedTask:
+      description: >-
+        미배치 패널 전용 응답 — Task 전 필드 + projectName. 구현(UnassignedTaskResponse)이
+        @JsonUnwrapped로 평탄화하므로 중첩 없이 Task 필드와 같은 레벨에 온다.
+      allOf:
+        - { $ref: "#/components/schemas/Task" }
+        - type: object
+          properties:
+            projectName: { type: string }
     TaskCategory:
       type: object
       properties:
