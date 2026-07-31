@@ -38,7 +38,10 @@ public class SecurityConfig {
             "/api/v1/landing",   // 비인증 랜딩(가드 예외)
             // 도움말/FAQ 공개(openapi security:[] — 비로그인 접근). ST-B1-13 contract-change (post-freeze, 라벨).
             "/api/v1/support/help-articles",
-            "/api/v1/support/help-articles/**"
+            "/api/v1/support/help-articles/**",
+            // 공지 공개(openapi security:[] — 비로그인 접근). ST-B1-14 contract-change (post-freeze, 라벨).
+            "/api/v1/announcements",
+            "/api/v1/announcements/**"
     };
 
     /**
