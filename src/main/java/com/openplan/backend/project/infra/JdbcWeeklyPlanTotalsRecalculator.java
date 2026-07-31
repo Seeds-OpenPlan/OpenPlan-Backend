@@ -36,6 +36,12 @@ public class JdbcWeeklyPlanTotalsRecalculator implements WeeklyPlanTotalsRecalcu
     }
 
     @Override
+    public List<UUID> captureAffectedWeeklyPlanIdsByTask(UUID taskId) {
+        return jdbcTemplate.queryForList(
+                "SELECT DISTINCT weekly_plan_id FROM plan_blocks WHERE task_id = ?", UUID.class, taskId);
+    }
+
+    @Override
     public void recalculate(List<UUID> weeklyPlanIds) {
         if (weeklyPlanIds == null || weeklyPlanIds.isEmpty()) {
             return;

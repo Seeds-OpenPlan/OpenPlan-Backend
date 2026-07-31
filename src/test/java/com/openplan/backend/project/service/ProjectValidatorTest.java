@@ -1,6 +1,7 @@
 package com.openplan.backend.project.service;
 
 import com.openplan.backend.global.error.ErrorCode;
+import com.openplan.backend.global.error.ErrorMessages;
 import com.openplan.backend.global.error.OpenPlanException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -20,7 +21,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class ProjectValidatorTest {
 
-    private final ProjectValidator validator = new ProjectValidator();
+    private final ProjectValidator validator = new ProjectValidator(new ErrorMessages());
     private static final LocalDate TODAY = LocalDate.of(2026, 7, 21);
 
     @Nested

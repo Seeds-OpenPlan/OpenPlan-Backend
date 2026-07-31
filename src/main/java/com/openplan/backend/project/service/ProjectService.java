@@ -25,13 +25,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-/**
- * 프로젝트 유스케이스 파사드 — 검사 순서·tx 경계를 소유한다. 검증은 {@link ProjectValidator},
- * 시각은 {@link UserClock}, 지연 평가는 {@link ProjectAutoCloseEvaluator}, 영속은 {@link ProjectRepository}.
- *
- * <p>조회(list/detail)는 @Transactional을 붙이지 않는다 — 평가(REQUIRES_NEW) 커밋 후 repository 내장
- * readOnly tx로 조회하는 2-tx 구조(service-sequences §1). readOnly tx에서는 평가 UPDATE를 할 수 없기 때문.
- */
 @Service
 public class ProjectService {
 
@@ -59,24 +52,13 @@ public class ProjectService {
         LocalDate today = clock.todayOf(userId);
         String name = validator.validateName(req.name());
         validator.validateDueDate(req.dueDate(), today);
+        validator.validatePriority(req.priority());                // 422 — 1·2·3만 (제품 3단계)
 
         Project project = new Project(userId, name, req.description(), req.dueDate(), req.priority(), clock.now());
         projectRepository.save(project);
         return ProjectResponse.from(project);
     }
 
-    /**
-     * 프로젝트 편집 (PROJ-06 / AC-06-1~4). 검사 순서 <b>404 → 422(CLOSED) → 409(버전) → 422(필드)</b>.
-     * 평가 선행(P-1): 기한 경과였다면 여기서 CLOSED·version+1 된다.
-     *
-     * <p><b>마감 경과 PAUSED 편집 안내(E-PROJ-006)</b>: 자동종료에서 제외되는 PAUSED는 마감이 지나도 편집
-     * 가능하되, 과거 마감일을 그대로 둔 편집은 거부한다. 이때 범용 형식오류(E-COM-009)가 아니라 상황을 담은
-     * E-PROJ-006으로 "마감일을 오늘 이후로 먼저 변경" 을 안내한다(재개 가드 E-PROJ-004와 대칭).
-     *
-     * <p><b>CLOSED를 버전보다 먼저 검사</b>(User 판정 2026-07-22, 원설계의 버전-우선을 대체): "종료된 건 수정 불가"는
-     * 버전 신선도와 무관한 절대 규칙이라, 자동종료가 버전을 올려도 "충돌(409)"이 아니라 "종료라 수정 불가(422)"로
-     * 명확히 안내한다. 종료 아닌 경우의 동시 수정 보호(409)는 그대로 유지된다.
-     */
     @Transactional
     public ProjectResponse update(UUID userId, UUID projectId, ProjectUpdateRequest req) {
         autoCloseEvaluator.closeOverdue(userId);
@@ -95,32 +77,20 @@ public class ProjectService {
         LocalDate today = clock.todayOf(userId);
         String name = validator.validateName(req.name());          // 422 — 생성과 동일 규칙(AC-06-2)
 
-        // 마감 경과 프로젝트(자동종료에서 제외된 PAUSED)를 과거 마감일 그대로 편집 → 전용 안내(E-PROJ-006).
-        // "종료는 재개 먼저(E-PROJ-005)"·"경과 재개는 마감일 먼저(E-PROJ-004)"와 대칭:
-        // 경과 편집도 "마감일 먼저 미래로" 를 범용 형식오류(E-COM-009)가 아니라 상황을 담은 코드로 안내한다.
-        // 마감 미경과 프로젝트에 과거 날짜를 신규 입력한 순수 형식 오류는 아래 validateDueDate가 E-COM-009로 유지.
         boolean requestKeepsPastDue = req.dueDate() != null && req.dueDate().isBefore(today);
         boolean projectAlreadyOverdue = project.getDueDate() != null && project.getDueDate().isBefore(today);
         if (requestKeepsPastDue && projectAlreadyOverdue) {
             throw new OpenPlanException(ErrorCode.E_PROJ_006);
         }
         validator.validateDueDate(req.dueDate(), today);
+        validator.validatePriority(req.priority());                // 422 — 생성과 동일 (AC-06-2)
 
         project.edit(name, req.description(), req.dueDate(), req.priority());
-        // 명시적 flush: @Version이 여기서 증가(WHERE version=? UPDATE)해 응답이 새 version을 담는다
-        // (AC-06-1 "version 증가 반영 — FE 재조회 불요"). 잔여 경합은 OptimisticLockException → 409.
         projectRepository.flush();
         return ProjectResponse.from(project);
     }
 
-    /**
-     * 목록 조회 (PROJ-01 / AC-01-1~7). 조회 전 자동종료 평가 선행(AC-01-6). status 필터는 그룹/개별
-     * 겸용(Q-H), 정렬은 createdAt DESC·id DESC 서버 고정(Q-I).
-     *
-     * @param statusRaw null/빈 값 = 전체 3상태. 미정의 열거값 → 422.
-     */
     public Page<ProjectResponse> list(UUID userId, int page, int size, List<String> statusRaw) {
-        // page/size 규약(1-base·상한100)은 컨트롤러 ProjectListQuery @Min/@Max가 400으로 선검증한다(AC-01-4).
         Collection<ProjectStatus> statuses = parseStatuses(statusRaw);
 
         autoCloseEvaluator.closeOverdue(userId); // 평가 선행(REQUIRES_NEW 커밋) → 이후 조회가 결과를 봄
@@ -131,9 +101,6 @@ public class ProjectService {
                 .map(ProjectResponse::from);
     }
 
-    /**
-     * 상세 조회 (PROJ-03 / AC-03-1~3). 평가 선행(AC-03-3). 부재·타인 소유 → 404 E-COM-004(구분 불가).
-     */
     public ProjectResponse detail(UUID userId, UUID projectId) {
         autoCloseEvaluator.closeOverdue(userId);
         Project project = projectRepository.findByIdAndUserId(projectId, userId)
@@ -141,10 +108,6 @@ public class ProjectService {
         return ProjectResponse.from(project);
     }
 
-    /**
-     * 프로젝트 상태 변경 (PROJ-07 / AC-07-1~5). 순서: 열거 파싱(422) → 평가 선행 → 404 →
-     * <b>no-op 단락</b>(version 검사보다 먼저 — 더블클릭 내성, AC-07-3) → 409 → 전이 검증(T6→422) → 전이 수행.
-     */
     @Transactional
     public ProjectResponse changeStatus(UUID userId, UUID projectId, ProjectStatusChangeRequest req) {
         ProjectStatus target = parseStatus(req.getStatus()); // 422 E-COM-009 (미정의 열거값)
@@ -195,13 +158,6 @@ public class ProjectService {
         }
     }
 
-    /**
-     * 프로젝트 삭제 (PROJ-09 / AC-09-1~6). hard delete(Q-D) — 연관 데이터는 DB FK cascade에 위임(B-3).
-     * 상태 무관(AC-09-4), version 불요(FE 확인창이 방어선). 자동종료 평가는 결과에 영향 없어 생략.
-     *
-     * <p><b>C1 순서(필수)</b>: ① 삭제 전 영향 주차 수집(B-4) → ② delete → ③ <b>명시적 flush</b>(DELETE·cascade를
-     * DB에 반영) → ④ 재계산. flush 없이는 JdbcTemplate 재계산이 삭제 전 plan_blocks를 합산해 캐시가 오염된다.
-     */
     @Transactional
     public void delete(UUID userId, UUID projectId) {
         Project project = projectRepository.findByIdAndUserId(projectId, userId)

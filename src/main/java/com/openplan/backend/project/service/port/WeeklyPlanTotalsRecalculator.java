@@ -20,6 +20,13 @@ public interface WeeklyPlanTotalsRecalculator {
      */
     List<UUID> captureAffectedWeeklyPlanIds(UUID projectId);
 
+    /**
+     * 태스크 삭제 <b>전</b> 호출 — 해당 <b>태스크</b>의 plan_block들이 속한 주차 id를 수집한다(taskId 스코프).
+     * ST-B2-03 태스크 삭제(TB-4)용 추가 계약 — projectId 과수집을 피해 삭제 대상 태스크가 걸린 주차만 재계산한다.
+     * (ADR-B2-03-006 — 추가 전용, 기존 메서드·호출처 무변경. 블록 단위 연산이 필요한 ST-B2-08 선행 자산.)
+     */
+    List<UUID> captureAffectedWeeklyPlanIdsByTask(UUID taskId);
+
     /** 삭제(+flush) 후, 같은 tx에서 남은 블록 기준으로 각 주차 total_planned_minutes를 재계산한다. */
     void recalculate(List<UUID> weeklyPlanIds);
 }
