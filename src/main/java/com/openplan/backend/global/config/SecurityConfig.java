@@ -34,6 +34,7 @@ public class SecurityConfig {
             "/swagger-ui/**",
             "/swagger-ui.html",
             "/v3/api-docs/**",
+            "/openapi.yaml",     // 정본 계약 — Swagger UI(springdoc.swagger-ui.url)가 읽는 대상. 빠지면 UI가 빈 화면
             "/api/v1/auth/**",   // 로그인·세션·소셜·가입 등 — 각 EP가 자체 인증 로직 처리(스텁: §2.1)
             "/api/v1/landing",   // 비인증 랜딩(가드 예외)
             // 도움말/FAQ 공개(openapi security:[] — 비로그인 접근). ST-B1-13 contract-change (post-freeze, 라벨).
