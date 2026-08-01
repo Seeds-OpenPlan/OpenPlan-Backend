@@ -2642,7 +2642,8 @@ components:
         validationIssueId: { type: [string, "null"], format: uuid, description: "dry-run은 null (무영속)" }
         ruleId: { type: string, enum: [V1_OVERLAP, V2_FIXED_CONFLICT, V3_CAPACITY_EXCEEDED, V4_OUT_OF_AVAILABILITY, V5_OUT_OF_WBS, V6_AFTER_DUE_DATE, V7_BUFFER_SHORTAGE] }
         severity: { type: string, enum: [BLOCK, WARNING] }
-        planBlockId: { type: [string, "null"], format: uuid }
+        planBlockId: { type: [string, "null"], format: uuid, description: "쌍 규칙(V1·V2)에서는 쌍 중 UUID 오름차순 첫 블록 (ADR-0013)" }
+        counterpartId: { type: [string, "null"], format: uuid, description: "쌍 규칙의 상대 엔티티 — V1: 상대 plan_block(UUID 큰 쪽), V2: fixed_schedule. 그 외 규칙은 null. (planBlockId, counterpartId) 조합이 쌍을 유일 식별한다 (ADR-0013)" }
         taskId: { type: [string, "null"], format: uuid }
         weekday: { type: [string, "null"], description: "V3/V4 요일 수준 이슈" }
         reason: { type: string, description: "규칙 근거 문구 — '규칙 N에 의해' (P4)" }
