@@ -214,15 +214,14 @@ class ProjectTaskCreateApiTest {
     }
 
     @Test
-    @DisplayName("AC-C-8 known-gap: JSON 타입 불일치(dueDate 비날짜)는 글로벌 핸들러 갭으로 현재 500 "
-            + "— 매핑 추가 시 400 E-COM-001로 전환(exceptions §5)")
-    void malformedBodyIsKnownGap500() throws Exception {
-        // ⚠ ST-B2-01 W6 CONCERNS 이월: GlobalExceptionHandler에 HttpMessageNotReadable·
-        // MethodArgumentTypeMismatch → 400 매핑이 없어 파싱/타입 오류가 500으로 샌다(global 소유·본 스토리 미수정).
-        // 매핑이 추가되면 이 단언을 400 E-COM-001로 갱신해야 한다(신호 역할).
+    @DisplayName("AC-C-8: JSON 타입 불일치(dueDate 비날짜)는 400 E-COM-001 (exceptions §5)")
+    void malformedBodyIsBadRequest() throws Exception {
+        // 이전에는 GlobalExceptionHandler에 HttpMessageNotReadable·MethodArgumentTypeMismatch 매핑이
+        // 없어 500으로 샜고, 그 갭을 숨기지 않으려고 이 테스트가 500을 단언해 신호로 두고 있었다(이슈 #9).
+        // 매핑이 추가돼 단언을 원래 계약대로 되돌린다.
         post(inProgress, "{\"title\":\"t\",\"dueDate\":\"not-a-date\"}")
-                .andExpect(status().isInternalServerError())
-                .andExpect(jsonPath("$.error.code").value("E-COM-005"));
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("E-COM-001"));
     }
 
     // ---------- fixtures ----------
