@@ -583,9 +583,8 @@ paths:
   /landing:
     get:
       tags: [landing]
-      x-implementation-status: not-implemented
       operationId: getLanding
-      summary: "[미구현] 랜딩 콘텐츠 (비인증)"
+      summary: "랜딩 콘텐츠 (비인증)"
       x-lane: BE-1
       x-user-stories: [LANDING]
       security: []
@@ -998,9 +997,8 @@ paths:
   /announcements:
     get:
       tags: [announcements]
-      x-implementation-status: not-implemented
       operationId: listAnnouncements
-      summary: "[미구현] 공지 목록"
+      summary: "공지 목록"
       x-lane: BE-1
       x-user-stories: [OPS-01]
       security: []
@@ -1023,9 +1021,8 @@ paths:
   /announcements/{announcementId}:
     get:
       tags: [announcements]
-      x-implementation-status: not-implemented
       operationId: getAnnouncement
-      summary: "[미구현] 공지 상세"
+      summary: "공지 상세"
       x-lane: BE-1
       x-user-stories: [OPS-02]
       security: []
@@ -1506,9 +1503,8 @@ paths:
   /task-categories:
     get:
       tags: [task-categories]
-      x-implementation-status: not-implemented
       operationId: listTaskCategories
-      summary: "[미구현] 카테고리 프리셋 목록 (SC-01)"
+      summary: "카테고리 프리셋 목록 (SC-01)"
       x-lane: BE-2
       x-user-stories: [RB-STAT-01]
       responses:
@@ -1527,9 +1523,8 @@ paths:
                     items: { $ref: "#/components/schemas/TaskCategory" }
     post:
       tags: [task-categories]
-      x-implementation-status: not-implemented
       operationId: createTaskCategory
-      summary: "[미구현] 프리셋 추가"
+      summary: "프리셋 추가"
       description: >-
         name은 서버가 trim한 뒤 검증·저장한다. trim 후 1~50자를 벗어나면 422 E-COM-009
         (null·키 부재·공백만 포함). 중복 판정도 trim된 값 기준이라 "  업무  "는 "업무"와 같다.
@@ -1559,9 +1554,8 @@ paths:
   /task-categories/{taskCategoryId}:
     delete:
       tags: [task-categories]
-      x-implementation-status: not-implemented
       operationId: deleteTaskCategory
-      summary: "[미구현] 프리셋 삭제 — 연결 태스크는 '없음'(null) 전환 (FK SET NULL)"
+      summary: "프리셋 삭제 — 연결 태스크는 '없음'(null) 전환 (FK SET NULL)"
       description: >-
         hard delete. 연결된 태스크는 삭제되지 않고 categoryId만 null('없음')이 된다 —
         DB의 FK ON DELETE SET NULL이 처리하므로 태스크를 따로 갱신할 필요가 없다.
