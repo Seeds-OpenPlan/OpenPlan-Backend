@@ -48,7 +48,7 @@ public class WeeklyPlanController {
 
     @GetMapping
     @Operation(summary = "주간 계획 조회 (PLAN-01·02)",
-            description = "weekStartDate로 그 주 계획 + 요약(사용시간·배치 블록 수) 조회. 없는 주차 → 404.")
+            description = "weekStartDate로 그 주 계획 + 요약(사용시간·배치 블록 수) 조회. 없는 주차 → 200 + 빈 응답(data 없음).")
     public ApiResponse<WeeklyPlanResponse> get(
             @CurrentUser UUID userId,
             @Valid @ModelAttribute WeeklyPlanQuery query) {
