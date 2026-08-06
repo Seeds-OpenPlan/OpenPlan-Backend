@@ -7,6 +7,7 @@ import com.openplan.backend.global.time.UserClock;
 import com.openplan.backend.project.service.port.WeeklyPlanTotalsRecalculator;
 import com.openplan.backend.schedule.domain.Schedule;
 import com.openplan.backend.schedule.repository.ScheduleRepository;
+import com.openplan.backend.schedule.service.ScheduleValidator;
 import com.openplan.backend.task.domain.Task;
 import com.openplan.backend.task.domain.TaskStatus;
 import com.openplan.backend.task.repository.OwnedTask;
@@ -37,23 +38,24 @@ import java.util.UUID;
 @Service
 public class PlanBlockService {
 
-    private static final int TITLE_MAX = 200;
-
     private final PlanBlockRepository planBlockRepository;
     private final WeeklyPlanRepository weeklyPlanRepository;
     private final TaskRepository taskRepository;
     private final ScheduleRepository scheduleRepository;
+    private final ScheduleValidator scheduleValidator;
     private final WeeklyPlanTotalsRecalculator recalculator;
     private final ErrorMessages errorMessages;
     private final UserClock clock;
 
     public PlanBlockService(PlanBlockRepository planBlockRepository, WeeklyPlanRepository weeklyPlanRepository,
                             TaskRepository taskRepository, ScheduleRepository scheduleRepository,
-                            WeeklyPlanTotalsRecalculator recalculator, ErrorMessages errorMessages, UserClock clock) {
+                            ScheduleValidator scheduleValidator, WeeklyPlanTotalsRecalculator recalculator,
+                            ErrorMessages errorMessages, UserClock clock) {
         this.planBlockRepository = planBlockRepository;
         this.weeklyPlanRepository = weeklyPlanRepository;
         this.taskRepository = taskRepository;
         this.scheduleRepository = scheduleRepository;
+        this.scheduleValidator = scheduleValidator;
         this.recalculator = recalculator;
         this.errorMessages = errorMessages;
         this.clock = clock;
@@ -87,9 +89,9 @@ public class PlanBlockService {
                 throw invalidField("taskId", "completed");
             }
         } else { // SCHEDULE — 일정을 새로 만들며 배치 (PLAN-08)
-            String title = validateTitle(req.title());
-            validateEstimatedMinutes(req.estimatedMinutes());
-            validatePriority(req.priority());
+            String title = scheduleValidator.validateTitle(req.title());
+            scheduleValidator.validateEstimatedMinutes(req.estimatedMinutes());
+            scheduleValidator.validatePriority(req.priority());
             schedule = new Schedule(userId, title, req.estimatedMinutes(), req.priority(),
                     req.startAt(), req.endAt(), req.memo(), clock.now());
             scheduleRepository.save(schedule);
@@ -118,37 +120,6 @@ public class PlanBlockService {
             return PlanBlockType.valueOf(raw.trim());
         } catch (IllegalArgumentException ex) {
             throw invalidField("blockType", "invalid");
-        }
-    }
-
-    // ---- SCHEDULE 일정 값 검증 (태스크 규칙 재사용 — 문구는 카탈로그) ----
-
-    private String validateTitle(String title) {
-        String trimmed = (title == null) ? "" : title.trim();
-        if (trimmed.isEmpty()) {
-            throw invalidField("title", "required");
-        }
-        if (trimmed.length() > TITLE_MAX) {
-            throw invalidField("title", "size");
-        }
-        return trimmed;
-    }
-
-    private void validateEstimatedMinutes(Integer estimatedMinutes) {
-        if (estimatedMinutes == null) {
-            return;
-        }
-        if (estimatedMinutes <= 0 || estimatedMinutes % 5 != 0) {
-            throw invalidField("estimatedMinutes", "step");
-        }
-    }
-
-    private void validatePriority(Integer priority) {
-        if (priority == null) {
-            return;
-        }
-        if (priority < 1 || priority > 3) {
-            throw invalidField("priority", "range");
         }
     }
 
