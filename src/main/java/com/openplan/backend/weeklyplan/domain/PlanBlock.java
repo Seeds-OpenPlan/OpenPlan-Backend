@@ -75,4 +75,23 @@ public class PlanBlock {
         b.createdAt = createdAt;
         return b;
     }
+
+    /**
+     * SCHEDULE 블록 생성 (PLAN-08). status=SCHEDULED. schedule_id만 세팅(task_id=null — ck_plan_block_ref).
+     * 일정(schedule)은 서비스가 먼저 생성한 뒤 그 id를 넘긴다.
+     */
+    public static PlanBlock forSchedule(UUID weeklyPlanId, UUID scheduleId, Instant startAt, Instant endAt,
+                                        Instant createdAt) {
+        PlanBlock b = new PlanBlock();
+        b.id = UUID.randomUUID();
+        b.weeklyPlanId = weeklyPlanId;
+        b.taskId = null;
+        b.scheduleId = scheduleId;
+        b.blockType = PlanBlockType.SCHEDULE;
+        b.startAt = startAt;
+        b.endAt = endAt;
+        b.status = PlanBlockStatus.SCHEDULED;
+        b.createdAt = createdAt;
+        return b;
+    }
 }
