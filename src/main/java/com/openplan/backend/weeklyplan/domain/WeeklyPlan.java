@@ -76,4 +76,15 @@ public class WeeklyPlan {
         this.createdAt = createdAt;
     }
 
+    /**
+     * 확정(CONFIRMED) 계획을 편집 재개하면 DRAFT로 되돌린다(블록 추가·이동 등 — ST-B2-08). confirmedAt도 해제한다.
+     * 이미 DRAFT면 no-op. "확정 후 편집 → 초안 복귀" 규범(PR #14 리뷰).
+     */
+    public void reopenToDraftIfConfirmed() {
+        if (this.status == WeeklyPlanStatus.CONFIRMED) {
+            this.status = WeeklyPlanStatus.DRAFT;
+            this.confirmedAt = null;
+        }
+    }
+
 }
