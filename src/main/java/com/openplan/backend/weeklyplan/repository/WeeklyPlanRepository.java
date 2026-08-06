@@ -20,6 +20,9 @@ public interface WeeklyPlanRepository extends JpaRepository<WeeklyPlan, UUID> {
     /** 주차별 단건 조회(PLAN-02 주차 이동). 부재 → 404 E-COM-004. */
     Optional<WeeklyPlan> findByUserIdAndWeekStartDate(UUID userId, LocalDate weekStartDate);
 
+    /** 소유자 스코프 단건(planId) — 블록 쓰기 공용(ST-B2-08). 부재·타인 → 404 E-COM-004. */
+    Optional<WeeklyPlan> findByIdAndUserId(UUID id, UUID userId);
+
     /**
      * 배치 블록 수(PLAN-01 요약). plan_blocks는 weekly-plan 도메인 소유 테이블이나 엔티티는 ST-B2-08 —
      * 그전까진 native count로 집계한다(요약 전용 읽기).
