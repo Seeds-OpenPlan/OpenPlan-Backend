@@ -37,13 +37,15 @@ public class WeeklyPlanController {
     }
 
     @PostMapping
-    @Operation(summary = "주간 계획 생성 (PLAN 진입)",
-            description = "weekStartDate로 생성. weekEndDate=start+6일, status=DRAFT. 같은 주차 존재 시 409 E-PLAN-001.")
-    public ResponseEntity<ApiResponse<WeeklyPlanResponse>> create(
+    @Operation(summary = "주간 계획 get-or-create (PLAN 진입)",
+            description = "weekStartDate로 진입. 없으면 생성(201, weekEndDate=start+6·status=DRAFT), "
+                    + "이미 있으면 기존 반환(200). 주차 중복은 오류가 아니다(재호출 멱등). ")
+    public ResponseEntity<ApiResponse<WeeklyPlanResponse>> getOrCreate(
             @CurrentUser UUID userId,
             @Valid @RequestBody WeeklyPlanCreateRequest request) {
-        WeeklyPlanResponse created = weeklyPlanService.create(userId, request);
-        return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(created));
+        WeeklyPlanService.GetOrCreateResult result = weeklyPlanService.getOrCreate(userId, request);
+        HttpStatus status = result.created() ? HttpStatus.CREATED : HttpStatus.OK;
+        return ResponseEntity.status(status).body(ApiResponse.ok(result.plan()));
     }
 
     @GetMapping
