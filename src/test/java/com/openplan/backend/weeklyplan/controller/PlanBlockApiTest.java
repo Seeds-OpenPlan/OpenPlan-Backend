@@ -80,7 +80,11 @@ class PlanBlockApiTest {
                 .andExpect(jsonPath("$.data.weeklyPlanId").value(plan.toString()))
                 .andExpect(jsonPath("$.data.taskId").value(task.toString()))
                 .andExpect(jsonPath("$.data.blockType").value("TASK"))
-                .andExpect(jsonPath("$.data.status").value("SCHEDULED"));
+                .andExpect(jsonPath("$.data.status").value("SCHEDULED"))
+                // ③ 정본 PlanBlock — title(태스크 제목 조인)·projectId, scheduleId는 없음
+                .andExpect(jsonPath("$.data.title").value("미배치 태스크"))
+                .andExpect(jsonPath("$.data.projectId").value(project.toString()))
+                .andExpect(jsonPath("$.data.scheduleId").doesNotExist());
 
         // ① 태스크 전이: UNASSIGNED → IN_PROGRESS
         assertThat(jdbc.queryForObject("SELECT status FROM tasks WHERE task_id = ?", String.class, task))
@@ -152,16 +156,19 @@ class PlanBlockApiTest {
     // ---------- SCHEDULE 블록 (PLAN-08 — 일정 생성 + 배치) ----------
 
     @Test
-    @DisplayName("SCHEDULE 블록 배치 → 201 · schedules 행 생성 · taskId 없음 · 주 total=180 · 태스크 미러 없음")
+    @DisplayName("SCHEDULE 블록 배치 → 201 · schedules 행 생성 · taskId·projectId 없음 · 주 total=180 · 태스크 미러 없음")
     void placeScheduleBlock() throws Exception {
         UUID plan = insertWeeklyPlan(MAIN, WEEK, "DRAFT", null);
 
-        block(MAIN, plan, "{\"blockType\":\"SCHEDULE\",\"title\":\"병원 예약\",\"estimatedMinutes\":60,"
-                + "\"priority\":2,\"memo\":\"메모\",\"startAt\":\"" + START + "\",\"endAt\":\"" + END + "\"}")
+        block(MAIN, plan, "{\"blockType\":\"SCHEDULE\",\"schedule\":{\"title\":\"병원 예약\","
+                + "\"estimatedMinutes\":60,\"priority\":2,\"memo\":\"메모\"},"
+                + "\"startAt\":\"" + START + "\",\"endAt\":\"" + END + "\"}")
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.data.blockType").value("SCHEDULE"))
                 .andExpect(jsonPath("$.data.scheduleId").exists())
                 .andExpect(jsonPath("$.data.taskId").doesNotExist())
+                .andExpect(jsonPath("$.data.projectId").doesNotExist()) // ③ SCHEDULE은 projectId 없음
+                .andExpect(jsonPath("$.data.title").value("병원 예약")) // ③ 일정 제목 조인
                 .andExpect(jsonPath("$.data.status").value("SCHEDULED"));
 
         // 일정(schedules) 행이 함께 생성됨
@@ -173,23 +180,42 @@ class PlanBlockApiTest {
     }
 
     @Test
-    @DisplayName("SCHEDULE 검증 — title 누락 → 422 · estimatedMinutes 47 → 422 · priority 9999 → 422")
+    @DisplayName("SCHEDULE 검증 — schedule 누락 → 422(schedule) · title 누락 → 422 · estimatedMinutes 47 → 422 · priority 9999 → 422")
     void scheduleValidation() throws Exception {
         UUID plan = insertWeeklyPlan(MAIN, WEEK, "DRAFT", null);
 
+        // schedule 객체 자체 누락
         block(MAIN, plan, "{\"blockType\":\"SCHEDULE\",\"startAt\":\"" + START + "\",\"endAt\":\"" + END + "\"}")
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.details.fields[0].field").value("schedule"));
+
+        block(MAIN, plan, "{\"blockType\":\"SCHEDULE\",\"schedule\":{},"
+                + "\"startAt\":\"" + START + "\",\"endAt\":\"" + END + "\"}")
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.error.details.fields[0].field").value("title"));
 
-        block(MAIN, plan, "{\"blockType\":\"SCHEDULE\",\"title\":\"일정\",\"estimatedMinutes\":47,"
+        block(MAIN, plan, "{\"blockType\":\"SCHEDULE\",\"schedule\":{\"title\":\"일정\",\"estimatedMinutes\":47},"
                 + "\"startAt\":\"" + START + "\",\"endAt\":\"" + END + "\"}")
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.error.details.fields[0].field").value("estimatedMinutes"));
 
-        block(MAIN, plan, "{\"blockType\":\"SCHEDULE\",\"title\":\"일정\",\"priority\":9999,"
+        block(MAIN, plan, "{\"blockType\":\"SCHEDULE\",\"schedule\":{\"title\":\"일정\",\"priority\":9999},"
                 + "\"startAt\":\"" + START + "\",\"endAt\":\"" + END + "\"}")
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.error.details.fields[0].field").value("priority"));
+    }
+
+    @Test
+    @DisplayName("⑤ 블록 시각 5분 단위 아님 → 422(field=startAt)")
+    void blockTimeNotFiveMinuteAligned() throws Exception {
+        UUID plan = insertWeeklyPlan(MAIN, WEEK, "DRAFT", null);
+        UUID task = insertTask(project, "태스크", TaskStatus.UNASSIGNED);
+
+        block(MAIN, plan, "{\"blockType\":\"TASK\",\"taskId\":\"" + task + "\","
+                + "\"startAt\":\"2026-08-03T00:02:00Z\",\"endAt\":\"" + END + "\"}") // 00:02 → 5분 아님
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.code").value("E-COM-009"))
+                .andExpect(jsonPath("$.error.details.fields[0].field").value("startAt"));
     }
 
     // ---------- 소유 스코프 ----------

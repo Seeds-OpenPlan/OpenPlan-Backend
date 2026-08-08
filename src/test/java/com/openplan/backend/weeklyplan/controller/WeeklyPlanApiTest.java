@@ -26,8 +26,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * 주간 계획 생성·조회 API 통합 테스트 (ST-B2-07). POST(DRAFT·중복 409·weekEndDate=start+6)와
- * GET(주차별·요약·404·소유자)을 고정한다.
+ * 주간 계획 get-or-create·조회 API 통합 테스트 (ST-B2-07). POST(신규 201·기존 200·weekEndDate=start+6)와
+ * GET(주차별·요약·blocks·빈 응답·소유자)을 고정한다.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -71,16 +71,22 @@ class WeeklyPlanApiTest {
                 .andExpect(jsonPath("$.data.status").value("DRAFT"))
                 .andExpect(jsonPath("$.data.totalPlannedMinutes").value(0))
                 .andExpect(jsonPath("$.data.placedBlockCount").value(0))
+                .andExpect(jsonPath("$.data.blocks.length()").value(0)) // 신규 계획 → 빈 목록
                 .andExpect(jsonPath("$.data.version").value(0))
                 .andExpect(jsonPath("$.data.confirmedAt").doesNotExist());
     }
 
     @Test
-    @DisplayName("같은 주차 재생성 → 409 E-PLAN-001")
-    void duplicateWeekConflict() throws Exception {
-        create(MAIN, "2026-07-27").andExpect(status().isCreated());
-        create(MAIN, "2026-07-27").andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error.code").value("E-PLAN-001"));
+    @DisplayName("같은 주차 재요청 → get-or-create: 200 + 기존 반환(같은 id, 오류 아님)")
+    void duplicateWeekReturnsExisting() throws Exception {
+        String firstId = com.jayway.jsonpath.JsonPath.read(
+                create(MAIN, "2026-07-27").andExpect(status().isCreated())
+                        .andReturn().getResponse().getContentAsString(),
+                "$.data.weeklyPlanId");
+
+        create(MAIN, "2026-07-27")
+                .andExpect(status().isOk()) // 201 아님 — 기존 반환
+                .andExpect(jsonPath("$.data.weeklyPlanId").value(firstId));
     }
 
     @Test
@@ -115,8 +121,8 @@ class WeeklyPlanApiTest {
     }
 
     @Test
-    @DisplayName("요약 — placedBlockCount는 실제 블록 수를 센다(native count)")
-    void placedBlockCountReflectsBlocks() throws Exception {
+    @DisplayName("조회에 blocks 목록 포함 — 블록 2건이 배열로·placedBlockCount=2 (캘린더 렌더링용)")
+    void getIncludesBlocks() throws Exception {
         UUID planId = insertWeeklyPlan(MAIN, WEEK);
         UUID schedule = insertSchedule(MAIN, "고정일정");
         insertScheduleBlock(planId, schedule);
@@ -124,7 +130,13 @@ class WeeklyPlanApiTest {
 
         mockMvc.perform(get(PATH).param("weekStartDate", "2026-07-27").header("X-Dev-User", MAIN.toString()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.placedBlockCount").value(2));
+                .andExpect(jsonPath("$.data.placedBlockCount").value(2))
+                .andExpect(jsonPath("$.data.blocks.length()").value(2))
+                .andExpect(jsonPath("$.data.blocks[0].blockType").value("SCHEDULE"))
+                .andExpect(jsonPath("$.data.blocks[0].scheduleId").value(schedule.toString()))
+                .andExpect(jsonPath("$.data.blocks[0].title").value("고정일정")) // ③ 일정 제목 조인 파생
+                .andExpect(jsonPath("$.data.blocks[0].projectId").doesNotExist()) // SCHEDULE은 projectId 없음
+                .andExpect(jsonPath("$.data.blocks[0].status").value("SCHEDULED"));
     }
 
     @Test
