@@ -5,7 +5,10 @@ import com.openplan.backend.global.error.ErrorMessages;
 import com.openplan.backend.global.error.ErrorResponse;
 import com.openplan.backend.global.security.DevSeededUserVerifier;
 import com.openplan.backend.global.security.DevUserAuthFilter;
+import com.openplan.backend.global.security.JwtCookieAuthFilter;
+import com.openplan.backend.global.security.JwtService;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -22,7 +25,9 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
  * 보안 설정 (global — BE-1). 무상태 · CORS 미개방(단일 오리진 + Vite 프록시, api-contracts §1).
  *
  * <p>인증 주체 주입은 프로파일별 필터가 담당한다: dev(local)는 {@link DevUserAuthFilter}(스텁),
- * 4주차는 JwtCookieAuthFilter가 같은 자리에 들어간다. 미인증 접근은 오류 봉투 E-COM-002로 응답한다.
+ * 운영({@code op.auth.dev-stub=false})은 {@link JwtCookieAuthFilter}가 같은 자리에 들어간다(D-16 · 4주차 이행 완료).
+ * 둘 다 principal 로 UUID를 심으므로 {@code @CurrentUser} 뒤 도메인 코드는 주입원과 무관하다.
+ * 미인증 접근은 오류 봉투 E-COM-002로 응답한다.
  */
 @Configuration
 @EnableWebSecurity
@@ -58,7 +63,8 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http, ObjectMapper objectMapper,
                                                   ErrorMessages errorMessages,
-                                                  DevSeededUserVerifier userVerifier) throws Exception {
+                                                  DevSeededUserVerifier userVerifier,
+                                                  ObjectProvider<JwtService> jwtService) throws Exception {
         http
                 .csrf(AbstractHttpConfigurer::disable)
                 .formLogin(AbstractHttpConfigurer::disable)
@@ -73,6 +79,16 @@ public class SecurityConfig {
         if (devStubEnabled) {
             http.addFilterBefore(new DevUserAuthFilter(objectMapper, errorMessages, userVerifier),
                     UsernamePasswordAuthenticationFilter.class);
+        } else {
+            // 4주차 교체 지점(D-16) — 이 클래스 javadoc이 예고한 자리다. 두 필터 모두 principal 로
+            // UUID를 심으므로 @CurrentUser 뒤 도메인 코드는 한 줄도 바뀌지 않는다(무손실 교체).
+            // JwtService 는 JwtAuthConfig 가 같은 조건(dev-stub=false)에서만 만들므로 여기서 반드시 존재한다.
+            JwtService service = jwtService.getIfAvailable();
+            if (service == null) {
+                throw new IllegalStateException(
+                        "op.auth.dev-stub=false 인데 JwtService 빈이 없습니다. JwtAuthConfig 등록 조건을 확인하십시오.");
+            }
+            http.addFilterBefore(new JwtCookieAuthFilter(service), UsernamePasswordAuthenticationFilter.class);
         }
 
         return http.build();

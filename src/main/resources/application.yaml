@@ -44,6 +44,14 @@ op:
   auth:
     # dev-auth 스텁 필터 (D-16). 기본 false — 켜지려면 명시적 설정이 있어야 한다.
     dev-stub: false
+    # JWT 쿠키 인증 (D-16 4주차 · ADR-0010). dev-stub=false 일 때만 바인딩된다(JwtAuthConfig).
+    jwt:
+      # .env 의 JWT_SECRET. ≥32바이트(HS256) — 미달이면 기동 실패시킨다(약한 키로 뜨지 않는다).
+      secret: ${JWT_SECRET:}
+      access-ttl: PT30M      # 짧게 — 무상태라 폐기가 안 되는 것을 수명으로 상쇄
+      refresh-ttl: P14D
+      cookie-secure: false   # 🔴 W5 배포(HTTPS) 시 true — 배포 체크리스트 항목
+      issuer: openplan
 
 logging:
   pattern:
