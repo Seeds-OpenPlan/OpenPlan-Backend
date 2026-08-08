@@ -52,7 +52,6 @@ public enum ErrorCode {
     E_CAT_001("E-CAT-001", HttpStatus.CONFLICT),                 // ST-B2-04 — 카테고리 이름 중복(UNIQUE(user_id,name))
 
     // 2.4 주간 계획 (E-PLAN) — BE-2
-    E_PLAN_001("E-PLAN-001", HttpStatus.CONFLICT),               // ST-B2-07 — 해당 주차 주간계획 중복(UNIQUE(user_id,week_start_date))
     E_PLAN_002("E-PLAN-002", HttpStatus.UNPROCESSABLE_ENTITY),
     E_PLAN_004("E-PLAN-004", HttpStatus.CONFLICT),
 
