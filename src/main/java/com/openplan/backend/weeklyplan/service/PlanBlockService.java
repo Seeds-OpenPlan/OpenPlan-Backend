@@ -74,6 +74,8 @@ public class PlanBlockService {
         if (!req.startAt().isBefore(req.endAt())) { // 422 (ck_plan_block_range 사전 검증)
             throw new OpenPlanException(ErrorCode.E_PLAN_002);
         }
+        requireFiveMinuteAligned(req.startAt(), "startAt"); // 422 — 블록 시각은 5분 단위(정본 E-COM-009)
+        requireFiveMinuteAligned(req.endAt(), "endAt");
 
         // 참조 확보·검증 (blockType별) — plan 변경 전에 끝낸다
         Task task = null;
@@ -88,12 +90,16 @@ public class PlanBlockService {
             if (task.getStatus() == TaskStatus.COMPLETED) { // 결정 B — 완료 태스크 배치 금지
                 throw invalidField("taskId", "completed");
             }
-        } else { // SCHEDULE — 일정을 새로 만들며 배치 (PLAN-08)
-            String title = scheduleValidator.validateTitle(req.title());
-            scheduleValidator.validateEstimatedMinutes(req.estimatedMinutes());
-            scheduleValidator.validatePriority(req.priority());
-            schedule = new Schedule(userId, title, req.estimatedMinutes(), req.priority(),
-                    req.startAt(), req.endAt(), req.memo(), clock.now());
+        } else { // SCHEDULE — 일정을 새로 만들며 배치 (PLAN-08). 일정 입력은 중첩 schedule 객체(정본)
+            PlanBlockCreateRequest.ScheduleInput s = req.schedule();
+            if (s == null) {
+                throw invalidField("schedule", "required");
+            }
+            String title = scheduleValidator.validateTitle(s.title());
+            scheduleValidator.validateEstimatedMinutes(s.estimatedMinutes());
+            scheduleValidator.validatePriority(s.priority());
+            schedule = new Schedule(userId, title, s.estimatedMinutes(), s.priority(),
+                    req.startAt(), req.endAt(), s.memo(), clock.now());
             scheduleRepository.save(schedule);
         }
 
@@ -111,7 +117,10 @@ public class PlanBlockService {
         planBlockRepository.flush(); // C1 — 블록·태스크·일정·계획 변경 DB 반영 후 재계산이 새 상태를 봄
         recalculator.recalculate(List.of(planId)); // 주 total 재계산(잔여 블록 절대값)
 
-        return PlanBlockResponse.from(block);
+        // title·projectId는 방금 확보한 참조에서 채운다(조인 재조회 불요). SCHEDULE은 projectId 없음.
+        String title = (type == PlanBlockType.TASK) ? task.getTitle() : schedule.getTitle();
+        UUID projectId = (type == PlanBlockType.TASK) ? task.getProjectId() : null;
+        return PlanBlockResponse.of(block, title, projectId);
     }
 
     /** blockType 문자열 → enum. 미정의값 → 422 E-COM-009. */
@@ -120,6 +129,13 @@ public class PlanBlockService {
             return PlanBlockType.valueOf(raw.trim());
         } catch (IllegalArgumentException ex) {
             throw invalidField("blockType", "invalid");
+        }
+    }
+
+    /** 블록 시각 5분 단위 검증(정본 E-COM-009). 5분=300초 경계 + 초 미만 0. UTC 정렬 ⇔ 로컬 정렬(실 오프셋은 15분 배수). */
+    private void requireFiveMinuteAligned(java.time.Instant t, String field) {
+        if (t.getNano() != 0 || t.getEpochSecond() % 300 != 0) {
+            throw invalidField(field, "step");
         }
     }
 
