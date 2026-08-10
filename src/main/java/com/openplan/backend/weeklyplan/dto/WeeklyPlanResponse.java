@@ -4,13 +4,12 @@ import com.openplan.backend.weeklyplan.domain.WeeklyPlan;
 
 import java.time.Instant;
 import java.time.LocalDate;
-import java.util.List;
 import java.util.UUID;
 
 /**
- * 주간 계획 응답 (생성·조회 공용). 요약(PLAN-01)은 {@code totalPlannedMinutes}(사용시간=블록 합 캐시)와
- * {@code placedBlockCount}, 그리고 조회 시 캘린더 렌더링용 {@code blocks} 목록(start_at 순)을 포함한다.
- * 가용/여유 시간은 이번 범위 밖(availability 도메인).
+ * 주간 계획 단건 (정본 openapi.yaml {@code WeeklyPlan} shape). POST(get-or-create) 응답이자
+ * GET 응답 {@link WeeklyPlanView#plan()} 자리에 들어가는 요약. 캘린더 렌더링용 블록 목록은
+ * 이 안이 아니라 {@link WeeklyPlanView#blocks()}(GET) 최상위에 둔다.
  */
 public record WeeklyPlanResponse(
         UUID weeklyPlanId,
@@ -21,20 +20,18 @@ public record WeeklyPlanResponse(
         int placedBlockCount,
         long version,
         Instant confirmedAt,
-        Instant createdAt,
-        List<PlanBlockResponse> blocks) {
+        Instant createdAt) {
 
-    public static WeeklyPlanResponse from(WeeklyPlan p, List<PlanBlockResponse> blocks) {
+    public static WeeklyPlanResponse from(WeeklyPlan p, int placedBlockCount) {
         return new WeeklyPlanResponse(
                 p.getId(),
                 p.getWeekStartDate(),
                 p.getWeekEndDate(),
                 p.getStatus().name(),
                 p.getTotalPlannedMinutes(),
-                blocks.size(),
+                placedBlockCount,
                 p.getVersion(),
                 p.getConfirmedAt(),
-                p.getCreatedAt(),
-                blocks);
+                p.getCreatedAt());
     }
 }

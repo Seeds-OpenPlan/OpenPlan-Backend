@@ -5,6 +5,7 @@ import com.openplan.backend.global.security.CurrentUser;
 import com.openplan.backend.weeklyplan.dto.WeeklyPlanCreateRequest;
 import com.openplan.backend.weeklyplan.dto.WeeklyPlanQuery;
 import com.openplan.backend.weeklyplan.dto.WeeklyPlanResponse;
+import com.openplan.backend.weeklyplan.dto.WeeklyPlanView;
 import com.openplan.backend.weeklyplan.service.WeeklyPlanService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -50,8 +51,9 @@ public class WeeklyPlanController {
 
     @GetMapping
     @Operation(summary = "주간 계획 조회 (PLAN-01·02)",
-            description = "weekStartDate로 그 주 계획 + 요약(사용시간·배치 블록 수) 조회. 없는 주차 → 200 + 빈 응답(data 없음).")
-    public ApiResponse<WeeklyPlanResponse> get(
+            description = "weekStartDate로 그 주 계획(data.plan) + 캘린더용 블록 목록(data.blocks) 조회. "
+                    + "없는 주차 → 200 + data.plan=null(오류 아님).")
+    public ApiResponse<WeeklyPlanView> get(
             @CurrentUser UUID userId,
             @Valid @ModelAttribute WeeklyPlanQuery query) {
         return ApiResponse.ok(weeklyPlanService.getByWeek(userId, query.getWeekStartDate()));
