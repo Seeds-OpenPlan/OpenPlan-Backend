@@ -56,7 +56,7 @@ public class OAuthController {
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(oauthLoginService.authorizationUrl(type)))
                     .build();
-        } catch (OAuthException e) {
+        } catch (Exception e) {
             return failureRedirect(e);
         }
     }
@@ -91,7 +91,7 @@ public class OAuthController {
                     .header(HttpHeaders.SET_COOKIE, session.accessCookie().toString())
                     .header(HttpHeaders.SET_COOKIE, session.refreshCookie().toString())
                     .build();
-        } catch (OAuthException e) {
+        } catch (Exception e) {
             return failureRedirect(e);
         }
     }
@@ -105,11 +105,28 @@ public class OAuthController {
     /**
      * 실패 리다이렉트. <b>사유는 로그에만</b> 남기고 사용자에게는 코드만 준다 —
      * 예외 메시지에는 제공자 응답 내용이 섞일 수 있다.
+     *
+     * <p><b>{@link OAuthException}만 잡으면 계약에 구멍이 남는다.</b> 이 흐름에는 다른 타입도 흘러든다 —
+     * {@code AuthService}의 세션 발급은 {@code OpenPlanException}을 던지고(dev 스텁 환경에서 콜백 URL을
+     * 직접 치는 경우), 같은 소셜 계정으로 동시에 첫 로그인이 들어오면 UNIQUE 위반이
+     * {@code DataIntegrityViolationException}으로 올라온다. 그것들이 전역 핸들러까지 가면
+     * <b>브라우저 리다이렉트를 타고 있는 사용자에게 JSON 오류 봉투가 떨어진다.</b>
+     *
+     * <p>그래서 {@code Exception}까지 받아 전부 302로 떨군다. 대신 <b>예상 못 한 예외는 스택까지 남긴다</b> —
+     * 302로 삼켜 버리면 서버 결함이 "소셜 로그인이 가끔 안 돼요"로만 보이고 원인을 찾을 단서가 사라진다.
      */
-    private ResponseEntity<Void> failureRedirect(OAuthException e) {
-        log.warn("소셜 로그인 실패: code={} reason={}", e.errorCode(), e.getMessage());
+    private ResponseEntity<Void> failureRedirect(Exception e) {
+        String code;
+        if (e instanceof OAuthException oauthException) {
+            code = oauthException.errorCode();
+            log.warn("소셜 로그인 실패: code={} reason={}", code, e.getMessage());
+        } else {
+            // 계약상 예상하지 못한 경로. 사용자 응답은 같지만 로그 무게가 달라야 한다.
+            code = ErrorCode.E_AUTH_010.code();
+            log.error("소셜 로그인 중 예기치 못한 예외 — 302로 흡수했으나 원인 확인 필요", e);
+        }
         String url = UriComponentsBuilder.fromUriString(appProperties.frontendUrl("/login"))
-                .queryParam("error", e.errorCode())
+                .queryParam("error", code)
                 .toUriString();
         return ResponseEntity.status(HttpStatus.FOUND).location(URI.create(url)).build();
     }
