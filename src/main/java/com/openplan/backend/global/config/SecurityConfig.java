@@ -12,8 +12,11 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -51,6 +54,14 @@ public class SecurityConfig {
     };
 
     /**
+     * 회원가입(AUTH-03 · openapi {@code security: []}). <b>메서드까지 좁혀서</b> 연다 —
+     * {@code /api/v1/users}는 {@code /api/v1/auth/**}에 걸리지 않아 별도 허용이 필요하지만,
+     * 경로만 열면 같은 접두의 다른 EP까지 딸려 열릴 여지가 생긴다. POST 하나만 연다.
+     * ({@code /users/me} 계열은 별개 경로라 영향 없이 계속 인증 대상이다.)
+     */
+    private static final String SIGNUP_PATH = "/api/v1/users";
+
+    /**
      * dev-auth 스텁 활성 여부 (local 기본 true, 운영 override false — §4.2-2). 필터를 빈으로 노출하지 않고
      * 여기서 직접 생성해 Spring Boot 서블릿 체인 자동 등록(이중 실행)을 피한다.
      */
@@ -73,6 +84,7 @@ public class SecurityConfig {
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(PUBLIC_PATHS).permitAll()
+                        .requestMatchers(HttpMethod.POST, SIGNUP_PATH).permitAll()
                         .anyRequest().authenticated())
                 .exceptionHandling(ex -> ex.authenticationEntryPoint(unauthorizedEntryPoint(objectMapper, errorMessages)));
 
@@ -92,6 +104,21 @@ public class SecurityConfig {
         }
 
         return http.build();
+    }
+
+    /**
+     * 비밀번호 해시 (NFR-003 — 평문 저장 금지). BCrypt는 salt를 해시 문자열 안에 담으므로
+     * 별도 salt 컬럼이 없고, {@code users.password_hash VARCHAR(255)} 한 칸이면 충분하다.
+     *
+     * <p><b>refresh 토큰 해시와 알고리즘이 다른 것은 의도적이다.</b> 비밀번호는 사람이 고른 저엔트로피
+     * 값이라 사전공격을 견디는 느린 해시가 필요하고, refresh는 고엔트로피 난수라 빠른 SHA-256을 쓴다
+     * (게다가 salt가 붙으면 UNIQUE 인덱스 조회가 불가능해진다 — {@code JwtService} javadoc).
+     *
+     * <p>이 빈은 {@code dev-stub} 여부와 무관하게 등록된다 — 가입은 개발 환경에서도 동작해야 한다.
+     */
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
     }
 
     /** 미인증 → 오류 봉투 E-COM-002 (기본 401 HTML 대신 계약된 JSON 봉투). */

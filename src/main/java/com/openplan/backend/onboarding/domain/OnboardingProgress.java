@@ -49,6 +49,44 @@ public class OnboardingProgress {
     protected OnboardingProgress() {
     }
 
+    /**
+     * 가입 시 진행 상태 행 생성(ST-B1-04) — 전 단계 미완료로 시작한다.
+     *
+     * <p>{@link com.openplan.backend.onboarding.service.OnboardingProgressService}는 행이 없으면
+     * E-COM-004를 던지고 생성 엔드포인트는 계약에 없다. 프로필과 같은 이유로 가입이 만들어 둔다.
+     */
+    public static OnboardingProgress createInitial(UUID userId) {
+        OnboardingProgress p = new OnboardingProgress();
+        p.userId = userId;
+        p.introDone = false;
+        p.profileDone = false;
+        p.availabilityDone = false;
+        p.fixedScheduleDone = false;
+        p.tutorialDone = false;
+        p.calendarSyncDone = false;
+        p.tutorialSampleProjectId = null;
+        return p;
+    }
+
+    /**
+     * 온보딩 완료 여부 — {@code SessionInfo.onboardingCompleted}(openapi)의 원천.
+     *
+     * <p>🔴 <b>"완료"의 정의가 명세에 없다.</b> 여기서는 <b>소비자 쪽 정의를 따랐다</b> —
+     * 프론트 {@code onboardingApi.js}의 {@code WIZARD_ORDER}가 마법사 단계를
+     * {@code profileDone → availabilityDone → fixedScheduleDone → calendarSyncDone} 넷으로 잡고
+     * 그것으로 커서를 파생한다(2026-07-29 실서버 대조 주석). 서버가 다른 기준을 쓰면 같은 계정이
+     * 화면마다 다르게 판정된다.
+     *
+     * <p>{@code introDone}(소개 2장)과 {@code tutorialDone}(코치마크)은 제외한다 — 마법사 단계가 아니고,
+     * 튜토리얼은 완료 후 재실행이 가능해(TUT-09) 완료 판정에 넣으면 되돌아간다.
+     * 캘린더 연동은 건너뛰기가 이 플래그를 세우므로(PATCH "단계 완료/건너뛰기") 미연동 사용자가 갇히지 않는다.
+     *
+     * <p>정의를 바꿀 거라면 프론트 {@code WIZARD_ORDER}와 함께 바꿔야 한다 — 팀 확인 대상.
+     */
+    public boolean isOnboardingCompleted() {
+        return profileDone && availabilityDone && fixedScheduleDone && calendarSyncDone;
+    }
+
     public UUID getUserId() {
         return userId;
     }
