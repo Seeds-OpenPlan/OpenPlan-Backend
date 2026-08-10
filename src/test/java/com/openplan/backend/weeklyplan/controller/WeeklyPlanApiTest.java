@@ -71,7 +71,6 @@ class WeeklyPlanApiTest {
                 .andExpect(jsonPath("$.data.status").value("DRAFT"))
                 .andExpect(jsonPath("$.data.totalPlannedMinutes").value(0))
                 .andExpect(jsonPath("$.data.placedBlockCount").value(0))
-                .andExpect(jsonPath("$.data.blocks.length()").value(0)) // 신규 계획 → 빈 목록
                 .andExpect(jsonPath("$.data.version").value(0))
                 .andExpect(jsonPath("$.data.confirmedAt").doesNotExist());
     }
@@ -114,10 +113,10 @@ class WeeklyPlanApiTest {
 
         mockMvc.perform(get(PATH).param("weekStartDate", "2026-07-27").header("X-Dev-User", MAIN.toString()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.weekStartDate").value("2026-07-27"))
-                .andExpect(jsonPath("$.data.weekEndDate").value("2026-08-02"))
-                .andExpect(jsonPath("$.data.status").value("DRAFT"))
-                .andExpect(jsonPath("$.data.placedBlockCount").value(0));
+                .andExpect(jsonPath("$.data.plan.weekStartDate").value("2026-07-27"))
+                .andExpect(jsonPath("$.data.plan.weekEndDate").value("2026-08-02"))
+                .andExpect(jsonPath("$.data.plan.status").value("DRAFT"))
+                .andExpect(jsonPath("$.data.plan.placedBlockCount").value(0));
     }
 
     @Test
@@ -130,7 +129,7 @@ class WeeklyPlanApiTest {
 
         mockMvc.perform(get(PATH).param("weekStartDate", "2026-07-27").header("X-Dev-User", MAIN.toString()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.placedBlockCount").value(2))
+                .andExpect(jsonPath("$.data.plan.placedBlockCount").value(2))
                 .andExpect(jsonPath("$.data.blocks.length()").value(2))
                 .andExpect(jsonPath("$.data.blocks[0].blockType").value("SCHEDULE"))
                 .andExpect(jsonPath("$.data.blocks[0].scheduleId").value(schedule.toString()))
@@ -140,20 +139,23 @@ class WeeklyPlanApiTest {
     }
 
     @Test
-    @DisplayName("없는 주차 → 200 + 빈 응답(data 없음) — 오류 아님")
+    @DisplayName("없는 주차 → 200 + data.plan=null · blocks 빈 목록 — 오류 아님(정본 WeeklyPlanView)")
     void emptyWhenNoPlan() throws Exception {
         mockMvc.perform(get(PATH).param("weekStartDate", "2026-07-27").header("X-Dev-User", MAIN.toString()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data").doesNotExist());
+                .andExpect(jsonPath("$.data").exists())
+                .andExpect(jsonPath("$.data.plan").doesNotExist()) // null → FE는 data.plan으로 판단
+                .andExpect(jsonPath("$.data.blocks.length()").value(0));
     }
 
     @Test
-    @DisplayName("소유자 스코프 — 타인 주차는 내게 안 보임(200 + 빈 응답)")
+    @DisplayName("소유자 스코프 — 타인 주차는 내게 안 보임(200 + data.plan=null)")
     void ownerScope() throws Exception {
         create(OTHER, "2026-07-27").andExpect(status().isCreated());
         mockMvc.perform(get(PATH).param("weekStartDate", "2026-07-27").header("X-Dev-User", MAIN.toString()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data").doesNotExist());
+                .andExpect(jsonPath("$.data").exists())
+                .andExpect(jsonPath("$.data.plan").doesNotExist());
     }
 
     @Test
