@@ -67,6 +67,14 @@ op:
       refresh-ttl: P14D
       cookie-secure: false   # 🔴 W5 배포(HTTPS) 시 true — 배포 체크리스트 항목
       issuer: openplan
+    # 메일 링크 토큰 (ST-B1-04/05). dev 스텁 여부와 무관하게 바인딩된다.
+    token:
+      # 🔴 두 수명은 명세에 없다 — exceptions.md 는 만료 응답만 정의하고 "몇 시간"이 없다.
+      #    팀이 정하면 코드가 아니라 여기만 고친다. 메일 본문의 유효 시간 안내도 이 값에서 나온다.
+      email-verification-ttl: PT24H
+      password-reset-ttl: PT1H     # 계정 탈취로 직결되므로 인증 링크보다 짧게
+      # 재발송 최소 간격 — ui-spec §AUTH "60초 쿨다운 카운트다운"이 정본.
+      resend-cooldown: PT60S
   # 앱 주소 — 메일 링크와 OAuth 리다이렉트가 같은 값을 보게 하는 자리(AppProperties).
   # 🔴 W5 배포 시 둘 다 실도메인으로 교체(cookie-secure: true 와 같은 배포 체크리스트 항목).
   app:
