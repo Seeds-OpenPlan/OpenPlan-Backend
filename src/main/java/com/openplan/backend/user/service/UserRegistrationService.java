@@ -5,6 +5,7 @@ import com.openplan.backend.global.error.OpenPlanException;
 import com.openplan.backend.global.time.UserClock;
 import com.openplan.backend.onboarding.domain.OnboardingProgress;
 import com.openplan.backend.onboarding.repository.OnboardingProgressRepository;
+import com.openplan.backend.user.domain.SocialProvider;
 import com.openplan.backend.user.domain.User;
 import com.openplan.backend.user.domain.UserProfile;
 import com.openplan.backend.user.dto.SignUpRequest;
@@ -74,10 +75,38 @@ public class UserRegistrationService {
             throw new OpenPlanException(ErrorCode.E_AUTH_003);
         }
 
-        userProfileRepository.save(UserProfile.createInitial(user.getUserId(), provisionalName(email)));
-        onboardingProgressRepository.save(OnboardingProgress.createInitial(user.getUserId()));
+        createAccountRows(user);
 
         return new SignUpResponse(user.getUserId(), true);
+    }
+
+    /**
+     * 소셜 가입 (ST-B1-03 · AUTH-02) — 제공자 인증을 마친 뒤 호출된다.
+     *
+     * <p>로컬 가입과 <b>딸린 행 생성은 동일</b>하다. 프로필·온보딩 행이 없으면 가입 경로가 무엇이든
+     * 온보딩이 시작되지 않으므로, 그 규칙을 {@link #createAccountRows} 한 곳에 모아 두 경로가 갈라지지 않게 한다.
+     *
+     * <p>중복 판정(같은 이메일의 기존 계정)은 <b>호출부가 이미 끝냈다</b> — 소셜은 "별개 계정을 만들지 않는다"는
+     * 판정(ST-B1-03 AC2)이 필요해 여기서 단순 예외로 처리할 수 없기 때문이다.
+     */
+    @Transactional
+    public User registerSocial(String email, SocialProvider provider, String providerUserId) {
+        User user = User.createSocial(email, provider, providerUserId, clock.now());
+        userRepository.saveAndFlush(user);
+        createAccountRows(user);
+        return user;
+    }
+
+    /**
+     * 계정에 딸린 필수 행 — 프로필·온보딩 진행 상태.
+     *
+     * <p>둘 다 생성 엔드포인트가 계약에 없고 각 서비스가 행 부재를 E-COM-004로 처리한다.
+     * 즉 <b>가입이 만들지 않으면 아무도 만들지 않는다.</b>
+     */
+    private void createAccountRows(User user) {
+        userProfileRepository.save(
+                UserProfile.createInitial(user.getUserId(), provisionalName(user.getEmail())));
+        onboardingProgressRepository.save(OnboardingProgress.createInitial(user.getUserId()));
     }
 
     /**

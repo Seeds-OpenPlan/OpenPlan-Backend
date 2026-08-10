@@ -1,5 +1,6 @@
 package com.openplan.backend.user.repository;
 
+import com.openplan.backend.user.domain.SocialProvider;
 import com.openplan.backend.user.domain.User;
 import org.springframework.data.jpa.repository.JpaRepository;
 
@@ -20,4 +21,11 @@ public interface UserRepository extends JpaRepository<User, UUID> {
 
     /** 가입 중복 판정(AUTH-03 → 409 E-AUTH-003). 경합은 UNIQUE 제약이 최종적으로 막는다. */
     boolean existsByEmail(String email);
+
+    /**
+     * 소셜 재로그인 판정(AUTH-02). <b>이메일이 아니라 제공자 측 ID로 찾는다</b> —
+     * 사용자가 제공자에서 이메일을 바꿔도 같은 계정이어야 하기 때문이다.
+     * {@code ux_users_social_identity} UNIQUE 인덱스가 이 조합의 단건성을 보장한다.
+     */
+    Optional<User> findBySocialProviderAndSocialProviderUserId(SocialProvider provider, String providerUserId);
 }

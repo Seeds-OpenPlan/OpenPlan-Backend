@@ -67,13 +67,30 @@ op:
       refresh-ttl: P14D
       cookie-secure: false   # 🔴 W5 배포(HTTPS) 시 true — 배포 체크리스트 항목
       issuer: openplan
+  # 앱 주소 — 메일 링크와 OAuth 리다이렉트가 같은 값을 보게 하는 자리(AppProperties).
+  # 🔴 W5 배포 시 둘 다 실도메인으로 교체(cookie-secure: true 와 같은 배포 체크리스트 항목).
+  app:
+    # 사용자 브라우저가 여는 **프론트 주소**. 메일 링크와 OAuth 성공/실패 후 화면이 여기 붙는다.
+    # 기본값은 Vite 개발 서버 기준.
+    base-url: ${APP_BASE_URL:http://localhost:5173}
+    # **이 서버 주소**. OAuth redirect_uri 가 여기 붙으며, 제공자 콘솔 등록값과 한 글자도 달라선 안 된다
+    # (be1-notes: {api-base-url}/api/v1/auth/oauth/{provider}/callback).
+    api-base-url: ${API_BASE_URL:http://localhost:8080}
   mail:
     # 발신 주소. 비우면 SMTP 계정을 그대로 쓴다 — 제공자가 인증된 주소만 발신을 허용하기 때문(MailConfig).
     from: ${MAIL_FROM:}
-    # 메일에 담을 링크의 앞부분 = **사용자 브라우저가 여는 프론트 주소**(API 주소가 아니다).
-    # 인증 링크는 프론트 화면으로 떨어지고 그 화면이 토큰을 들고 API를 부른다(ux-flow-map SCR-AUTH-VERIFY).
-    # 🔴 기본값은 Vite 개발 서버 기준이다 — W5 배포 시 실도메인으로 교체(배포 체크리스트 항목).
-    base-url: ${APP_BASE_URL:http://localhost:5173}
+  # 소셜 제공자 자격증명 (be1-notes — 3사 등록 완료 2026-07-18). 비어 있으면 그 제공자만 막힌다.
+  oauth:
+    clients:
+      google:
+        client-id: ${GOOGLE_CLIENT_ID:}
+        client-secret: ${GOOGLE_CLIENT_SECRET:}
+      naver:
+        client-id: ${NAVER_CLIENT_ID:}
+        client-secret: ${NAVER_CLIENT_SECRET:}
+      kakao:
+        client-id: ${KAKAO_CLIENT_ID:}
+        client-secret: ${KAKAO_CLIENT_SECRET:}
 
 logging:
   pattern:

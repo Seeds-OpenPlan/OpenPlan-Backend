@@ -44,6 +44,11 @@ public class JwtService {
     /** 토큰 종류 구분 클레임. access 를 refresh 자리에 밀어넣는 혼동을 서명 단계에서 끊는다. */
     private static final String CLAIM_TYPE = "typ";
     private static final String TYPE_ACCESS = "at";
+    /** OAuth state 전용 종류. access 를 state 자리에, 또는 그 반대로 쓰는 것을 서명 단계에서 끊는다. */
+    private static final String TYPE_STATE = "st";
+
+    /** state 수명 — 제공자 화면에서 로그인하는 시간이면 충분하고, 길수록 재사용 창이 넓어진다. */
+    private static final java.time.Duration OAUTH_STATE_TTL = java.time.Duration.ofMinutes(10);
 
     /** refresh 원문 바이트 수. 128비트로는 충분하나 여유를 둔다. */
     private static final int REFRESH_BYTES = 32;
@@ -55,6 +60,69 @@ public class JwtService {
     public JwtService(JwtProperties props, UserClock clock) {
         this.props = props;
         this.clock = clock;
+    }
+
+    // ------------------------------------------------------------ oauth state
+
+    /**
+     * OAuth {@code state} 발급 (ST-B1-03 · AUTH-02) — <b>서명된 자기완결 토큰</b>이다.
+     *
+     * <p>state는 인가 요청과 콜백이 같은 브라우저에서 이어졌음을 증명해 CSRF를 막는 값이다. 흔한 구현은
+     * 난수를 세션에 저장해 두고 콜백에서 대조하는 것인데, <b>이 서버는 무상태다</b>
+     * ({@code SessionCreationPolicy.STATELESS}). 그래서 저장 대신 서명한다 — 위조할 수 없으면
+     * 대조할 필요가 없다. 명세가 "state 서명"이라 적어 둔 것이 이 방식이다.
+     *
+     * <p>수명은 짧게 둔다. state는 사용자가 제공자 화면에서 로그인하는 동안만 살아 있으면 되고,
+     * 길게 두면 유출된 인가 링크의 재사용 창이 그만큼 넓어진다.
+     *
+     * @param provider 경로 변수 표기(google/naver/kakao). 콜백이 다른 제공자 경로로 오면 걸러 낸다
+     */
+    public String issueOAuthState(String provider) {
+        Instant now = clock.now();
+        JWTClaimsSet claims = new JWTClaimsSet.Builder()
+                .subject(provider)
+                .issuer(props.issuer())
+                .issueTime(Date.from(now))
+                .expirationTime(Date.from(now.plus(OAUTH_STATE_TTL)))
+                .jwtID(UUID.randomUUID().toString())   // 같은 제공자·같은 순간이어도 값이 겹치지 않게
+                .claim(CLAIM_TYPE, TYPE_STATE)
+                .build();
+        SignedJWT jwt = new SignedJWT(new JWSHeader(JWSAlgorithm.HS256), claims);
+        try {
+            jwt.sign(new MACSigner(secretBytes()));
+        } catch (JOSEException e) {
+            throw new IllegalStateException("state 서명 실패", e);
+        }
+        return jwt.serialize();
+    }
+
+    /**
+     * OAuth {@code state} 검증. access 토큰과 같은 이유로 <b>예외 대신 빈 값</b>을 돌려준다 —
+     * 위조·만료된 state로 오는 콜백은 오류 봉투가 아니라 302 실패 리다이렉트로 끝나야 하기 때문이다.
+     *
+     * @return 유효하면 발급 시 담은 provider 문자열
+     */
+    public Optional<String> parseOAuthState(String state) {
+        try {
+            SignedJWT jwt = SignedJWT.parse(state);
+            if (!jwt.verify(new MACVerifier(secretBytes()))) {
+                return Optional.empty();
+            }
+            JWTClaimsSet claims = jwt.getJWTClaimsSet();
+            if (!TYPE_STATE.equals(claims.getStringClaim(CLAIM_TYPE))) {
+                return Optional.empty();   // access 토큰을 state 자리에 밀어넣는 시도
+            }
+            if (!props.issuer().equals(claims.getIssuer())) {
+                return Optional.empty();
+            }
+            Date exp = claims.getExpirationTime();
+            if (exp == null || exp.toInstant().isBefore(clock.now())) {
+                return Optional.empty();
+            }
+            return Optional.ofNullable(claims.getSubject());
+        } catch (Exception e) {
+            return Optional.empty();
+        }
     }
 
     // ---------------------------------------------------------------- access

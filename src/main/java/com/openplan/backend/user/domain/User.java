@@ -46,6 +46,15 @@ public class User {
     private SocialProvider socialProvider;
 
     /**
+     * 제공자 측 고유 ID (ST-B1-03). {@code ux_users_social_identity}
+     * ({@code social_provider}, {@code social_provider_user_id}) UNIQUE 인덱스가 재로그인마다 계정이
+     * 새로 생기는 것을 DB 차원에서 막는다. <b>이메일이 아니라 이 값이 신원의 기준</b>이다 —
+     * 사용자가 제공자 쪽에서 이메일을 바꿔도 같은 계정으로 남아야 하기 때문이다.
+     */
+    @Column(name = "social_provider_user_id", length = 255)
+    private String socialProviderUserId;
+
+    /**
      * BCrypt 해시(NFR-003). 소셜 전용 계정은 null이며, LOCAL은 {@code ck_users_credential}이 non-null을 강제한다.
      * 원문 비밀번호는 어디에도 남기지 않는다.
      */
@@ -97,6 +106,32 @@ public class User {
         return u;
     }
 
+    /**
+     * 소셜 가입 계정 생성 (ST-B1-03 · AUTH-02).
+     *
+     * <p>로컬 가입과 두 가지가 다르다.
+     * <ul>
+     *   <li>{@code passwordHash}가 없다 — {@code ck_users_credential}이 SOCIAL에는 제공자·제공자 ID를
+     *       대신 요구한다. 그래서 이 계정은 로컬 로그인 경로로는 들어올 수 없다(자격 대조에서 걸러진다).</li>
+     *   <li><b>이메일 인증을 완료 상태로 시작한다.</b> 제공자가 이미 검증한 주소이고, 소셜 계정에는
+     *       AUTH-04(인증 메일) 경로가 없다 — 미인증으로 두면 403 E-AUTH-005에 갇혀 풀 방법이 없다.
+     *       🔴 계약에 명시된 바 없는 리드 판단이므로 확인 대상.</li>
+     * </ul>
+     */
+    public static User createSocial(String email, SocialProvider provider, String providerUserId, Instant now) {
+        User u = new User();
+        u.userId = UUID.randomUUID();
+        u.email = email;
+        u.passwordHash = null;
+        u.loginType = LoginType.SOCIAL;
+        u.socialProvider = provider;
+        u.socialProviderUserId = providerUserId;
+        u.emailVerified = true;
+        u.status = UserStatus.ACTIVE;
+        u.createdAt = now;
+        return u;
+    }
+
     /** 이메일 인증 완료(AUTH-04) — ②에서 호출된다. */
     public void verifyEmail() {
         this.emailVerified = true;
@@ -121,6 +156,10 @@ public class User {
 
     public SocialProvider getSocialProvider() {
         return socialProvider;
+    }
+
+    public String getSocialProviderUserId() {
+        return socialProviderUserId;
     }
 
     public String getPasswordHash() {

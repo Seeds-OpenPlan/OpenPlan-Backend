@@ -97,14 +97,26 @@ public class AuthService {
      */
     @Transactional
     public LoginResult login(LoginRequest request) {
+        User user = authenticate(request);
+        assertLoginAllowed(user, clock.now());
+        return establishSession(user);
+    }
+
+    /**
+     * 인증을 마친 사용자에게 세션을 개설한다 — <b>로컬 로그인과 소셜 로그인이 공유</b>한다(ST-B1-03).
+     *
+     * <p>"어떻게 본인임을 확인했는가"는 경로마다 다르지만(비밀번호 대조 vs 제공자 콜백),
+     * "확인된 뒤에 무엇을 발급하는가"는 같아야 한다. 두 곳에 각각 쓰면 한쪽만 고쳐지는 날이 온다.
+     *
+     * <p><b>호출 전에 상태 판정을 끝내 두어야 한다.</b> 이 메서드는 잠금·비활성·미인증을 보지 않는다 —
+     * 소셜 경로는 같은 상태라도 응답 형태가 다르기 때문이다(오류 봉투가 아니라 302).
+     */
+    @Transactional
+    public LoginResult establishSession(User user) {
         JwtService jwt = requireJwt();
         AuthCookies cookies = requireCookies();
-        Instant now = clock.now();
 
-        User user = authenticate(request);
-        assertLoginAllowed(user, now);
-
-        OpenedSession opened = openSession(jwt, user.getUserId(), null, now);
+        OpenedSession opened = openSession(jwt, user.getUserId(), null, clock.now());
 
         return new LoginResult(
                 assembleSession(user),
