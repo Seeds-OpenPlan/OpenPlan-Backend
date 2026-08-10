@@ -29,6 +29,21 @@ spring:
     enabled: true
     locations: classpath:db/migration
 
+  # 메일 발송 (ST-B1-04/05 — 이메일 인증·비밀번호 재설정). dev는 Gmail 앱 비밀번호,
+  # 운영은 AWS SES(프로덕션 액세스 승인 필요) — 호스트·자격증명만 바뀐다.
+  # 자격증명이 비어 있으면 실제 발송 대신 로그로 남긴다(MailConfig) — 팀원 로컬 보존(D-32).
+  mail:
+    host: ${MAIL_HOST:smtp.gmail.com}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+
 server:
   port: 8080
 
@@ -52,6 +67,13 @@ op:
       refresh-ttl: P14D
       cookie-secure: false   # 🔴 W5 배포(HTTPS) 시 true — 배포 체크리스트 항목
       issuer: openplan
+  mail:
+    # 발신 주소. 비우면 SMTP 계정을 그대로 쓴다 — 제공자가 인증된 주소만 발신을 허용하기 때문(MailConfig).
+    from: ${MAIL_FROM:}
+    # 메일에 담을 링크의 앞부분 = **사용자 브라우저가 여는 프론트 주소**(API 주소가 아니다).
+    # 인증 링크는 프론트 화면으로 떨어지고 그 화면이 토큰을 들고 API를 부른다(ux-flow-map SCR-AUTH-VERIFY).
+    # 🔴 기본값은 Vite 개발 서버 기준이다 — W5 배포 시 실도메인으로 교체(배포 체크리스트 항목).
+    base-url: ${APP_BASE_URL:http://localhost:5173}
 
 logging:
   pattern:
