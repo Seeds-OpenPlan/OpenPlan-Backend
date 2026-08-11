@@ -1956,9 +1956,8 @@ paths:
   /fixed-schedules:
     get:
       tags: [fixed-schedules]
-      x-implementation-status: not-implemented
       operationId: listFixedSchedules
-      summary: "[미구현] 고정 일정 목록"
+      summary: "고정 일정 목록 (weekday·시작 시각 순, status 필터)"
       x-lane: BE-2
       x-user-stories: [FIX-04]
       parameters:
@@ -1976,9 +1975,8 @@ paths:
                     items: { $ref: "#/components/schemas/FixedSchedule" }
     post:
       tags: [fixed-schedules]
-      x-implementation-status: not-implemented
       operationId: createFixedSchedule
-      summary: "[미구현] 고정 일정 생성 (이후 배치 불가 시간으로 반영)"
+      summary: "고정 일정 생성 (MANUAL — 이후 배치 불가 시간으로 반영)"
       x-lane: BE-2
       x-user-stories: [FIX-05, ONB-06]
       requestBody:
