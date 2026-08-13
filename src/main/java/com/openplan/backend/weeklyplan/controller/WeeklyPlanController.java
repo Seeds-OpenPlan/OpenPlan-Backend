@@ -2,11 +2,14 @@ package com.openplan.backend.weeklyplan.controller;
 
 import com.openplan.backend.global.response.ApiResponse;
 import com.openplan.backend.global.security.CurrentUser;
+import com.openplan.backend.weeklyplan.dto.ValidateWeeklyPlanRequest;
+import com.openplan.backend.weeklyplan.dto.ValidationReportResponse;
 import com.openplan.backend.weeklyplan.dto.WeeklyPlanCreateRequest;
 import com.openplan.backend.weeklyplan.dto.WeeklyPlanQuery;
 import com.openplan.backend.weeklyplan.dto.WeeklyPlanResponse;
 import com.openplan.backend.weeklyplan.dto.WeeklyPlanView;
 import com.openplan.backend.weeklyplan.service.WeeklyPlanService;
+import com.openplan.backend.weeklyplan.service.WeeklyPlanValidationService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -14,8 +17,10 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -28,13 +33,16 @@ import java.util.UUID;
  */
 @RestController
 @RequestMapping("/weekly-plans")
-@Tag(name = "weekly-plan", description = "주간 계획 생성·조회 (ST-B2-07)")
+@Tag(name = "weekly-plan", description = "주간 계획 생성·조회·검증·확정 (ST-B2-07·09)")
 public class WeeklyPlanController {
 
     private final WeeklyPlanService weeklyPlanService;
+    private final WeeklyPlanValidationService validationService;
 
-    public WeeklyPlanController(WeeklyPlanService weeklyPlanService) {
+    public WeeklyPlanController(WeeklyPlanService weeklyPlanService,
+                               WeeklyPlanValidationService validationService) {
         this.weeklyPlanService = weeklyPlanService;
+        this.validationService = validationService;
     }
 
     @PostMapping
@@ -57,5 +65,27 @@ public class WeeklyPlanController {
             @CurrentUser UUID userId,
             @Valid @ModelAttribute WeeklyPlanQuery query) {
         return ApiResponse.ok(weeklyPlanService.getByWeek(userId, query.getWeekStartDate()));
+    }
+
+    @PostMapping("/{planId}/validations")
+    @Operation(summary = "검증 실행 (SS-06 / PLAN-21·22)",
+            description = "본문 없음/virtualBlocks 없음 → 저장 초안 판정 + validation_issues 영속. "
+                    + "virtualBlocks 있음(빈 배열 포함) → dry-run(무영속). 위반은 오류가 아니다 — 200 ValidationReport.")
+    public ApiResponse<ValidationReportResponse> validate(
+            @CurrentUser UUID userId,
+            @PathVariable UUID planId,
+            @RequestBody(required = false) ValidateWeeklyPlanRequest request) {
+        return ApiResponse.ok(validationService.validate(userId, planId, request));
+    }
+
+    @PostMapping("/{planId}/confirmation")
+    @Operation(summary = "주간 계획 확정 (PLAN-03·28)",
+            description = "서버가 검증을 재실행해 스스로 판단(요청 본문 없음). 차단(BLOCK) 존재 시 409 E-PLAN-004, "
+                    + "없으면 status=CONFIRMED. 경고는 남아도 확정된다. Idempotency-Key 헤더 수용.")
+    public ApiResponse<WeeklyPlanResponse> confirm(
+            @CurrentUser UUID userId,
+            @PathVariable UUID planId,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
+        return ApiResponse.ok(validationService.confirm(userId, planId, idempotencyKey));
     }
 }
