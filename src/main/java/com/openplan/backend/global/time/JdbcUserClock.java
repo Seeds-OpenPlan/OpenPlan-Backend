@@ -40,6 +40,11 @@ public class JdbcUserClock implements UserClock {
         return LocalDate.now(zone);
     }
 
+    @Override
+    public ZoneId zoneOf(UUID userId) {
+        return resolveZone(userId);
+    }
+
     private ZoneId resolveZone(UUID userId) {
         String tz;
         try {

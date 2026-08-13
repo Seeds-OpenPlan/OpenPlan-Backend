@@ -2,6 +2,7 @@ package com.openplan.backend.global.time;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.UUID;
 
 /**
@@ -28,4 +29,10 @@ public interface UserClock {
      * 행 부재/미설정 시 {@code Asia/Seoul} fallback(Q-G).
      */
     LocalDate todayOf(UUID userId);
+
+    /**
+     * 사용자 timezone {@link ZoneId}. {@link #todayOf(UUID)}와 동일 소스({@code user_profiles.timezone})·
+     * 동일 fallback(Asia/Seoul). 요일·자정 경계 판정이 필요한 곳(예: 검증 스냅샷 조립 — ST-B2-09)이 쓴다.
+     */
+    ZoneId zoneOf(UUID userId);
 }
