@@ -1470,9 +1470,8 @@ paths:
   /tasks/{taskId}/execution-logs:
     post:
       tags: [tasks]
-      x-implementation-status: not-implemented
       operationId: recordExecution
-      summary: "[미구현] 실제 시간 기록 (5분 단위 — PLAN-15, 통계 즉시 반영)"
+      summary: "실제 시간 기록 (5분 단위 — PLAN-15). 수행 통계가 이 이력을 온더플라이 집계한다. 종료된 프로젝트의 태스크도 기록 가능(이미 일어난 일의 기록)"
       x-lane: BE-2
       x-user-stories: [PLAN-15, DASH-05]
       parameters: [{ $ref: "#/components/parameters/TaskId" }]
