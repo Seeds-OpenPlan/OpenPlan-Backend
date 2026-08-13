@@ -104,4 +104,18 @@ public class FixedSchedule {
         fs.createdAt = createdAt;
         return fs;
     }
+
+    /**
+     * 편집 (FIX-06) — 전체 교체. 검증 통과값으로 편집 가능 필드를 갈아끼운다. source·status·connectionId는
+     * 편집으로 못 바꾼다(서버 관리·출처 불변). version은 flush 시 @Version이 증가시킨다(낙관락).
+     */
+    public void edit(String title, Weekday weekday, LocalTime startTime, LocalTime endTime,
+                     LocalDate startDate, LocalDate endDate) {
+        this.title = title;
+        this.weekday = weekday;
+        this.startTime = startTime;
+        this.endTime = endTime;
+        this.startDate = startDate;
+        this.endDate = endDate;
+    }
 }
