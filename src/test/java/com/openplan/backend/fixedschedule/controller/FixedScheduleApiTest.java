@@ -16,6 +16,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.UUID;
 
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -149,8 +150,25 @@ class FixedScheduleApiTest {
     }
 
     @Test
-    @DisplayName("전체 교체 — 생략한 기간(startDate/endDate)은 null로 교체됨")
-    void updateReplacesDateRangeWithNull() throws Exception {
+    @DisplayName("부분 수정 — title만 보내면 나머지(요일·시각)는 그대로 유지")
+    void updateTitleOnly() throws Exception {
+        UUID id = create(MAIN, "수영", "MON", "09:00", "10:00");
+
+        mockMvc.perform(patch(PATH + "/" + id).header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"title":"수영가기","version":0}"""))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.title").value("수영가기")) // 바뀜
+                .andExpect(jsonPath("$.data.weekday").value("MON"))    // 유지
+                .andExpect(jsonPath("$.data.startTime").value("09:00:00")) // 유지
+                .andExpect(jsonPath("$.data.endTime").value("10:00:00"))   // 유지
+                .andExpect(jsonPath("$.data.version").value(1));
+    }
+
+    @Test
+    @DisplayName("부분 수정 — 생략한 기간(startDate/endDate)은 기존 값 유지")
+    void updateKeepsOmittedDateRange() throws Exception {
         String body = mockMvc.perform(post(PATH).header("X-Dev-User", MAIN.toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -163,10 +181,45 @@ class FixedScheduleApiTest {
         mockMvc.perform(patch(PATH + "/" + id).header("X-Dev-User", MAIN.toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"title":"특강","weekday":"WED","startTime":"14:00","endTime":"16:00","version":0}"""))
+                                {"title":"특강(변경)","version":0}"""))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.startDate").value("2026-09-01")) // 유지
+                .andExpect(jsonPath("$.data.endDate").value("2026-11-30"));  // 유지
+    }
+
+    @Test
+    @DisplayName("부분 수정 — startDate를 명시적 null로 보내면 해제됨")
+    void updateClearsDateWithExplicitNull() throws Exception {
+        String body = mockMvc.perform(post(PATH).header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"title":"특강","weekday":"WED","startTime":"14:00","endTime":"16:00",
+                                 "startDate":"2026-09-01","endDate":"2026-11-30"}"""))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        UUID id = UUID.fromString(com.jayway.jsonpath.JsonPath.read(body, "$.data.fixedScheduleId"));
+
+        mockMvc.perform(patch(PATH + "/" + id).header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"startDate":null,"endDate":null,"version":0}"""))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.startDate").doesNotExist())
                 .andExpect(jsonPath("$.data.endDate").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("부분 수정 — 한쪽 시각만 바꿔 시작>=종료가 되면 422 (병합 쌍 검증)")
+    void updatePartialTimeStillValidatesPair() throws Exception {
+        UUID id = create(MAIN, "수업", "MON", "09:00", "10:00");
+
+        mockMvc.perform(patch(PATH + "/" + id).header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"startTime":"11:00","version":0}""")) // endTime(10:00)은 유지 → 11:00 >= 10:00
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.code").value("E-COM-009"))
+                .andExpect(jsonPath("$.error.details.fields[0].field").value("endTime"));
     }
 
     @Test
@@ -233,6 +286,61 @@ class FixedScheduleApiTest {
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.error.code").value("E-COM-009"))
                 .andExpect(jsonPath("$.error.details.fields[0].field").value("startTime"));
+    }
+
+    // ---------- DELETE 삭제 ----------
+
+    @Test
+    @DisplayName("삭제 → 204 · 이후 목록에서 사라짐")
+    void deleteOk() throws Exception {
+        UUID id = create(MAIN, "수업", "MON", "09:00", "10:00");
+
+        mockMvc.perform(delete(PATH + "/" + id).header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isNoContent());
+
+        mockMvc.perform(get(PATH).header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(0));
+    }
+
+    @Test
+    @DisplayName("없는 id 삭제 → 404 E-COM-004 (재삭제도 404 — 멱등 아님)")
+    void deleteNotFound() throws Exception {
+        mockMvc.perform(delete(PATH + "/" + UUID.randomUUID()).header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("E-COM-004"));
+    }
+
+    @Test
+    @DisplayName("타인 고정 일정 삭제 → 404 (존재 은닉, 남의 것 안 지워짐)")
+    void deleteOtherUserHidden() throws Exception {
+        UUID id = create(OTHER, "남의수업", "MON", "09:00", "10:00");
+
+        mockMvc.perform(delete(PATH + "/" + id).header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("E-COM-004"));
+
+        mockMvc.perform(get(PATH).header("X-Dev-User", OTHER.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1)); // 남의 것은 그대로
+    }
+
+    @Test
+    @DisplayName("삭제 시 주차 예외 행도 FK CASCADE로 함께 삭제됨")
+    void deleteCascadesWeekExceptions() throws Exception {
+        UUID id = create(MAIN, "수업", "MON", "09:00", "10:00");
+        jdbc.update("""
+                INSERT INTO fixed_schedule_week_exceptions (exception_id, fixed_schedule_id, week_start_date)
+                VALUES (?, ?, ?)
+                """, UUID.randomUUID(), id, java.time.LocalDate.of(2026, 8, 17));
+
+        mockMvc.perform(delete(PATH + "/" + id).header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isNoContent());
+
+        Integer remaining = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM fixed_schedule_week_exceptions WHERE fixed_schedule_id = ?",
+                Integer.class, id);
+        org.junit.jupiter.api.Assertions.assertEquals(0, remaining);
     }
 
     // ---------- GET 목록 ----------
