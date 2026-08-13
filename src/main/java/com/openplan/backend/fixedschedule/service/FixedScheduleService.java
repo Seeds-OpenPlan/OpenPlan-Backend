@@ -3,13 +3,17 @@ package com.openplan.backend.fixedschedule.service;
 import com.openplan.backend.common.Weekday;
 import com.openplan.backend.fixedschedule.domain.FixedSchedule;
 import com.openplan.backend.fixedschedule.domain.FixedScheduleStatus;
+import com.openplan.backend.fixedschedule.domain.FixedScheduleWeekException;
 import com.openplan.backend.fixedschedule.dto.FixedScheduleCreateRequest;
 import com.openplan.backend.fixedschedule.dto.FixedScheduleResponse;
 import com.openplan.backend.fixedschedule.dto.FixedScheduleUpdateRequest;
+import com.openplan.backend.fixedschedule.dto.WeekExceptionResponse;
 import com.openplan.backend.fixedschedule.repository.FixedScheduleRepository;
+import com.openplan.backend.fixedschedule.repository.FixedScheduleWeekExceptionRepository;
 import com.openplan.backend.global.error.ErrorCode;
 import com.openplan.backend.global.error.OpenPlanException;
 import com.openplan.backend.global.time.UserClock;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -30,11 +34,15 @@ import java.util.UUID;
 public class FixedScheduleService {
 
     private final FixedScheduleRepository repository;
+    private final FixedScheduleWeekExceptionRepository weekExceptionRepository;
     private final FixedScheduleValidator validator;
     private final UserClock clock;
 
-    public FixedScheduleService(FixedScheduleRepository repository, FixedScheduleValidator validator, UserClock clock) {
+    public FixedScheduleService(FixedScheduleRepository repository,
+                                FixedScheduleWeekExceptionRepository weekExceptionRepository,
+                                FixedScheduleValidator validator, UserClock clock) {
         this.repository = repository;
+        this.weekExceptionRepository = weekExceptionRepository;
         this.validator = validator;
         this.clock = clock;
     }
@@ -116,6 +124,48 @@ public class FixedScheduleService {
         FixedSchedule fs = repository.findByIdAndUserId(id, userId)
                 .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404
         repository.delete(fs);
+    }
+
+    /**
+     * 주차 한정 비활성화 (PLAN-33). <b>멱등</b> — 없으면 생성(201), 이미 있으면 기존 반환(200). 그 주에서만 이 고정 일정이
+     * 배치 제약·V2 판정에서 제외된다(다른 주 무영향). 404(부재·타인)는 부모 고정 일정 소유 확인으로 낸다.
+     * 동시 요청 경합은 DB UNIQUE(fixed_schedule_id, week_start_date)가 백스톱 — 충돌 시 기존(200)으로 수렴.
+     */
+    @Transactional
+    public AddWeekExceptionResult addWeekException(UUID userId, UUID fixedScheduleId, LocalDate weekStartDate) {
+        requireOwned(userId, fixedScheduleId); // 404
+
+        WeekExceptionResponse response = new WeekExceptionResponse(fixedScheduleId, weekStartDate);
+        if (weekExceptionRepository.existsByFixedScheduleIdAndWeekStartDate(fixedScheduleId, weekStartDate)) {
+            return new AddWeekExceptionResult(response, false); // 200 — 이미 존재(멱등)
+        }
+        try {
+            weekExceptionRepository.saveAndFlush(
+                    FixedScheduleWeekException.create(fixedScheduleId, weekStartDate));
+            return new AddWeekExceptionResult(response, true); // 201
+        } catch (DataIntegrityViolationException race) { // 동시 생성 경합 → 기존으로 수렴
+            return new AddWeekExceptionResult(response, false); // 200
+        }
+    }
+
+    /** 주차 예외 생성 결과 — 컨트롤러가 {@code created}로 201(신규)/200(기존)을 가른다. */
+    public record AddWeekExceptionResult(WeekExceptionResponse response, boolean created) {
+    }
+
+    /**
+     * 주차 한정 재활성화 (PLAN-34). <b>멱등</b> — 예외가 있으면 삭제, 없어도 204(무해). 그 주 배치 제약이 다시 적용된다.
+     * 404(부재·타인)는 부모 고정 일정 소유 확인으로 낸다.
+     */
+    @Transactional
+    public void removeWeekException(UUID userId, UUID fixedScheduleId, LocalDate weekStartDate) {
+        requireOwned(userId, fixedScheduleId); // 404
+        weekExceptionRepository.deleteByFixedScheduleIdAndWeekStartDate(fixedScheduleId, weekStartDate);
+    }
+
+    /** 부모 고정 일정 소유 확인 — 부재·타인 → 404 E-COM-004(존재 은닉). */
+    private void requireOwned(UUID userId, UUID fixedScheduleId) {
+        repository.findByIdAndUserId(fixedScheduleId, userId)
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004));
     }
 
     /**

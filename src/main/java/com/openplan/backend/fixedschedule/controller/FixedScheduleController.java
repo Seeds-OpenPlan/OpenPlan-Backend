@@ -4,12 +4,15 @@ import com.openplan.backend.fixedschedule.domain.FixedScheduleStatus;
 import com.openplan.backend.fixedschedule.dto.FixedScheduleCreateRequest;
 import com.openplan.backend.fixedschedule.dto.FixedScheduleResponse;
 import com.openplan.backend.fixedschedule.dto.FixedScheduleUpdateRequest;
+import com.openplan.backend.fixedschedule.dto.WeekExceptionCreateRequest;
+import com.openplan.backend.fixedschedule.dto.WeekExceptionResponse;
 import com.openplan.backend.fixedschedule.service.FixedScheduleService;
 import com.openplan.backend.global.response.ApiResponse;
 import com.openplan.backend.global.security.CurrentUser;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -22,6 +25,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
@@ -80,6 +84,31 @@ public class FixedScheduleController {
             @CurrentUser UUID userId,
             @PathVariable UUID fixedScheduleId) {
         fixedScheduleService.delete(userId, fixedScheduleId);
+        return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/{fixedScheduleId}/week-exceptions")
+    @Operation(summary = "주차 한정 비활성화 (PLAN-33)",
+            description = "그 주만 이 고정 일정을 배치 제약에서 제외(다른 주 무영향). 멱등 — 신규 201·기존 200. "
+                    + "고정 일정 부재·타인 → 404.")
+    public ResponseEntity<ApiResponse<WeekExceptionResponse>> addWeekException(
+            @CurrentUser UUID userId,
+            @PathVariable UUID fixedScheduleId,
+            @Valid @RequestBody WeekExceptionCreateRequest request) {
+        FixedScheduleService.AddWeekExceptionResult result =
+                fixedScheduleService.addWeekException(userId, fixedScheduleId, request.weekStartDate());
+        HttpStatus status = result.created() ? HttpStatus.CREATED : HttpStatus.OK;
+        return ResponseEntity.status(status).body(ApiResponse.ok(result.response()));
+    }
+
+    @DeleteMapping("/{fixedScheduleId}/week-exceptions/{weekStartDate}")
+    @Operation(summary = "주차 한정 재활성화 (PLAN-34)",
+            description = "그 주 예외를 제거해 배치 제약을 다시 적용. 멱등 — 예외 부재여도 204. 고정 일정 부재·타인 → 404.")
+    public ResponseEntity<Void> removeWeekException(
+            @CurrentUser UUID userId,
+            @PathVariable UUID fixedScheduleId,
+            @PathVariable @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate weekStartDate) {
+        fixedScheduleService.removeWeekException(userId, fixedScheduleId, weekStartDate);
         return ResponseEntity.noContent().build();
     }
 }
