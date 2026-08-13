@@ -5,12 +5,16 @@ import com.openplan.backend.fixedschedule.domain.FixedSchedule;
 import com.openplan.backend.fixedschedule.domain.FixedScheduleStatus;
 import com.openplan.backend.fixedschedule.dto.FixedScheduleCreateRequest;
 import com.openplan.backend.fixedschedule.dto.FixedScheduleResponse;
+import com.openplan.backend.fixedschedule.dto.FixedScheduleUpdateRequest;
 import com.openplan.backend.fixedschedule.repository.FixedScheduleRepository;
+import com.openplan.backend.global.error.ErrorCode;
+import com.openplan.backend.global.error.OpenPlanException;
 import com.openplan.backend.global.time.UserClock;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -48,6 +52,30 @@ public class FixedScheduleService {
                 userId, title, weekday, req.startTime(), req.endTime(),
                 req.startDate(), req.endDate(), clock.now());
         repository.save(fs);
+        return FixedScheduleResponse.from(fs);
+    }
+
+    /**
+     * 고정 일정 편집 (FIX-06). PUT-style 전체 교체. 순서: 404(부재·타인) → 409(version 낙관락, latest 동봉) →
+     * 422(필드). 편집 후 저장된 주간 계획 재검증(FIX-07)은 검증 엔진 라우트(ST-B2-09) 소관 — 여기선 값만 갱신한다.
+     */
+    @Transactional
+    public FixedScheduleResponse update(UUID userId, UUID id, FixedScheduleUpdateRequest req) {
+        FixedSchedule fs = repository.findByIdAndUserId(id, userId)
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404
+
+        if (req.version() != fs.getVersion()) { // 409 — 최신본 동봉(SYS-05)
+            throw new OpenPlanException(ErrorCode.E_COM_006,
+                    Map.of("latest", FixedScheduleResponse.from(fs)));
+        }
+
+        String title = validator.validateTitle(req.title());
+        Weekday weekday = validator.resolveWeekday(req.weekday());
+        validator.validateTimes(req.startTime(), req.endTime());
+        validator.validateDates(req.startDate(), req.endDate());
+
+        fs.edit(title, weekday, req.startTime(), req.endTime(), req.startDate(), req.endDate());
+        repository.flush(); // @Version 증가를 응답에 반영. 잔여 경합 → OptimisticLockException → 409
         return FixedScheduleResponse.from(fs);
     }
 

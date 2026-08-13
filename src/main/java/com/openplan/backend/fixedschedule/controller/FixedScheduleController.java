@@ -3,6 +3,7 @@ package com.openplan.backend.fixedschedule.controller;
 import com.openplan.backend.fixedschedule.domain.FixedScheduleStatus;
 import com.openplan.backend.fixedschedule.dto.FixedScheduleCreateRequest;
 import com.openplan.backend.fixedschedule.dto.FixedScheduleResponse;
+import com.openplan.backend.fixedschedule.dto.FixedScheduleUpdateRequest;
 import com.openplan.backend.fixedschedule.service.FixedScheduleService;
 import com.openplan.backend.global.response.ApiResponse;
 import com.openplan.backend.global.security.CurrentUser;
@@ -12,6 +13,8 @@ import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -55,5 +58,16 @@ public class FixedScheduleController {
             @CurrentUser UUID userId,
             @RequestParam(required = false) FixedScheduleStatus status) {
         return ApiResponse.ok(fixedScheduleService.list(userId, status));
+    }
+
+    @PatchMapping("/{fixedScheduleId}")
+    @Operation(summary = "고정 일정 편집 (FIX-06)",
+            description = "제목·요일·시각·기간 전체 교체(version 필수). 부재·타인 → 404, 동시 수정 충돌 → 409(latest 동봉), "
+                    + "값 오류 → 422. 편집 시 저장된 주간 계획 배치 불가 시간이 갱신된다.")
+    public ApiResponse<FixedScheduleResponse> update(
+            @CurrentUser UUID userId,
+            @PathVariable UUID fixedScheduleId,
+            @Valid @RequestBody FixedScheduleUpdateRequest request) {
+        return ApiResponse.ok(fixedScheduleService.update(userId, fixedScheduleId, request));
     }
 }

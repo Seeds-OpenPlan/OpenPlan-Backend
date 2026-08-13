@@ -5,6 +5,7 @@ import com.openplan.backend.fixedschedule.domain.FixedScheduleStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -18,4 +19,7 @@ public interface FixedScheduleRepository extends JpaRepository<FixedSchedule, UU
 
     /** 목록(FIX-04) — status 필터. weekday ASC, start_time ASC. */
     List<FixedSchedule> findByUserIdAndStatusOrderByWeekdayAscStartTimeAsc(UUID userId, FixedScheduleStatus status);
+
+    /** 소유자 스코프 단건 — 편집·삭제 공용. 부재·타인 → empty → 404 E-COM-004(존재 은닉). */
+    Optional<FixedSchedule> findByIdAndUserId(UUID id, UUID userId);
 }
