@@ -7,6 +7,7 @@ import org.springframework.context.annotation.Primary;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.UUID;
 
 /**
@@ -34,6 +35,11 @@ public class FixedClockConfig {
             @Override
             public LocalDate todayOf(UUID userId) {
                 return FIXED_TODAY;
+            }
+
+            @Override
+            public ZoneId zoneOf(UUID userId) {
+                return ZoneId.of("Asia/Seoul");
             }
         };
     }
