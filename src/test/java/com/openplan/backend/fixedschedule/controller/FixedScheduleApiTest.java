@@ -374,6 +374,24 @@ class FixedScheduleApiTest {
     }
 
     @Test
+    @DisplayName("이미 예외 행이 있어도 재삽입 → 200 (ON CONFLICT: rollback-only 500 회귀 방지)")
+    void addWeekExceptionOnConflictNoRollbackError() throws Exception {
+        UUID id = create(MAIN, "수업", "MON", "09:00", "10:00");
+        // '다른 요청이 먼저 이긴' 상태를 흉내 — 유니크 충돌을 유발하는 행을 미리 심는다
+        jdbc.update("""
+                INSERT INTO fixed_schedule_week_exceptions (exception_id, fixed_schedule_id, week_start_date)
+                VALUES (?, ?, ?)
+                """, UUID.randomUUID(), id, java.time.LocalDate.of(2026, 8, 17));
+
+        addException(id, "2026-08-17").andExpect(status().isOk()); // 500 아님 — ON CONFLICT DO NOTHING
+
+        Integer count = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM fixed_schedule_week_exceptions WHERE fixed_schedule_id = ?",
+                Integer.class, id);
+        org.junit.jupiter.api.Assertions.assertEquals(1, count); // 중복 삽입 안 됨
+    }
+
+    @Test
     @DisplayName("없는 고정 일정에 주차 예외 → 404")
     void addWeekExceptionFixedNotFound() throws Exception {
         mockMvc.perform(post(PATH + "/" + UUID.randomUUID() + "/week-exceptions").header("X-Dev-User", MAIN.toString())
