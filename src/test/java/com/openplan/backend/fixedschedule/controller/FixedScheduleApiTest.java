@@ -343,6 +343,106 @@ class FixedScheduleApiTest {
         org.junit.jupiter.api.Assertions.assertEquals(0, remaining);
     }
 
+    // ---------- 주차 예외 (PLAN-33/34) ----------
+
+    @Test
+    @DisplayName("주차 비활성화 → 201 · data{fixedScheduleId,weekStartDate}")
+    void addWeekExceptionCreated() throws Exception {
+        UUID id = create(MAIN, "수업", "MON", "09:00", "10:00");
+
+        mockMvc.perform(post(PATH + "/" + id + "/week-exceptions").header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"weekStartDate":"2026-08-17"}"""))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.fixedScheduleId").value(id.toString()))
+                .andExpect(jsonPath("$.data.weekStartDate").value("2026-08-17"));
+    }
+
+    @Test
+    @DisplayName("주차 비활성화 재요청 → 멱등: 200 (오류 아님, 중복 행 없음)")
+    void addWeekExceptionIdempotent() throws Exception {
+        UUID id = create(MAIN, "수업", "MON", "09:00", "10:00");
+        addException(id, "2026-08-17").andExpect(status().isCreated());
+
+        addException(id, "2026-08-17").andExpect(status().isOk()); // 201 아님
+
+        Integer count = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM fixed_schedule_week_exceptions WHERE fixed_schedule_id = ?",
+                Integer.class, id);
+        org.junit.jupiter.api.Assertions.assertEquals(1, count); // 중복 행 없음
+    }
+
+    @Test
+    @DisplayName("없는 고정 일정에 주차 예외 → 404")
+    void addWeekExceptionFixedNotFound() throws Exception {
+        mockMvc.perform(post(PATH + "/" + UUID.randomUUID() + "/week-exceptions").header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"weekStartDate":"2026-08-17"}"""))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("E-COM-004"));
+    }
+
+    @Test
+    @DisplayName("타인 고정 일정에 주차 예외 → 404 (존재 은닉)")
+    void addWeekExceptionOtherUserHidden() throws Exception {
+        UUID id = create(OTHER, "남의수업", "MON", "09:00", "10:00");
+
+        mockMvc.perform(post(PATH + "/" + id + "/week-exceptions").header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"weekStartDate":"2026-08-17"}"""))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("E-COM-004"));
+    }
+
+    @Test
+    @DisplayName("weekStartDate 누락 → 400")
+    void addWeekExceptionRequiresDate() throws Exception {
+        UUID id = create(MAIN, "수업", "MON", "09:00", "10:00");
+
+        mockMvc.perform(post(PATH + "/" + id + "/week-exceptions").header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("E-COM-001"));
+    }
+
+    @Test
+    @DisplayName("주차 재활성화 → 204 · 예외 행 삭제됨")
+    void removeWeekExceptionOk() throws Exception {
+        UUID id = create(MAIN, "수업", "MON", "09:00", "10:00");
+        addException(id, "2026-08-17").andExpect(status().isCreated());
+
+        mockMvc.perform(delete(PATH + "/" + id + "/week-exceptions/2026-08-17").header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isNoContent());
+
+        Integer count = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM fixed_schedule_week_exceptions WHERE fixed_schedule_id = ?",
+                Integer.class, id);
+        org.junit.jupiter.api.Assertions.assertEquals(0, count);
+    }
+
+    @Test
+    @DisplayName("주차 재활성화 — 예외 없어도 204 (멱등)")
+    void removeWeekExceptionIdempotent() throws Exception {
+        UUID id = create(MAIN, "수업", "MON", "09:00", "10:00");
+
+        mockMvc.perform(delete(PATH + "/" + id + "/week-exceptions/2026-08-17").header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isNoContent());
+    }
+
+    @Test
+    @DisplayName("타인 고정 일정의 주차 예외 삭제 → 404 (존재 은닉)")
+    void removeWeekExceptionOtherUserHidden() throws Exception {
+        UUID id = create(OTHER, "남의수업", "MON", "09:00", "10:00");
+
+        mockMvc.perform(delete(PATH + "/" + id + "/week-exceptions/2026-08-17").header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("E-COM-004"));
+    }
+
     // ---------- GET 목록 ----------
 
     @Test
@@ -384,6 +484,14 @@ class FixedScheduleApiTest {
     }
 
     // ---------- fixtures ----------
+
+    private org.springframework.test.web.servlet.ResultActions addException(UUID fixedScheduleId, String weekStartDate)
+            throws Exception {
+        return mockMvc.perform(post(PATH + "/" + fixedScheduleId + "/week-exceptions")
+                .header("X-Dev-User", MAIN.toString())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"weekStartDate\":\"" + weekStartDate + "\"}"));
+    }
 
     private UUID create(UUID userId, String title, String weekday, String start, String end) throws Exception {
         String body = mockMvc.perform(post(PATH).header("X-Dev-User", userId.toString())
