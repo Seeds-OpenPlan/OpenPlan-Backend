@@ -10,6 +10,7 @@ import com.openplan.backend.project.service.ProjectAutoCloseEvaluator;
 import com.openplan.backend.project.service.port.WeeklyPlanTotalsRecalculator;
 import com.openplan.backend.task.domain.Task;
 import com.openplan.backend.task.domain.TaskStatus;
+import com.openplan.backend.task.domain.WbsItem;
 import com.openplan.backend.task.dto.TaskCreateRequest;
 import com.openplan.backend.task.dto.TaskListQuery;
 import com.openplan.backend.task.dto.TaskResponse;
@@ -17,8 +18,11 @@ import com.openplan.backend.task.dto.TaskStatusToggleRequest;
 import com.openplan.backend.task.dto.TaskUpdateRequest;
 import com.openplan.backend.task.dto.UnassignedTaskQuery;
 import com.openplan.backend.task.dto.UnassignedTaskResponse;
+import com.openplan.backend.task.dto.WbsItemResponse;
+import com.openplan.backend.task.dto.WbsRangeRequest;
 import com.openplan.backend.task.repository.OwnedTask;
 import com.openplan.backend.task.repository.TaskRepository;
+import com.openplan.backend.task.repository.WbsItemRepository;
 import com.openplan.backend.task.service.port.PlanBlockStatusMirror;
 import com.openplan.backend.task.service.port.TaskCategoryChecker;
 import org.springframework.data.domain.Page;
@@ -51,12 +55,14 @@ public class TaskService {
     private final TaskCategoryChecker categoryChecker;
     private final PlanBlockStatusMirror planBlockStatusMirror;
     private final WeeklyPlanTotalsRecalculator weeklyPlanTotalsRecalculator;
+    private final WbsItemRepository wbsItemRepository;
     private final UserClock clock;
 
     public TaskService(TaskRepository taskRepository, TaskValidator validator,
                        ProjectRepository projectRepository, ProjectAutoCloseEvaluator autoCloseEvaluator,
                        TaskCategoryChecker categoryChecker, PlanBlockStatusMirror planBlockStatusMirror,
-                       WeeklyPlanTotalsRecalculator weeklyPlanTotalsRecalculator, UserClock clock) {
+                       WeeklyPlanTotalsRecalculator weeklyPlanTotalsRecalculator,
+                       WbsItemRepository wbsItemRepository, UserClock clock) {
         this.taskRepository = taskRepository;
         this.validator = validator;
         this.projectRepository = projectRepository;
@@ -64,6 +70,7 @@ public class TaskService {
         this.categoryChecker = categoryChecker;
         this.planBlockStatusMirror = planBlockStatusMirror;
         this.weeklyPlanTotalsRecalculator = weeklyPlanTotalsRecalculator;
+        this.wbsItemRepository = wbsItemRepository;
         this.clock = clock;
     }
 
@@ -243,5 +250,35 @@ public class TaskService {
         taskRepository.delete(owned.task());
         taskRepository.flush();                                    // C1 — cascade가 DB 반영되어야 재계산이 삭제 후를 봄
         weeklyPlanTotalsRecalculator.recalculate(affected);       // TB-4 잔여 블록 절대값 재계산 (AC-D-2)
+    }
+
+    /**
+     * WBS 기간 설정/조정 (ST-B2-05 / PUT — 업서트). 검사 순서 404 → 422 CLOSED → 422 E-WBS-001은
+     * update/toggleCompletion과 동일 관례(D-10이 값 검증보다 먼저). version 검사는 없다 —
+     * wbs_items에 낙관락 컬럼이 없고 정본 요청 바디에도 version이 없다(WbsItem 클래스 상단 참고,
+     * 업서트라 last-write-wins가 설계 의도).
+     */
+    @Transactional
+    public WbsItemResponse saveWbsRange(UUID userId, UUID taskId, WbsRangeRequest req) {
+        autoCloseEvaluator.closeOverdue(userId);
+
+        OwnedTask owned = taskRepository.findOwnedWithProjectStatus(taskId, userId)
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404 (존재 은닉)
+        Task task = owned.task();
+
+        if (owned.projectStatus() == ProjectStatus.CLOSED) { // 422 — 값 검증보다 먼저 (D-10)
+            throw new OpenPlanException(ErrorCode.E_PROJ_005,
+                    Map.of("fields", List.of(Map.of("field", "project.status"))));
+        }
+
+        validator.validateWbsRange(req.startDate(), req.endDate()); // 422 E-WBS-001
+
+        // 원자적 업서트(경합 안전) 후 재조회 — 근거는 WbsItemRepository.upsert 참고.
+        wbsItemRepository.upsert(task.getProjectId(), taskId, req.startDate(), req.endDate());
+        WbsItem saved = wbsItemRepository.findByTaskId(taskId)
+                .orElseThrow(() -> new IllegalStateException(
+                        "upsert 직후 wbs_items 재조회 실패 — task_id=" + taskId)); // 발생 시 버그(같은 tx 내 재조회)
+
+        return WbsItemResponse.of(saved, task.getTitle());
     }
 }
