@@ -1998,7 +1998,7 @@ paths:
     patch:
       tags: [fixed-schedules]
       operationId: updateFixedSchedule
-      summary: "편집 (FIX-06, version 필수 · 전체 교체). 저장된 주간 계획 재검증 트리거 (FIX-07)는 검증 엔진 라우트 완성 후. 주차 한정 비활성화는 week-exceptions 리소스 (PLAN-33/34)"
+      summary: "편집 (FIX-06, version 필수 · 부분 수정 PATCH — 담겨 온 필드만 변경). 저장된 주간 계획 재검증 트리거 (FIX-07)는 검증 엔진 라우트 완성 후. 주차 한정 비활성화는 week-exceptions 리소스 (PLAN-33/34)"
       x-lane: BE-2
       x-user-stories: [FIX-06]
       parameters: [{ $ref: "#/components/parameters/FixedScheduleId" }]

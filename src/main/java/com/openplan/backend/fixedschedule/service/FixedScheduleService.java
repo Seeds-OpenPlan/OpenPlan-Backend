@@ -13,6 +13,8 @@ import com.openplan.backend.global.time.UserClock;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -56,25 +58,50 @@ public class FixedScheduleService {
     }
 
     /**
-     * 고정 일정 편집 (FIX-06). PUT-style 전체 교체. 순서: 404(부재·타인) → 409(version 낙관락, latest 동봉) →
-     * 422(필드). 편집 후 저장된 주간 계획 재검증(FIX-07)은 검증 엔진 라우트(ST-B2-09) 소관 — 여기선 값만 갱신한다.
+     * 고정 일정 편집 (FIX-06). <b>true PATCH(부분 수정)</b> — 담겨 온 필드만 검증·반영, 안 담긴 필드는 기존 값 유지.
+     * 순서: 404(부재·타인) → 409(version 낙관락, latest 동봉) → 422(필드). 편집 후 저장된 주간 계획 재검증(FIX-07)은
+     * 검증 엔진 라우트(ST-B2-09) 소관 — 여기선 값만 갱신한다.
      */
     @Transactional
     public FixedScheduleResponse update(UUID userId, UUID id, FixedScheduleUpdateRequest req) {
         FixedSchedule fs = repository.findByIdAndUserId(id, userId)
                 .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404
 
-        if (req.version() != fs.getVersion()) { // 409 — 최신본 동봉(SYS-05)
+        if (req.getVersion() != fs.getVersion()) { // 409 — 최신본 동봉(SYS-05)
             throw new OpenPlanException(ErrorCode.E_COM_006,
                     Map.of("latest", FixedScheduleResponse.from(fs)));
         }
 
-        String title = validator.validateTitle(req.title());
-        Weekday weekday = validator.resolveWeekday(req.weekday());
-        validator.validateTimes(req.startTime(), req.endTime());
-        validator.validateDates(req.startDate(), req.endDate());
+        // 부분 병합 — 담겨 온 필드만 검증·반영, 안 담긴 필드는 기존 값 유지(true PATCH).
+        String title = fs.getTitle();
+        if (req.isProvided("title")) {
+            title = validator.validateTitle(req.getTitle());           // 422 — 생성과 동일 코드
+        }
+        Weekday weekday = fs.getWeekday();
+        if (req.isProvided("weekday")) {
+            weekday = validator.resolveWeekday(req.getWeekday());       // 422
+        }
 
-        fs.edit(title, weekday, req.startTime(), req.endTime(), req.startDate(), req.endDate());
+        // 시각은 쌍 규칙(시작<종료)이라, 한쪽만 바뀌어도 병합된 최종 쌍으로 검증한다.
+        LocalTime startTime = fs.getStartTime();
+        LocalTime endTime = fs.getEndTime();
+        if (req.isProvided("startTime")) {
+            startTime = req.getStartTime();
+        }
+        if (req.isProvided("endTime")) {
+            endTime = req.getEndTime();
+        }
+        if (req.isProvided("startTime") || req.isProvided("endTime")) {
+            validator.validateTimes(startTime, endTime);               // 422
+        }
+
+        LocalDate startDate = req.isProvided("startDate") ? req.getStartDate() : fs.getStartDate();
+        LocalDate endDate = req.isProvided("endDate") ? req.getEndDate() : fs.getEndDate();
+        if (req.isProvided("startDate") || req.isProvided("endDate")) {
+            validator.validateDates(startDate, endDate);               // 422
+        }
+
+        fs.edit(title, weekday, startTime, endTime, startDate, endDate);
         repository.flush(); // @Version 증가를 응답에 반영. 잔여 경합 → OptimisticLockException → 409
         return FixedScheduleResponse.from(fs);
     }
