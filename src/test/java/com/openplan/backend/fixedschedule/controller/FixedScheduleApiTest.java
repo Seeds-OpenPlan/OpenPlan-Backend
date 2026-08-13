@@ -17,6 +17,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.util.UUID;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -126,6 +127,112 @@ class FixedScheduleApiTest {
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.error.code").value("E-COM-009"))
                 .andExpect(jsonPath("$.error.details.fields[0].field").value("endTime"));
+    }
+
+    // ---------- PATCH 편집 ----------
+
+    @Test
+    @DisplayName("편집 → 200 · 필드 교체 · version 증가(0→1)")
+    void updateOk() throws Exception {
+        UUID id = create(MAIN, "수업", "MON", "09:00", "10:00");
+
+        mockMvc.perform(patch(PATH + "/" + id).header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"title":"수업(변경)","weekday":"TUE","startTime":"11:00","endTime":"12:30","version":0}"""))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.title").value("수업(변경)"))
+                .andExpect(jsonPath("$.data.weekday").value("TUE"))
+                .andExpect(jsonPath("$.data.startTime").value("11:00:00"))
+                .andExpect(jsonPath("$.data.endTime").value("12:30:00"))
+                .andExpect(jsonPath("$.data.version").value(1));
+    }
+
+    @Test
+    @DisplayName("전체 교체 — 생략한 기간(startDate/endDate)은 null로 교체됨")
+    void updateReplacesDateRangeWithNull() throws Exception {
+        String body = mockMvc.perform(post(PATH).header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"title":"특강","weekday":"WED","startTime":"14:00","endTime":"16:00",
+                                 "startDate":"2026-09-01","endDate":"2026-11-30"}"""))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        UUID id = UUID.fromString(com.jayway.jsonpath.JsonPath.read(body, "$.data.fixedScheduleId"));
+
+        mockMvc.perform(patch(PATH + "/" + id).header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"title":"특강","weekday":"WED","startTime":"14:00","endTime":"16:00","version":0}"""))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.startDate").doesNotExist())
+                .andExpect(jsonPath("$.data.endDate").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("없는 id 편집 → 404 E-COM-004")
+    void updateNotFound() throws Exception {
+        mockMvc.perform(patch(PATH + "/" + UUID.randomUUID()).header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"title":"x","weekday":"MON","startTime":"09:00","endTime":"10:00","version":0}"""))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("E-COM-004"));
+    }
+
+    @Test
+    @DisplayName("타인 고정 일정 편집 → 404 (존재 은닉)")
+    void updateOtherUserHidden() throws Exception {
+        UUID id = create(OTHER, "남의수업", "MON", "09:00", "10:00");
+
+        mockMvc.perform(patch(PATH + "/" + id).header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"title":"x","weekday":"MON","startTime":"09:00","endTime":"10:00","version":0}"""))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("E-COM-004"));
+    }
+
+    @Test
+    @DisplayName("version 불일치 → 409 E-COM-006 (latest 동봉)")
+    void updateVersionConflict() throws Exception {
+        UUID id = create(MAIN, "수업", "MON", "09:00", "10:00");
+
+        mockMvc.perform(patch(PATH + "/" + id).header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"title":"수업","weekday":"MON","startTime":"09:00","endTime":"10:00","version":5}"""))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("E-COM-006"))
+                .andExpect(jsonPath("$.error.details.latest.fixedScheduleId").value(id.toString()))
+                .andExpect(jsonPath("$.error.details.latest.version").value(0));
+    }
+
+    @Test
+    @DisplayName("version 누락 → 400 (낙관락 입력 필수)")
+    void updateVersionRequired() throws Exception {
+        UUID id = create(MAIN, "수업", "MON", "09:00", "10:00");
+
+        mockMvc.perform(patch(PATH + "/" + id).header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"title":"수업","weekday":"MON","startTime":"09:00","endTime":"10:00"}"""))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("E-COM-001"));
+    }
+
+    @Test
+    @DisplayName("편집 값 오류(5분 단위 아님) → 422 E-COM-009")
+    void updateInvalidField() throws Exception {
+        UUID id = create(MAIN, "수업", "MON", "09:00", "10:00");
+
+        mockMvc.perform(patch(PATH + "/" + id).header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"title":"수업","weekday":"MON","startTime":"09:03","endTime":"10:00","version":0}"""))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.code").value("E-COM-009"))
+                .andExpect(jsonPath("$.error.details.fields[0].field").value("startTime"));
     }
 
     // ---------- GET 목록 ----------
