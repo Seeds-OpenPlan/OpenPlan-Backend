@@ -1956,9 +1956,8 @@ paths:
   /fixed-schedules:
     get:
       tags: [fixed-schedules]
-      x-implementation-status: not-implemented
       operationId: listFixedSchedules
-      summary: "[미구현] 고정 일정 목록"
+      summary: "고정 일정 목록 (weekday·시작 시각 순, status 필터)"
       x-lane: BE-2
       x-user-stories: [FIX-04]
       parameters:
@@ -1976,9 +1975,8 @@ paths:
                     items: { $ref: "#/components/schemas/FixedSchedule" }
     post:
       tags: [fixed-schedules]
-      x-implementation-status: not-implemented
       operationId: createFixedSchedule
-      summary: "[미구현] 고정 일정 생성 (이후 배치 불가 시간으로 반영)"
+      summary: "고정 일정 생성 (MANUAL — 이후 배치 불가 시간으로 반영)"
       x-lane: BE-2
       x-user-stories: [FIX-05, ONB-06]
       requestBody:
@@ -1999,9 +1997,8 @@ paths:
   /fixed-schedules/{fixedScheduleId}:
     patch:
       tags: [fixed-schedules]
-      x-implementation-status: not-implemented
       operationId: updateFixedSchedule
-      summary: "[미구현] 편집 (FIX-06, version 필수). 저장된 주간 계획 재검증 트리거 (FIX-07). 주차 한정 비활성화는 week-exceptions 리소스 (PLAN-33/34)"
+      summary: "편집 (FIX-06, version 필수 · 부분 수정 PATCH — 담겨 온 필드만 변경). 저장된 주간 계획 재검증 트리거 (FIX-07)는 검증 엔진 라우트 완성 후. 주차 한정 비활성화는 week-exceptions 리소스 (PLAN-33/34)"
       x-lane: BE-2
       x-user-stories: [FIX-06]
       parameters: [{ $ref: "#/components/parameters/FixedScheduleId" }]
@@ -2028,9 +2025,8 @@ paths:
         "409": { $ref: "#/components/responses/VersionConflict" }
     delete:
       tags: [fixed-schedules]
-      x-implementation-status: not-implemented
       operationId: deleteFixedSchedule
-      summary: "[미구현] 삭제 (주간 계획 재검증 — FIX-09)"
+      summary: "삭제 (hard delete · 주차 예외 CASCADE). 주간 계획 재검증(FIX-09)은 검증 엔진 라우트 완성 후"
       x-lane: BE-2
       x-user-stories: [FIX-09]
       parameters: [{ $ref: "#/components/parameters/FixedScheduleId" }]
@@ -2039,9 +2035,8 @@ paths:
   /fixed-schedules/{fixedScheduleId}/week-exceptions:
     post:
       tags: [fixed-schedules]
-      x-implementation-status: not-implemented
       operationId: createFixedScheduleWeekException
-      summary: "[미구현] 주차 한정 비활성화 (PLAN-33 — 해당 주만 배치 제약 제외. 멱등, 해당 주 재검증 트리거)"
+      summary: "주차 한정 비활성화 (PLAN-33 — 해당 주만 배치 제약 제외. 멱등: 신규 201·기존 200. 해당 주 재검증 트리거는 검증 엔진 라우트 완성 후)"
       x-lane: BE-2
       x-user-stories: [PLAN-33]
       parameters: [{ $ref: "#/components/parameters/FixedScheduleId" }]
@@ -2073,9 +2068,8 @@ paths:
   /fixed-schedules/{fixedScheduleId}/week-exceptions/{weekStartDate}:
     delete:
       tags: [fixed-schedules]
-      x-implementation-status: not-implemented
       operationId: deleteFixedScheduleWeekException
-      summary: "[미구현] 주차 한정 재활성화 (PLAN-34 — 예외 제거. 멱등, 해당 주 재검증 트리거)"
+      summary: "주차 한정 재활성화 (PLAN-34 — 예외 제거. 멱등: 예외 부재여도 204. 해당 주 재검증 트리거는 검증 엔진 라우트 완성 후)"
       x-lane: BE-2
       x-user-stories: [PLAN-34]
       parameters:
