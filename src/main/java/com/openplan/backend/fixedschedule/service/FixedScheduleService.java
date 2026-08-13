@@ -80,6 +80,18 @@ public class FixedScheduleService {
     }
 
     /**
+     * 고정 일정 삭제 (FIX-09). hard delete. 부재·타인 → 404 E-COM-004(존재 은닉, 멱등 아님).
+     * 주차 예외({@code fixed_schedule_week_exceptions})는 FK ON DELETE CASCADE로 DB가 함께 지운다(앱 별도 처리 불요).
+     * 삭제 후 주간 계획 재검증(FIX-09)은 검증 엔진 라우트(ST-B2-09) 소관.
+     */
+    @Transactional
+    public void delete(UUID userId, UUID id) {
+        FixedSchedule fs = repository.findByIdAndUserId(id, userId)
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404
+        repository.delete(fs);
+    }
+
+    /**
      * 고정 일정 목록 (FIX-04). status 미지정 시 전체, 지정 시 해당 상태만. weekday → start_time 순. 읽기 — tx 없음.
      */
     public List<FixedScheduleResponse> list(UUID userId, FixedScheduleStatus status) {

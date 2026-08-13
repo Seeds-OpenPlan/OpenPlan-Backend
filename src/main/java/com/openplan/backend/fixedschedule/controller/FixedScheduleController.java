@@ -12,6 +12,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -69,5 +70,16 @@ public class FixedScheduleController {
             @PathVariable UUID fixedScheduleId,
             @Valid @RequestBody FixedScheduleUpdateRequest request) {
         return ApiResponse.ok(fixedScheduleService.update(userId, fixedScheduleId, request));
+    }
+
+    @DeleteMapping("/{fixedScheduleId}")
+    @Operation(summary = "고정 일정 삭제 (FIX-09)",
+            description = "hard delete. 부재·타인 → 404. 주차 예외는 FK CASCADE로 함께 삭제. 성공 204(봉투 없음). "
+                    + "삭제 후 주간 계획 재검증(FIX-09)은 검증 엔진 라우트 완성 후.")
+    public ResponseEntity<Void> delete(
+            @CurrentUser UUID userId,
+            @PathVariable UUID fixedScheduleId) {
+        fixedScheduleService.delete(userId, fixedScheduleId);
+        return ResponseEntity.noContent().build();
     }
 }
