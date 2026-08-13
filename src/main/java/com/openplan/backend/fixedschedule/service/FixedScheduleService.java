@@ -3,7 +3,6 @@ package com.openplan.backend.fixedschedule.service;
 import com.openplan.backend.common.Weekday;
 import com.openplan.backend.fixedschedule.domain.FixedSchedule;
 import com.openplan.backend.fixedschedule.domain.FixedScheduleStatus;
-import com.openplan.backend.fixedschedule.domain.FixedScheduleWeekException;
 import com.openplan.backend.fixedschedule.dto.FixedScheduleCreateRequest;
 import com.openplan.backend.fixedschedule.dto.FixedScheduleResponse;
 import com.openplan.backend.fixedschedule.dto.FixedScheduleUpdateRequest;
@@ -13,7 +12,6 @@ import com.openplan.backend.fixedschedule.repository.FixedScheduleWeekExceptionR
 import com.openplan.backend.global.error.ErrorCode;
 import com.openplan.backend.global.error.OpenPlanException;
 import com.openplan.backend.global.time.UserClock;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -129,23 +127,18 @@ public class FixedScheduleService {
     /**
      * 주차 한정 비활성화 (PLAN-33). <b>멱등</b> — 없으면 생성(201), 이미 있으면 기존 반환(200). 그 주에서만 이 고정 일정이
      * 배치 제약·V2 판정에서 제외된다(다른 주 무영향). 404(부재·타인)는 부모 고정 일정 소유 확인으로 낸다.
-     * 동시 요청 경합은 DB UNIQUE(fixed_schedule_id, week_start_date)가 백스톱 — 충돌 시 기존(200)으로 수렴.
+     *
+     * <p>동시 요청 경합은 {@code INSERT ... ON CONFLICT DO NOTHING}으로 안전하게 멱등 수렴한다 — 유니크 위반 예외를
+     * 트랜잭션 안에서 발생시키지 않으므로 rollback-only 마킹(→ 커밋 시 500)이 없다(리뷰 반영). 응답 데이터는 입력만으로
+     * 충분해 재조회하지 않는다.
      */
     @Transactional
     public AddWeekExceptionResult addWeekException(UUID userId, UUID fixedScheduleId, LocalDate weekStartDate) {
         requireOwned(userId, fixedScheduleId); // 404
 
+        int inserted = weekExceptionRepository.insertIfAbsent(UUID.randomUUID(), fixedScheduleId, weekStartDate);
         WeekExceptionResponse response = new WeekExceptionResponse(fixedScheduleId, weekStartDate);
-        if (weekExceptionRepository.existsByFixedScheduleIdAndWeekStartDate(fixedScheduleId, weekStartDate)) {
-            return new AddWeekExceptionResult(response, false); // 200 — 이미 존재(멱등)
-        }
-        try {
-            weekExceptionRepository.saveAndFlush(
-                    FixedScheduleWeekException.create(fixedScheduleId, weekStartDate));
-            return new AddWeekExceptionResult(response, true); // 201
-        } catch (DataIntegrityViolationException race) { // 동시 생성 경합 → 기존으로 수렴
-            return new AddWeekExceptionResult(response, false); // 200
-        }
+        return new AddWeekExceptionResult(response, inserted > 0); // 1=신규(201), 0=이미 존재(200)
     }
 
     /** 주차 예외 생성 결과 — 컨트롤러가 {@code created}로 201(신규)/200(기존)을 가른다. */
