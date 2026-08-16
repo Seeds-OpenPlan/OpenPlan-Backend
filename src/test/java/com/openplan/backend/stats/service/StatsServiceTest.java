@@ -87,7 +87,7 @@ class StatsServiceTest {
         Task task = new Task(PROJECT_ID, null, "태스크", null, 60, 1, null, Instant.now());
         ExecutionLog log = ExecutionLog.record(USER_ID, task.getId(), null,
                 Instant.parse("2026-07-13T01:00:00Z"), Instant.parse("2026-07-13T02:30:00Z"),
-                90, ExecutionResult.COMPLETED, null, Instant.now());
+                90, 60, ExecutionResult.COMPLETED, null, Instant.now()); // 스냅샷 = 기록 당시 태스크 예상값
         when(executionLogRepository.findByUserIdAndStartedAtGreaterThanEqualAndStartedAtLessThan(
                 any(), any(), any())).thenReturn(List.of(log));
         when(taskRepository.findAllById(any())).thenReturn(List.of(task));
@@ -114,7 +114,7 @@ class StatsServiceTest {
         Task task = new Task(PROJECT_ID, null, "태스크", null, 40, 1, null, Instant.now());
         ExecutionLog log = ExecutionLog.record(USER_ID, task.getId(), null,
                 Instant.parse("2026-07-13T01:00:00Z"), Instant.parse("2026-07-13T01:40:00Z"),
-                40, ExecutionResult.COMPLETED, null, Instant.now());
+                40, 40, ExecutionResult.COMPLETED, null, Instant.now());
         when(executionLogRepository.findByUserIdAndStartedAtGreaterThanEqualAndStartedAtLessThan(
                 any(), any(), any())).thenReturn(List.of(log));
         when(taskRepository.findAllById(any())).thenReturn(List.of(task));
@@ -137,7 +137,7 @@ class StatsServiceTest {
         Task task = new Task(PROJECT_ID, null, "태스크", null, null, 1, null, Instant.now());
         ExecutionLog log = ExecutionLog.record(USER_ID, task.getId(), null,
                 Instant.parse("2026-07-13T01:00:00Z"), Instant.parse("2026-07-13T01:30:00Z"),
-                30, ExecutionResult.COMPLETED, null, Instant.now());
+                30, null, ExecutionResult.COMPLETED, null, Instant.now()); // 예상값 무입력 → 스냅샷도 null
         when(executionLogRepository.findByUserIdAndStartedAtGreaterThanEqualAndStartedAtLessThan(
                 any(), any(), any())).thenReturn(List.of(log));
         when(taskRepository.findAllById(any())).thenReturn(List.of(task));

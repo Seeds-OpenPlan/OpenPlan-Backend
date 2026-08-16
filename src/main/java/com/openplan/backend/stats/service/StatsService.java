@@ -128,6 +128,14 @@ public class StatsService {
                 continue; // 삭제된 태스크(FK ON DELETE CASCADE로 로그도 같이 삭제되므로 이론상 도달 안 함) 방어
             }
             UUID groupId = groupBy == DeviationGroupBy.PROJECT ? task.getProjectId() : task.getCategoryId();
+            // 🔴 임시 — 태스크의 "현재" 예상 시간이라 태스크를 편집하면 과거 편차가 소급해 흔들린다.
+            // 정본이 요구하는 값은 execution_logs.estimated_minutes 스냅샷(ST-B2-14 AC②)이며 컬럼은
+            // V202608161500 으로 신설·기록 배선까지 끝났다. 그런데 여기서 바로 갈아끼우지 않는 이유:
+            //   ⑴ SS-10 이 "편차 산술 집계"까지만 정의하고, 한 태스크에 로그가 여러 건일 때 어느 스냅샷을
+            //      쓰는지(최초/최신)를 정하지 않았다 — 지금 고르면 미비준 가정을 코드에 박는 셈이다.
+            //   ⑵ stories-be2-kr.md:173 이 이 집계를 DeviationAnalysisPort(ST-B3-08, 엔진 레인) 소관으로
+            //      지정했다. 옮길 때 함께 확정하는 편이 맞다.
+            // 스냅샷은 이미 쌓이고 있으므로 전환 시 소급 적용이 가능하다(기록은 놓치면 복원 불가라 선행).
             int estimated = nz(task.getEstimatedMinutes());
             Agg prev = byGroup.getOrDefault(groupId, new Agg(0, 0));
             byGroup.put(groupId, prev.plus(estimated, entry.getValue()));
