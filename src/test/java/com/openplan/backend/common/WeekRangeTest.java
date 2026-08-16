@@ -43,4 +43,13 @@ class WeekRangeTest {
             assertThat(range.end()).isEqualTo(range.start().plusDays(6));
         }
     }
+
+    @Test
+    void 연도_경계를_넘는_주도_정확히_계산된다() {
+        // 2026-01-01은 목요일 — MON 시작 주는 2025-12-29(월)~2026-01-04(일), 연도 경계를 넘는다.
+        WeekRange range = WeekRange.of(LocalDate.of(2026, 1, 1), Weekday.MON);
+
+        assertThat(range.start()).isEqualTo(LocalDate.of(2025, 12, 29));
+        assertThat(range.end()).isEqualTo(LocalDate.of(2026, 1, 4));
+    }
 }

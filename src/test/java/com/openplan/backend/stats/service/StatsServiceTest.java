@@ -131,6 +131,52 @@ class StatsServiceTest {
         assertThat(response.rows().get(0).deviationMinutes()).isZero();
     }
 
+    @Test
+    void deviations_예상시간이_0이면_deviationRate는_null() {
+        // estimatedMinutes=null(무입력) → nz()로 0 취급, 분모 0이라 rate는 null(0으로 나누지 않는다).
+        Task task = new Task(PROJECT_ID, null, "태스크", null, null, 1, null, Instant.now());
+        ExecutionLog log = ExecutionLog.record(USER_ID, task.getId(), null,
+                Instant.parse("2026-07-13T01:00:00Z"), Instant.parse("2026-07-13T01:30:00Z"),
+                30, ExecutionResult.COMPLETED, null, Instant.now());
+        when(executionLogRepository.findByUserIdAndStartedAtGreaterThanEqualAndStartedAtLessThan(
+                any(), any(), any())).thenReturn(List.of(log));
+        when(taskRepository.findAllById(any())).thenReturn(List.of(task));
+
+        DeviationsQuery deviationsQuery = new DeviationsQuery();
+        deviationsQuery.setPeriod("WEEKLY");
+        deviationsQuery.setGroupBy("PROJECT");
+        DeviationReportResponse response = service.deviations(USER_ID, deviationsQuery);
+
+        assertThat(response.rows().get(0).estimatedMinutes()).isZero();
+        assertThat(response.rows().get(0).actualMinutes()).isEqualTo(30);
+        assertThat(response.rows().get(0).deviationMinutes()).isEqualTo(30);
+        assertThat(response.rows().get(0).deviationRate()).isNull(); // 0 분모 회피
+    }
+
+    @Test
+    void summaries_MONTHLY_period는_해당_월_1일부터_말일까지() {
+        // 2026-02(평년, 28일) — 월 경계 rangeStart/rangeEnd 계산 검증.
+        when(executionLogRepository.findByUserIdAndStartedAtGreaterThanEqualAndStartedAtLessThan(
+                any(), any(), any())).thenReturn(List.of());
+
+        StatsSummaryResponse response = service.summaries(USER_ID, query("MONTHLY", LocalDate.of(2026, 2, 15)));
+
+        assertThat(response.rangeStart()).isEqualTo(LocalDate.of(2026, 2, 1));
+        assertThat(response.rangeEnd()).isEqualTo(LocalDate.of(2026, 2, 28));
+    }
+
+    @Test
+    void summaries_MONTHLY_period는_12월이어도_다음해로_넘어가지_않는다() {
+        // 연도 경계 sanity — 달력 월 계산이라 12월은 그 해 12-31까지만.
+        when(executionLogRepository.findByUserIdAndStartedAtGreaterThanEqualAndStartedAtLessThan(
+                any(), any(), any())).thenReturn(List.of());
+
+        StatsSummaryResponse response = service.summaries(USER_ID, query("MONTHLY", LocalDate.of(2026, 12, 10)));
+
+        assertThat(response.rangeStart()).isEqualTo(LocalDate.of(2026, 12, 1));
+        assertThat(response.rangeEnd()).isEqualTo(LocalDate.of(2026, 12, 31));
+    }
+
     private StatsSummaryQuery query(String period, LocalDate baseDate) {
         StatsSummaryQuery q = new StatsSummaryQuery();
         q.setPeriod(period);
