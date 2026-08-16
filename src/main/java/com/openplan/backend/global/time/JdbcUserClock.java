@@ -1,5 +1,6 @@
 package com.openplan.backend.global.time;
 
+import com.openplan.backend.common.Weekday;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -38,6 +39,31 @@ public class JdbcUserClock implements UserClock {
     public LocalDate todayOf(UUID userId) {
         ZoneId zone = resolveZone(userId);
         return LocalDate.now(zone);
+    }
+
+    @Override
+    public ZoneId zoneOf(UUID userId) {
+        return resolveZone(userId);
+    }
+
+    @Override
+    public Weekday weekStartDayOf(UUID userId) {
+        String wsd;
+        try {
+            wsd = jdbcTemplate.queryForObject(
+                    "SELECT week_start_day FROM user_profiles WHERE user_id = ?",
+                    String.class, userId);
+        } catch (org.springframework.dao.EmptyResultDataAccessException ex) {
+            return Weekday.MON; // 프로필 행 부재 — DB 컬럼 기본값과 동일
+        }
+        if (wsd == null || wsd.isBlank()) {
+            return Weekday.MON;
+        }
+        try {
+            return Weekday.valueOf(wsd.trim());
+        } catch (IllegalArgumentException ex) {
+            return Weekday.MON; // 미인식 값
+        }
     }
 
     private ZoneId resolveZone(UUID userId) {
