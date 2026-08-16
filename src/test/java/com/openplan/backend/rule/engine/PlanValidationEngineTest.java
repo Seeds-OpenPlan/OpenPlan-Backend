@@ -524,7 +524,8 @@ class PlanValidationEngineTest {
         ValidationReport r = engine.validate(snapshotWithFixed(
                 List.of(taskBlock(BLOCK_A, 0, 23, 0, 120)),
                 List.of(fixedWindow(FIXED_1, DayOfWeek.TUESDAY, 0, 2)),
-                List.of(avail(DayOfWeek.MONDAY, 0, 24))));
+                // 자정 넘는 블록 120분은 전량 startAt 요일(월)에 귀속되므로 월 가용만 넉넉하면 V3 미발생
+                List.of(wideMondayAvail())));
 
         assertEquals(1, r.issues().size());
         assertEquals("월요일 23:00~01:00 배치가 화요일 00:00~02:00 고정 일정과 겹칩니다. (60분 겹침)",
