@@ -9,6 +9,7 @@ import com.openplan.backend.executionlog.service.port.PlanBlockOwnershipChecker;
 import com.openplan.backend.global.error.ErrorCode;
 import com.openplan.backend.global.error.OpenPlanException;
 import com.openplan.backend.global.time.UserClock;
+import com.openplan.backend.task.repository.OwnedTask;
 import com.openplan.backend.task.repository.TaskRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -51,7 +52,8 @@ public class ExecutionLogService {
      */
     @Transactional
     public ExecutionLogResponse record(UUID userId, UUID taskId, ExecutionLogCreateRequest req) {
-        taskRepository.findOwnedWithProjectStatus(taskId, userId)
+        // 소유 확인과 예상 시간 스냅샷을 같은 조회로 해결한다 — 추가 쿼리 불요.
+        OwnedTask owned = taskRepository.findOwnedWithProjectStatus(taskId, userId)
                 .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404 — 존재 은닉
 
         validator.validateTimes(req.startedAt(), req.endedAt());          // 422
@@ -63,9 +65,11 @@ public class ExecutionLogService {
             validator.rejectUnownedPlanBlock();                           // 422 — 부재·타인 구분 안 함
         }
 
+        // ST-B2-14 AC② — "당시" 예상 시간을 여기서 박제한다. 이후 태스크를 편집해도 이 값은 안 변한다.
         ExecutionLog log = ExecutionLog.record(
                 userId, taskId, req.planBlockId(),
                 req.startedAt(), req.endedAt(), req.actualMinutes(),
+                owned.task().getEstimatedMinutes(),
                 result, req.memo(), clock.now());
         repository.save(log);
         return ExecutionLogResponse.from(log);

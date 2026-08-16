@@ -52,6 +52,16 @@ public class ExecutionLog {
     @Column(name = "actual_minutes")
     private Integer actualMinutes;
 
+    /**
+     * ST-B2-14 AC② — 기록 시점 {@code tasks.estimated_minutes} 스냅샷. <b>이후 태스크 편집에 불변</b>.
+     *
+     * <p>편차 계산이 {@code tasks} 를 직접 참조하면 사용자가 예상 시간을 고칠 때마다 과거 수행의 편차가
+     * 소급해서 흔들린다. 그래서 값을 여기에 복사해 둔다. {@code null} = 기록 당시 예상 시간이 없었거나,
+     * 컬럼 신설(V202608161500) 이전에 남은 기록.
+     */
+    @Column(name = "estimated_minutes", updatable = false)
+    private Integer estimatedMinutes;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "result", nullable = false)
     private ExecutionResult result;
@@ -69,6 +79,7 @@ public class ExecutionLog {
     /** 신규 기록 — id는 앱에서 부여, createdAt은 {@code UserClock}(P-2). */
     public static ExecutionLog record(UUID userId, UUID taskId, UUID planBlockId,
                                       Instant startedAt, Instant endedAt, Integer actualMinutes,
+                                      Integer estimatedMinutesSnapshot,
                                       ExecutionResult result, String memo, Instant createdAt) {
         ExecutionLog log = new ExecutionLog();
         log.id = UUID.randomUUID();
@@ -78,6 +89,7 @@ public class ExecutionLog {
         log.startedAt = startedAt;
         log.endedAt = endedAt;
         log.actualMinutes = actualMinutes;
+        log.estimatedMinutes = estimatedMinutesSnapshot;
         log.result = result;
         log.memo = memo;
         log.createdAt = createdAt;
