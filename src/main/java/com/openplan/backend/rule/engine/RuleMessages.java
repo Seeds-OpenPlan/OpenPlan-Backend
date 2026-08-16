@@ -67,6 +67,34 @@ final class RuleMessages {
     }
 
     /**
+     * V2 고정 일정 충돌. 템플릿(정본, 계약 §3.3 · ADR-0013):
+     * {@code "{요일} {HH:MM}~{HH:MM} 배치가 {HH:MM}~{HH:MM} 고정 일정과 겹칩니다. ({n}분 겹침)"}
+     *
+     * <p>계약 §3.3 V2 행이 {@code reason} 을 <b>"W4 구현 시 V1과 같은 방식(시간 기반·문자열 결합)으로 확정"</b>
+     * 으로 위임해 두었으므로, V1 템플릿을 그대로 승계하되 상대 표기만 {@code "배치"} → {@code "고정 일정"} 으로
+     * 바꾼다. 상대를 구분하는 이유는 사용자의 조치가 다르기 때문 — 겹친 상대가 배치면 어느 쪽을 옮겨도 되지만,
+     * 고정 일정이면 옮길 수 있는 건 배치 쪽뿐이다(고정 일정 변경은 별도 화면·별도 결정).
+     *
+     * <p>기준(첫 요일·첫 구간) = {@code planBlockId} 블록. V2 는 쌍의 한쪽이 항상 블록이라 대표 선정이
+     * 불요하다(계약 §3.3 "V2는 항상 블록 쪽 — 선정 불요"). 고정 일정 창은 자정을 넘지 못하므로
+     * ({@code FixedScheduleValidator.validateTimes} 의 {@code startTime < endTime} · DB {@code ck_fixed_range})
+     * 창 자체는 항상 단일 날짜지만, <b>블록</b>이 자정을 넘으면 블록 요일과 창 요일이 달라진다.
+     * 그 경우 V1과 같은 규약으로 상대 구간 앞에 {@code "{창요일} "} 접두를 붙인다.
+     *
+     * <p>고정 일정 제목은 넣지 않는다 — {@code FixedWindow}(계약 §3.1)에 제목 필드가 없고, 넣으면 골든이
+     * 사용자 자유 문자열에 결합된다(V1 선례와 동일 근거). FE 는 {@code counterpartId}(= {@code fixedScheduleId})
+     * 로 클라이언트 조인한다.
+     */
+    static String v2FixedConflict(DayOfWeek blockWeekday, LocalTime blockStart, LocalTime blockEnd,
+                                  DayOfWeek fixedWeekday, LocalTime fixedStart, LocalTime fixedEnd,
+                                  long overlapMinutes) {
+        String fixedPrefix = fixedWeekday == blockWeekday ? "" : weekdayKo(fixedWeekday) + " ";
+        return weekdayKo(blockWeekday) + " " + hhmm(blockStart) + "~" + hhmm(blockEnd)
+                + " 배치가 " + fixedPrefix + hhmm(fixedStart) + "~" + hhmm(fixedEnd)
+                + " 고정 일정과 겹칩니다. (" + overlapMinutes + "분 겹침)";
+    }
+
+    /**
      * {@code HH:MM} 수동 0패딩. {@code DateTimeFormatter} 를 포함한 모든 포매터를 쓰지 않는다 —
      * 기본 Locale 에 의존해 JDK 로케일 데이터 판올림이 골든을 깨뜨릴 수 있기 때문(P1, V3 선례 승계).
      */
