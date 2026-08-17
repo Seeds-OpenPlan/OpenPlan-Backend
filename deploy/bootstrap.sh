@@ -27,9 +27,13 @@ FE_DIR="$HOME/openplan-fe"
 log() { printf '\n\033[1;34m== %s\033[0m\n' "$*"; }
 
 # ── 1. 패키지 ────────────────────────────────────────────────────────────────
-log "1/6 패키지 설치 (docker · git · nodejs)"
+log "1/6 패키지 설치 (docker · git)"
+# 🔴 nodejs 를 여기서 깔지 않는다. AL2023 저장소의 nodejs 는 18인데 프론트가
+#    package.json engines 로 ">=22.12.0 <23" 를 요구한다(Vite 8). 호스트에 22를
+#    따로 얹는 대신 5단계에서 node:22-alpine 컨테이너로 빌드한다 — 버전이 고정되고
+#    호스트가 더러워지지 않는다.
 sudo dnf -y update
-sudo dnf -y install docker git nodejs
+sudo dnf -y install docker git
 
 # ── 1-b. 스왑 ────────────────────────────────────────────────────────────────
 # t3.medium 은 RAM 4GB(실측 3.7GB)가 상한이다. Gradle 데몬 + Node 빌드가 겹치면
@@ -54,12 +58,13 @@ sudo usermod -aG docker "$USER"
 if ! docker compose version >/dev/null 2>&1; then
   log "     compose 플러그인 설치"
   CLI_DIR=/usr/libexec/docker/cli-plugins
-  sudo mkdir -p "$CLI_DIR"
-  ARCH="$(uname -m)"
-  sudo curl -fsSL \
-    "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-${ARCH}" \
-    -o "$CLI_DIR/docker-compose"
-  sudo chmod +x "$CLI_DIR/docker-compose"
+  sudo install -d "$CLI_DIR"
+  # /tmp 에 받아서 install 로 옮긴다. 목적지에 직접 받은 뒤 같은 경로로 install 하면
+  # "are the same file" 로 죽는다(실측).
+  curl -fsSL \
+    "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$(uname -m)" \
+    -o /tmp/docker-compose
+  sudo install -m 0755 /tmp/docker-compose "$CLI_DIR/docker-compose"
 fi
 
 # usermod 는 다음 로그인부터 적용된다. 이번 세션은 sudo 로 docker 를 부른다.
@@ -106,14 +111,16 @@ if [ ${#missing[@]} -gt 0 ]; then
 fi
 
 # ── 5. FE 빌드 ───────────────────────────────────────────────────────────────
-log "5/6 프론트 빌드 (vite)"
+log "5/6 프론트 빌드 (node:22-alpine 컨테이너)"
 cd "$FE_DIR"
 # API 베이스는 openapi 정본과 같은 /api/v1. 단일 오리진이라 상대경로면 충분하다.
 printf 'VITE_API_BASE_URL=/api/v1\n' > .env.production
-npm ci
-npm run build
+# 호스트 node 를 쓰지 않는다(1단계 주석 참조). 컨테이너가 root 로 돌아 dist 소유자가
+# root 가 되지만 읽기 권한은 열려 있어 nginx 마운트에 지장 없다.
+$DOCKER run --rm -v "$PWD":/app -w /app node:22-alpine \
+  sh -c "npm ci --no-audit --no-fund && npm run build"
 
-rm -rf "$APP_DIR/web"
+sudo rm -rf "$APP_DIR/web"
 cp -r dist "$APP_DIR/web"
 
 # ── 6. 기동 ──────────────────────────────────────────────────────────────────
