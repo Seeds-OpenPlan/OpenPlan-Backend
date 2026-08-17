@@ -167,8 +167,15 @@ printf 'VITE_API_BASE_URL=/api/v1\n' > .env.production
 $DOCKER run --rm -v "$PWD":/app -w /app node:22-alpine \
   sh -c "npm ci --no-audit --no-fund && npm run build"
 
-sudo rm -rf "$APP_DIR/web"
-cp -r dist "$APP_DIR/web"
+# 🔴 web/ 디렉터리 자체를 지우면 안 된다(2026-08-17 실측). nginx 는 이 경로를 바인드
+#    마운트로 물고 있는데, 그 마운트는 컨테이너가 뜰 때 inode 로 고정된다. 디렉터리를
+#    지우고 새로 만들면 nginx 는 사라진 옛 inode 를 계속 보게 되고, 컨테이너 안에서는
+#    빈 디렉터리가 된다 — 재배포 직후 화면이 "/ → 403, /login → 404" 로 죽는다.
+#    (compose 가 backend 만 재생성하고 nginx 는 그대로 두므로 저절로 낫지 않는다.)
+#    그래서 디렉터리는 남기고 안의 내용만 갈아 끼운다.
+sudo mkdir -p "$APP_DIR/web"
+sudo find "$APP_DIR/web" -mindepth 1 -delete
+sudo cp -r dist/. "$APP_DIR/web"/
 
 # ── 6. 기동 ──────────────────────────────────────────────────────────────────
 log "6/6 컨테이너 빌드·기동"
