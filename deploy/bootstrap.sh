@@ -19,7 +19,12 @@ BE_REPO="${BE_REPO:-https://github.com/Seeds-OpenPlan/OpenPlan-Backend.git}"
 FE_REPO="${FE_REPO:-https://github.com/Seeds-OpenPlan/OpenPlan-Frontend.git}"
 # 🔴 배포 파일(docker-compose.prod.yml·이 스크립트)이 아직 main 에 머지되지 않았다.
 #    머지 전까지는 이 브랜치를 받아야 한다. 머지된 뒤 BE_BRANCH=main 으로 바꾼다.
-BE_BRANCH="${BE_BRANCH:-feat/deploy-compose}"
+#
+# 🔴 deploy/auth-integration = main(#24 포함) + #22 + #23 + 배포 파일.
+#    main 만으로 배포하면 인증이 스텁이라 로그인이 존재하지 않는다(2026-08-17 실측:
+#    POST /auth/sessions 404 · GET /auth/session 401). #22·#23 이 머지되면 이 브랜치는
+#    버리고 BE_BRANCH=main 으로 되돌린다 — 통합용 임시 브랜치지 유지 대상이 아니다.
+BE_BRANCH="${BE_BRANCH:-deploy/auth-integration}"
 FE_BRANCH="${FE_BRANCH:-main}"
 APP_DIR="${APP_DIR:-$HOME/openplan}"
 FE_DIR="$HOME/openplan-fe"
@@ -72,8 +77,21 @@ DOCKER="sudo docker"
 
 # ── 3. 저장소 ────────────────────────────────────────────────────────────────
 log "3/6 저장소 클론/갱신"
-if [ -d "$APP_DIR/.git" ]; then git -C "$APP_DIR" pull --ff-only; else git clone --depth 1 -b "$BE_BRANCH" "$BE_REPO" "$APP_DIR"; fi
-if [ -d "$FE_DIR/.git" ];  then git -C "$FE_DIR"  pull --ff-only; else git clone --depth 1 -b "$FE_BRANCH" "$FE_REPO" "$FE_DIR";  fi
+# 🔴 `git pull --ff-only` 만 돌리면 이미 클론된 저장소는 "받아둔 그 브랜치"에 계속
+#    머문다 — BE_BRANCH 를 바꿔도 반영되지 않는다. 1차 배포가 feat/deploy-compose 로
+#    이뤄졌으므로, 브랜치를 갈아타는 재배포가 반드시 필요하다. fetch → switch 로
+#    BE_BRANCH 를 매번 실제로 따르게 한다(얕은 클론이라 FETCH_HEAD 를 시작점으로 쓴다).
+#    .env 는 추적 대상이 아니라 브랜치를 갈아타도 그대로 남는다.
+sync_repo() {  # $1=디렉터리 $2=저장소 $3=브랜치
+  if [ -d "$1/.git" ]; then
+    git -C "$1" fetch --depth 1 origin "$3"
+    git -C "$1" switch -C "$3" FETCH_HEAD
+  else
+    git clone --depth 1 -b "$3" "$2" "$1"
+  fi
+}
+sync_repo "$APP_DIR" "$BE_REPO" "$BE_BRANCH"
+sync_repo "$FE_DIR"  "$FE_REPO" "$FE_BRANCH"
 
 # ── 4. .env 확인 ─────────────────────────────────────────────────────────────
 log "4/6 .env 확인"
@@ -98,8 +116,14 @@ MSG
 fi
 
 # 필수값이 비어 있으면 기동 전에 멈춘다 — 뜬 뒤 500을 보는 것보다 낫다.
+#
+# 🔴 MAIL_* 가 목록에 든 이유: 인증 실구현(#22·#23)이 올라간 뒤로는 가입 메일이
+#    나가지 않으면 로그인 자체가 불가능하다. AuthService 가 이메일 미인증 계정을
+#    403 E-AUTH-005 로 막기 때문에, 메일 없이 뜬 서버는 "떴지만 아무도 못 쓰는"
+#    상태가 된다. 그건 기동 실패보다 알아채기 어렵다.
+#    MAIL_PASSWORD 는 구글 계정 비밀번호가 아니라 앱 비밀번호(16자)다.
 missing=()
-for k in DB_HOST DB_PASSWORD JWT_SECRET APP_BASE_URL; do
+for k in DB_HOST DB_PASSWORD JWT_SECRET APP_BASE_URL MAIL_USERNAME MAIL_PASSWORD MAIL_FROM; do
   v="$(grep -E "^${k}=" "$APP_DIR/.env" | cut -d= -f2- || true)"
   if [ -z "$v" ] || [[ "$v" == *"<EC2_PUBLIC_IP>"* ]]; then
     missing+=("$k")
