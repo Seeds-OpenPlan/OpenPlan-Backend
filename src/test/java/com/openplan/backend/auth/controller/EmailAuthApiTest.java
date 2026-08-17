@@ -1,5 +1,6 @@
 package com.openplan.backend.auth.controller;
 
+import com.openplan.backend.global.mail.MailDeliveryException;
 import com.openplan.backend.global.mail.MailDispatcher;
 import com.openplan.backend.support.TestcontainersConfig;
 import org.junit.jupiter.api.BeforeEach;
@@ -23,6 +24,7 @@ import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -54,6 +56,7 @@ class EmailAuthApiTest {
     private static final String CONFIRM_VERIFICATION = "/api/v1/auth/email-verifications/confirmation";
     private static final String REQUEST_RESET = "/api/v1/auth/password-resets";
     private static final String LOGIN = "/api/v1/auth/sessions";
+    private static final String SIGN_UP = "/api/v1/users";
 
     private static final String DOMAIN = "@emailauthtest.local";
     private static final String UNVERIFIED = "unverified" + DOMAIN;
@@ -270,6 +273,39 @@ class EmailAuthApiTest {
                 .andExpect(jsonPath("$.error.code").value("E-COM-001"));
     }
 
+    // ------------------------------------------------- 가입 → 인증 메일 (2026-08-17)
+
+    @Test
+    @DisplayName("🔴 가입만 해도 인증 메일이 나가고, 그 링크로 인증까지 끝난다")
+    void signUpSendsVerificationMail() throws Exception {
+        String email = "newcomer" + DOMAIN;
+
+        mockMvc.perform(json(SIGN_UP, signUpBody(email)))
+                .andExpect(status().isCreated());
+
+        // 메일에 실린 링크를 그대로 눌러 확정까지 간다 — 가입자가 실제로 걷는 경로.
+        mockMvc.perform(json(CONFIRM_VERIFICATION, """
+                {"token":"%s"}""".formatted(capturedToken())))
+                .andExpect(status().isOk());
+
+        assertThat(isVerified(email)).isTrue();
+    }
+
+    @Test
+    @DisplayName("🔴 SMTP가 죽어도 가입은 201 — 계정을 잃지 않는다(재발송으로 복구)")
+    void signUpSurvivesMailOutage() throws Exception {
+        doThrow(new MailDeliveryException("발송 실패", new RuntimeException()))
+                .when(mailDispatcher).send(anyString(), anyString(), anyString());
+        String email = "mailoutage" + DOMAIN;
+
+        mockMvc.perform(json(SIGN_UP, signUpBody(email)))
+                .andExpect(status().isCreated());
+
+        // 500을 내면 사용자는 가입 실패로 읽고 재시도하는데, 그때 받는 건 409다.
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM users WHERE email = ?",
+                Integer.class, email)).isEqualTo(1);
+    }
+
     // ------------------------------------------------------------- helpers
 
     private org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder json(String path, String body) {
@@ -279,6 +315,11 @@ class EmailAuthApiTest {
     private static String body(String email) {
         return """
                 {"email":"%s"}""".formatted(email);
+    }
+
+    private static String signUpBody(String email) {
+        return """
+                {"email":"%s","password":"%s","termsAgreed":true}""".formatted(email, PASSWORD);
     }
 
     private static String loginBody(String email, String password) {

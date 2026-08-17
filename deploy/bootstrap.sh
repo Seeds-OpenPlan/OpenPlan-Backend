@@ -122,8 +122,10 @@ fi
 #    403 E-AUTH-005 로 막기 때문에, 메일 없이 뜬 서버는 "떴지만 아무도 못 쓰는"
 #    상태가 된다. 그건 기동 실패보다 알아채기 어렵다.
 #    MAIL_PASSWORD 는 구글 계정 비밀번호가 아니라 앱 비밀번호(16자)다.
+#    MAIL_FROM 은 넣지 않는다 — MailConfig.resolveFrom 이 비어 있으면 SMTP 계정으로
+#    대체하므로 선택값이다. 여기에 넣으면 안 채워도 되는 값 때문에 배포가 막힌다.
 missing=()
-for k in DB_HOST DB_PASSWORD JWT_SECRET APP_BASE_URL MAIL_USERNAME MAIL_PASSWORD MAIL_FROM; do
+for k in DB_HOST DB_PASSWORD JWT_SECRET APP_BASE_URL MAIL_USERNAME MAIL_PASSWORD; do
   v="$(grep -E "^${k}=" "$APP_DIR/.env" | cut -d= -f2- || true)"
   if [ -z "$v" ] || [[ "$v" == *"<EC2_PUBLIC_IP>"* ]]; then
     missing+=("$k")
