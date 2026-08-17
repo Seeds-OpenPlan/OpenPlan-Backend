@@ -31,6 +31,20 @@ log "1/6 패키지 설치 (docker · git · nodejs)"
 sudo dnf -y update
 sudo dnf -y install docker git nodejs
 
+# ── 1-b. 스왑 ────────────────────────────────────────────────────────────────
+# t3.medium 은 RAM 4GB(실측 3.7GB)가 상한이다. Gradle 데몬 + Node 빌드가 겹치면
+# OOM Killer 가 컴파일 도중 프로세스를 죽이는데, 로그에는 원인이 명확히 안 남는다
+# ("Gradle build daemon disappeared unexpectedly" 정도). 스왑 2GB로 받친다.
+if ! swapon --show | grep -q .; then
+  log "1b/6 스왑 2GB 생성"
+  sudo dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
+  sudo chmod 600 /swapfile
+  sudo mkswap /swapfile >/dev/null
+  sudo swapon /swapfile
+  grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
+fi
+free -h | head -3
+
 # ── 2. Docker ────────────────────────────────────────────────────────────────
 log "2/6 Docker 기동 + 권한"
 sudo systemctl enable --now docker
