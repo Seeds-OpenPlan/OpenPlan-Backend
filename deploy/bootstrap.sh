@@ -72,6 +72,27 @@ if ! docker compose version >/dev/null 2>&1; then
   sudo install -m 0755 /tmp/docker-compose "$CLI_DIR/docker-compose"
 fi
 
+# 🔴 buildx — compose 만 최신으로 올리고 buildx 를 두면 6단계가 죽는다(2026-08-17 실측):
+#   "compose build requires buildx 0.17.0 or later"
+# AL2023 의 buildx 는 0.12.1 인데 위에서 받는 compose 최신본이 0.17+ 를 요구한다.
+# 프론트 빌드까지 다 끝난 뒤 마지막 줄에서 터지므로 낭비가 크다 — 여기서 미리 맞춘다.
+#
+# 최신 태그를 API 로 물어본 뒤 받는다. compose 쪽이 쓰는 `releases/latest/download/`
+# 형식은 buildx 에는 통하지 않는다 — 자산 이름에 버전이 박혀 있어 404 가 난다(실측).
+NEED_BUILDX=0.17.0
+HAVE_BUILDX="$(docker buildx version 2>/dev/null | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+' | head -1 | tr -d v)"
+if [ -z "$HAVE_BUILDX" ] || [ "$(printf '%s\n%s\n' "$NEED_BUILDX" "$HAVE_BUILDX" | sort -V | head -1)" != "$NEED_BUILDX" ]; then
+  log "     buildx 갱신 (현재 ${HAVE_BUILDX:-없음} → ${NEED_BUILDX}+ 필요)"
+  CLI_DIR=/usr/libexec/docker/cli-plugins
+  sudo install -d "$CLI_DIR"
+  BX_TAG="$(curl -fsSL https://api.github.com/repos/docker/buildx/releases/latest \
+            | grep -m1 '"tag_name"' | cut -d'"' -f4)"
+  case "$(uname -m)" in x86_64) BX_ARCH=amd64;; aarch64) BX_ARCH=arm64;; *) BX_ARCH="$(uname -m)";; esac
+  curl -fsSL "https://github.com/docker/buildx/releases/download/${BX_TAG}/buildx-${BX_TAG}.linux-${BX_ARCH}" \
+    -o /tmp/docker-buildx
+  sudo install -m 0755 /tmp/docker-buildx "$CLI_DIR/docker-buildx"
+fi
+
 # usermod 는 다음 로그인부터 적용된다. 이번 세션은 sudo 로 docker 를 부른다.
 DOCKER="sudo docker"
 
