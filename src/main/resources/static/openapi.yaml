@@ -1498,6 +1498,7 @@ paths:
                 type: object
                 properties:
                   data: { $ref: "#/components/schemas/ExecutionLog" }
+        "404": { $ref: "#/components/responses/NotFound" }
         "422": { $ref: "#/components/responses/UnprocessableEntity" }
   /task-categories:
     get:
