@@ -6,11 +6,14 @@ import com.openplan.backend.global.security.CurrentUser;
 import com.openplan.backend.notification.dto.NotificationResponse;
 import com.openplan.backend.notification.dto.NotificationSettingResponse;
 import com.openplan.backend.notification.dto.SaveNotificationSettingsRequest;
+import com.openplan.backend.notification.service.NotificationGenerator;
 import com.openplan.backend.notification.service.NotificationService;
 import com.openplan.backend.notification.service.NotificationSettingService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -36,13 +39,18 @@ public class NotificationController {
 
     private static final int MAX_PAGE_SIZE = 100;
 
+    private static final Logger log = LoggerFactory.getLogger(NotificationController.class);
+
     private final NotificationService notificationService;
     private final NotificationSettingService settingService;
+    private final NotificationGenerator generator;
 
     public NotificationController(NotificationService notificationService,
-                                  NotificationSettingService settingService) {
+                                  NotificationSettingService settingService,
+                                  NotificationGenerator generator) {
         this.notificationService = notificationService;
         this.settingService = settingService;
+        this.generator = generator;
     }
 
     @GetMapping("/notifications")
@@ -51,10 +59,23 @@ public class NotificationController {
                                                        @RequestParam(defaultValue = "1") int page,
                                                        @RequestParam(defaultValue = "20") int size) {
         // 1-base 요청을 Spring Data 0-base로. 범위 밖 값은 계약(min1/max100)에 맞춰 클램프.
+        generate(userId);
         int pageIndex = Math.max(1, page) - 1;
         int pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, size));
         Page<NotificationResponse> result = notificationService.list(userId, PageRequest.of(pageIndex, pageSize));
         return ApiResponse.ok(result.getContent(), PageMeta.from(result), notificationService.unreadCount(userId));
+    }
+
+    /**
+     * 판정은 별도 트랜잭션이며 <b>실패해도 조회를 막지 않는다</b>(ADR-0014). 알림 센터를 못 여는 것보다
+     * 새 알림이 한 박자 늦는 편이 낫다 — 다음 진입에서 같은 판정이 다시 돈다(재판정은 no-op).
+     */
+    private void generate(UUID userId) {
+        try {
+            generator.generateFor(userId);
+        } catch (RuntimeException e) {
+            log.warn("notification generation failed: userId={}", userId, e);
+        }
     }
 
     @PatchMapping("/notifications/{notificationId}/read")
