@@ -3,3 +3,7 @@
 *.jar binary
 Dockerfile text eol=lf
 *.conf text eol=lf
+# 리눅스 서버에서 실행되는 파일 — CRLF 로 나가면 `bad interpreter: ^M` 으로 죽는다
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
