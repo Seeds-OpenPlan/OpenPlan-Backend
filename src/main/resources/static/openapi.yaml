@@ -2690,7 +2690,7 @@ components:
           type: [object, "null"]
           description: RB-DASH-01/SS-01 — 최상위 1행동 (전순서 Q3, W3 확정)
           properties:
-            actionType: { type: string, enum: [RESOLVE_FIXED_CONFLICT, PLACE_UNASSIGNED, REPLACE_TODAY_INCOMPLETE, FIX_OUT_OF_WBS, RESOLVE_CAPACITY, HANDLE_DEADLINE] }
+            actionType: { type: string, enum: [RESOLVE_FIXED_CONFLICT, RESOLVE_OVERLAP, PLACE_UNASSIGNED, REPLACE_TODAY_INCOMPLETE, FIX_OUT_OF_WBS, RESOLVE_CAPACITY, HANDLE_DEADLINE] }
             reason: { type: string }
             routePath: { type: string }
         riskIssues:

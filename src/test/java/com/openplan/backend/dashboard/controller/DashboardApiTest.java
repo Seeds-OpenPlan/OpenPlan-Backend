@@ -91,6 +91,33 @@ class DashboardApiTest {
     }
 
     @Test
+    @DisplayName("겹침(V1)만 있는 계획 → priorityAction=RESOLVE_OVERLAP (미배치보다 앞 — 차단류가 우선)")
+    void overlapIssueDrivesTopPriorityAheadOfUnassigned() throws Exception {
+        // 미배치 태스크(3위 후보)를 일부러 함께 둬서, 2위인 겹침이 그보다 앞서는지까지 고정한다.
+        UUID project = insertProject(MAIN, "겹침 프로젝트", null);
+        insertTask(project, "UNASSIGNED");
+        UUID plan = insertWeeklyPlan(MAIN, WEEK_START);
+        insertValidationIssue(plan, "V1_OVERLAP", "BLOCK");
+
+        mockMvc.perform(dashboardGet())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.priorityAction.actionType").value("RESOLVE_OVERLAP"))
+                .andExpect(jsonPath("$.data.priorityAction.routePath").value("SCR-PLAN 검토 패널"));
+    }
+
+    @Test
+    @DisplayName("고정 일정 충돌(V2)이 함께 있으면 겹침(V1)보다 앞선다 — 확정문 전순서 1위 > 2위")
+    void fixedConflictOutranksOverlap() throws Exception {
+        UUID plan = insertWeeklyPlan(MAIN, WEEK_START);
+        insertValidationIssue(plan, "V1_OVERLAP", "BLOCK");
+        insertValidationIssue(plan, "V2_FIXED_CONFLICT", "BLOCK");
+
+        mockMvc.perform(dashboardGet())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.priorityAction.actionType").value("RESOLVE_FIXED_CONFLICT"));
+    }
+
+    @Test
     @DisplayName("오늘 종료 시각이 지난 미완료 TASK 블록 → priorityAction=REPLACE_TODAY_INCOMPLETE(미배치 없을 때)")
     void todayIncompleteBlockDrivesPriority() throws Exception {
         UUID project = insertProject(MAIN, "진행 프로젝트", null);
@@ -164,6 +191,17 @@ class DashboardApiTest {
                                           total_planned_minutes, status, confirmed_at, version, created_at)
                 VALUES (?, ?, ?, ?, 0, 'DRAFT', NULL, 0, ?)
                 """, id, userId, weekStart, weekStart.plusDays(6), OffsetDateTime.now(ZoneOffset.UTC));
+        return id;
+    }
+
+    private UUID insertValidationIssue(UUID weeklyPlanId, String issueType, String severity) {
+        UUID id = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO validation_issues (validation_issue_id, weekly_plan_id, plan_block_id, task_id,
+                                               wbs_item_id, issue_type, severity, message,
+                                               resolution_status, created_at)
+                VALUES (?, ?, NULL, NULL, NULL, ?, ?, '테스트 이슈', 'OPEN', ?)
+                """, id, weeklyPlanId, issueType, severity, OffsetDateTime.now(ZoneOffset.UTC));
         return id;
     }
 

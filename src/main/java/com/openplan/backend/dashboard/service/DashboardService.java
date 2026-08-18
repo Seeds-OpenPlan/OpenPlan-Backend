@@ -103,6 +103,7 @@ public class DashboardService {
         Map<String, Long> openIssues = planReader.openIssueCounts(userId, week.start());
 
         long fixedConflict = openIssues.getOrDefault("V2_FIXED_CONFLICT", 0L);
+        long overlapConflict = openIssues.getOrDefault("V1_OVERLAP", 0L);
         long capacityExceeded = openIssues.getOrDefault("V3_CAPACITY_EXCEEDED", 0L);
         long outOfWbs = openIssues.getOrDefault("V5_OUT_OF_WBS", 0L);
         long unassigned = taskRepository.countUnassigned(userId);
@@ -113,7 +114,7 @@ public class DashboardService {
 
         StatusBoardResponse statusBoard = buildStatusBoard(userId, week, availabilities);
         PriorityActionResponse priorityAction = resolvePriorityAction(
-                fixedConflict, unassigned, deadlineSoon, todayIncomplete, capacityExceeded, outOfWbs);
+                fixedConflict, overlapConflict, unassigned, deadlineSoon, todayIncomplete, capacityExceeded, outOfWbs);
         List<RiskIssueResponse> riskIssues = buildRiskIssues(unassigned, outOfWbs, fixedConflict, deadlineSoon);
         TodayBoardResponse todayBoard = buildTodayBoard(todayBlocks);
         List<ImpactedProjectResponse> weeklyImpactProjects = buildImpactedProjects(userId, today);
@@ -132,14 +133,19 @@ public class DashboardService {
 
     /**
      * RB-DASH-01 최상위 1행동 (us-decisions-kr.md §3.2 Q3 확정 전순서). PriorityActionType 선언 순서 = 전순서.
-     * OVERLAP_CONFLICT(V1, 확정문 2위)는 openapi enum에 대응 값이 없어 후보에서 제외한다(§2.1 고지).
+     * 확정문 7유형을 모두 후보로 둔다 — 2위 겹침(V1)은 {@code RESOLVE_OVERLAP}으로 대응한다.
      * routePath는 확정문 표의 화면 코드를 그대로 인용한다(URL 스킴이 정본에 없어 지어내지 않음).
      */
-    private PriorityActionResponse resolvePriorityAction(long fixedConflict, long unassigned, long deadlineSoon,
-                                                          long todayIncomplete, long capacityExceeded, long outOfWbs) {
+    private PriorityActionResponse resolvePriorityAction(long fixedConflict, long overlapConflict, long unassigned,
+                                                          long deadlineSoon, long todayIncomplete,
+                                                          long capacityExceeded, long outOfWbs) {
         if (fixedConflict > 0) {
             return new PriorityActionResponse(PriorityActionType.RESOLVE_FIXED_CONFLICT.name(),
                     "규칙 V2에 의해 고정 일정과 겹치는 계획 블록이 있습니다.", "SCR-PLAN 검토 패널");
+        }
+        if (overlapConflict > 0) {
+            return new PriorityActionResponse(PriorityActionType.RESOLVE_OVERLAP.name(),
+                    "규칙 V1에 의해 서로 겹치는 계획 블록이 있습니다.", "SCR-PLAN 검토 패널");
         }
         if (unassigned > 0) {
             return new PriorityActionResponse(PriorityActionType.PLACE_UNASSIGNED.name(),
