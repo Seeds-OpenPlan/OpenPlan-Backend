@@ -11,6 +11,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.CookieValue;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -70,10 +71,15 @@ public class AuthController {
     public ResponseEntity<Void> logout(
             @CookieValue(name = AuthCookies.REFRESH, required = false) String refreshToken) {
         AuthService.LogoutResult result = authService.logout(refreshToken);
-        return ResponseEntity.noContent()
-                .header(HttpHeaders.SET_COOKIE, result.accessCookie().toString())
-                .header(HttpHeaders.SET_COOKIE, result.refreshCookie().toString())
-                .build();
+        // dev 스텁에는 소거할 쿠키가 없다(AuthCookies 빈 미등록) — 그때는 Set-Cookie 없이 204만 낸다.
+        HttpHeaders headers = new HttpHeaders();
+        if (result.accessCookie() != null) {
+            headers.add(HttpHeaders.SET_COOKIE, result.accessCookie().toString());
+        }
+        if (result.refreshCookie() != null) {
+            headers.add(HttpHeaders.SET_COOKIE, result.refreshCookie().toString());
+        }
+        return new ResponseEntity<>(headers, HttpStatus.NO_CONTENT);
     }
 
     @PostMapping("/token-refresh")

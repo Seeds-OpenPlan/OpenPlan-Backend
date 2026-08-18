@@ -83,7 +83,7 @@ public class AuthService {
     public record RefreshResult(TokenRefreshResponse body, ResponseCookie accessCookie, ResponseCookie refreshCookie) {
     }
 
-    /** 로그아웃 결과 — 즉시 만료시킬 쿠키 2장(Max-Age=0). */
+    /** 로그아웃 결과 — 즉시 만료시킬 쿠키 2장(Max-Age=0). dev 스텁에서는 둘 다 {@code null}이다. */
     public record LogoutResult(ResponseCookie accessCookie, ResponseCookie refreshCookie) {
     }
 
@@ -192,15 +192,23 @@ public class AuthService {
      *
      * <p><b>쿠키가 없거나 모르는 세션이어도 성공(204)이다.</b> 로그아웃은 멱등해야 하고,
      * 여기서 404를 주면 "그 토큰은 존재하지 않는다"를 알려 주는 셈이 된다.
+     *
+     * <p><b>dev 스텁에는 소거할 쿠키 자체가 없다.</b> {@link AuthCookies}는 {@code dev-stub=false}일 때만
+     * 등록되므로(D-32), 여기서 그 빈을 필수로 요구하면 스텁으로 도는 팀원 로컬에서 로그아웃이 501이 된다 —
+     * 바로 위에 적은 멱등 계약과 정면으로 어긋난다. 빈이 없으면 쿠키 없이 반환하고 컨트롤러가
+     * {@code Set-Cookie}를 생략한다.
      */
     @Transactional
     public LogoutResult logout(String rawRefreshToken) {
-        AuthCookies cookies = requireCookies();
         JwtService jwt = jwtServiceProvider.getIfAvailable();
 
         if (jwt != null && rawRefreshToken != null && !rawRefreshToken.isBlank()) {
             authSessionRepository.findByRefreshTokenHash(jwt.hashRefreshToken(rawRefreshToken))
                     .ifPresent(AuthSession::revoke);
+        }
+        AuthCookies cookies = authCookiesProvider.getIfAvailable();
+        if (cookies == null) {
+            return new LogoutResult(null, null);
         }
         return new LogoutResult(cookies.clearAccess(), cookies.clearRefresh());
     }
