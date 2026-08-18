@@ -791,9 +791,8 @@ paths:
   /users/me/notification-settings:
     get:
       tags: [users]
-      x-implementation-status: not-implemented
       operationId: getNotificationSettings
-      summary: "[미구현] 알림 설정 조회 (5유형)"
+      summary: "알림 설정 조회 (5유형)"
       x-lane: BE-1
       x-user-stories: [NOTI-01]
       responses:
@@ -809,9 +808,8 @@ paths:
                     items: { $ref: "#/components/schemas/NotificationSetting" }
     put:
       tags: [users]
-      x-implementation-status: not-implemented
       operationId: saveNotificationSettings
-      summary: "[미구현] 알림 설정 저장"
+      summary: "알림 설정 저장"
       x-lane: BE-1
       x-user-stories: [NOTI-01]
       requestBody:
@@ -830,9 +828,8 @@ paths:
   /notifications:
     get:
       tags: [notifications]
-      x-implementation-status: not-implemented
       operationId: listNotifications
-      summary: "[미구현] 알림 센터 (최신순 + 미읽음 수)"
+      summary: "알림 센터 (최신순 + 미읽음 수)"
       x-lane: BE-1
       x-user-stories: [NOTI-02, NOTI-04]
       parameters: [{ $ref: "#/components/parameters/Page" }, { $ref: "#/components/parameters/Size" }]
@@ -855,9 +852,8 @@ paths:
   /notifications/{notificationId}/read:
     patch:
       tags: [notifications]
-      x-implementation-status: not-implemented
       operationId: markNotificationRead
-      summary: "[미구현] 읽음 처리"
+      summary: "읽음 처리"
       x-lane: BE-1
       x-user-stories: [NOTI-03]
       parameters: [{ name: notificationId, in: path, required: true, schema: { type: string, format: uuid } }]
@@ -866,9 +862,8 @@ paths:
   /notifications/read-all:
     patch:
       tags: [notifications]
-      x-implementation-status: not-implemented
       operationId: markAllNotificationsRead
-      summary: "[미구현] 전체 읽음"
+      summary: "전체 읽음"
       x-lane: BE-1
       x-user-stories: [NOTI-03]
       responses:
