@@ -13,6 +13,7 @@ import com.openplan.backend.rule.port.PlanValidationPort;
 import com.openplan.backend.weeklyplan.domain.PlanBlock;
 import com.openplan.backend.weeklyplan.domain.ValidationIssueRecord;
 import com.openplan.backend.weeklyplan.domain.WeeklyPlan;
+import com.openplan.backend.weeklyplan.domain.WeeklyPlanStatus;
 import com.openplan.backend.weeklyplan.dto.PlanBlockCreateRequest;
 import com.openplan.backend.weeklyplan.dto.ValidateWeeklyPlanRequest;
 import com.openplan.backend.weeklyplan.dto.ValidateWeeklyPlanRequest.VirtualTaskEdit;
@@ -98,7 +99,14 @@ public class WeeklyPlanValidationService {
     /**
      * 확정 (PLAN-03·28). 엔진 재검증 → 차단(BLOCK) ≥1이면 409 E-PLAN-004(details.issues=차단만),
      * 0이면 validation_issues 영속 + status=CONFIRMED(단일 tx). 경고(WARNING)는 남아도 확정된다.
-     * Idempotency-Key는 중복 클릭 방어용 힌트 — 재확정은 자연 멱등(이미 CONFIRMED + 동일 판정)이라 별도 저장소는 두지 않는다.
+     *
+     * <p><b>멱등이다 — 더블클릭·동시 요청이 충돌(409)로 튀지 않는다.</b> 두 층으로 막는다:
+     * <ol>
+     *   <li>이미 CONFIRMED면 재검증 없이 현재 상태 200 반환(순차 재클릭)</li>
+     *   <li>DRAFT→CONFIRMED 전이는 {@link WeeklyPlanRepository#confirmIfDraft}로 <b>원자적</b>으로 —
+     *       동시 두 요청 중 한 건만 1행을 바꾸고 나머지는 0행을 받아 예외 없이 같은 결과로 수렴한다.</li>
+     * </ol>
+     * 그래서 Idempotency-Key 없이도 상태만으로 멱등이 성립한다(키는 관측용 로그로만 남긴다).
      */
     @Transactional
     public WeeklyPlanResponse confirm(UUID userId, UUID planId, String idempotencyKey) {
@@ -107,6 +115,12 @@ public class WeeklyPlanValidationService {
 
         List<BlockView> blocks = planBlockRepository.findByWeeklyPlanId(planId).stream()
                 .map(this::toBlockView).toList();
+
+        // ① 이미 확정된 계획이면 재검증 없이 현재 상태 반환 (순차 더블클릭 멱등)
+        if (plan.getStatus() == WeeklyPlanStatus.CONFIRMED) {
+            return WeeklyPlanResponse.from(plan, blocks.size());
+        }
+
         PlanSnapshot snapshot = assembler.assemble(userId, plan.getWeekStartDate(), blocks, Map.of());
         ValidationReport report = validationPort.validate(snapshot);
 
@@ -118,11 +132,17 @@ public class WeeklyPlanValidationService {
             throw new OpenPlanException(ErrorCode.E_PLAN_004, Map.of("issues", issues));
         }
 
-        persistIssues(planId, report); // 경고 잔존 영속
-        plan.confirm(clock.now());     // status=CONFIRMED
-        log.info("weekly plan confirmed: planId={}, userId={}, idempotencyKey={}, warnings={}",
-                planId, userId, idempotencyKey, report.issues().size());
-        return WeeklyPlanResponse.from(plan, blocks.size());
+        // ② 원자적 DRAFT→CONFIRMED 게이트 — 동시 요청 중 1건만 성공(1행), 나머지는 0행(충돌·예외 없음)
+        int confirmed = weeklyPlanRepository.confirmIfDraft(planId, clock.now());
+        if (confirmed == 1) {
+            persistIssues(planId, report); // 승자만 이슈 영속(경고 잔존 포함)
+        }
+        // confirmIfDraft(clearAutomatically)로 컨텍스트가 비었으니 재조회 = 최신 CONFIRMED 상태
+        WeeklyPlan latest = weeklyPlanRepository.findByIdAndUserId(planId, userId)
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004));
+        log.info("weekly plan confirmed: planId={}, userId={}, idempotencyKey={}, won={}, warnings={}",
+                planId, userId, idempotencyKey, confirmed == 1, report.issues().size());
+        return WeeklyPlanResponse.from(latest, blocks.size());
     }
 
     /** 재검증 = 전면 교체: 기존 이슈 삭제 후 새로 삽입. 응답에 부여한 id를 그대로 싣는다. */
