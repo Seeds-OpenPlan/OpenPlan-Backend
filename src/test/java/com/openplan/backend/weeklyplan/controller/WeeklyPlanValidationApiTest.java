@@ -193,6 +193,26 @@ class WeeklyPlanValidationApiTest {
     }
 
     @Test
+    @DisplayName("확정 재요청(더블클릭) — 두 번째도 200 · 409 아님 · CONFIRMED 유지(멱등)")
+    void confirmIsIdempotentOnRepeat() throws Exception {
+        UUID planId = insertWeeklyPlan(MAIN, WEEK);
+
+        mockMvc.perform(post(PATH + "/" + planId + "/confirmation").header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("CONFIRMED"));
+
+        // 저장 버튼 두 번째 클릭 — 충돌(409) 없이 같은 결과로 수렴해야 한다
+        mockMvc.perform(post(PATH + "/" + planId + "/confirmation").header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("CONFIRMED"))
+                .andExpect(jsonPath("$.data.confirmedAt").exists());
+
+        String dbStatus = jdbc.queryForObject(
+                "SELECT status FROM weekly_plans WHERE weekly_plan_id = ?", String.class, planId);
+        org.junit.jupiter.api.Assertions.assertEquals("CONFIRMED", dbStatus);
+    }
+
+    @Test
     @DisplayName("확정 — 없는/타인 계획 → 404")
     void confirmNotFound() throws Exception {
         mockMvc.perform(post(PATH + "/" + UUID.randomUUID() + "/confirmation").header("X-Dev-User", MAIN.toString()))
