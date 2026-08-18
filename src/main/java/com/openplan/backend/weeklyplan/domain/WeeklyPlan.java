@@ -87,4 +87,13 @@ public class WeeklyPlan {
         }
     }
 
+    /**
+     * 확정 (ST-B2-09 / PLAN-03·28). status=CONFIRMED, confirmedAt=주입 시각(P-2). 차단(BLOCK) 0건 확인은
+     * 서비스가 엔진 재검증으로 선행한다 — 엔티티는 상태만 넘긴다. 이미 CONFIRMED면 재확정도 무해(멱등).
+     */
+    public void confirm(Instant now) {
+        this.status = WeeklyPlanStatus.CONFIRMED;
+        this.confirmedAt = now;
+    }
+
 }

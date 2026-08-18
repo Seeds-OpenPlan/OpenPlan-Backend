@@ -1624,9 +1624,8 @@ paths:
   /weekly-plans:
     get:
       tags: [weekly-plans]
-      x-implementation-status: not-implemented
       operationId: getWeeklyPlanView
-      summary: "[미구현] 주간 화면 조립 응답 (계획+블록+고정일정+가용시간+미배치수+검증요약 — NFR-011/024)"
+      summary: "주간 화면 조립 응답 (현재 계획+블록 — 고정일정·가용시간·검증요약은 후속 편입, NFR-011/024)"
       x-lane: BE-2
       x-user-stories: [PLAN-01, PLAN-02, PLAN-04, PLAN-05, PLAN-21]
       parameters:
@@ -1642,9 +1641,8 @@ paths:
                   data: { $ref: "#/components/schemas/WeeklyPlanView" }
     post:
       tags: [weekly-plans]
-      x-implementation-status: not-implemented
       operationId: getOrCreateWeeklyPlan
-      summary: "[미구현] 주차 초안 get-or-create (UQ user+weekStartDate — 재호출 시 기존 반환)"
+      summary: "주차 초안 get-or-create (UQ user+weekStartDate — 재호출 시 기존 반환)"
       x-lane: BE-2
       x-user-stories: [PLAN-02, PLAN-20]
       requestBody:
@@ -1662,9 +1660,8 @@ paths:
   /weekly-plans/{planId}/confirmation:
     post:
       tags: [weekly-plans]
-      x-implementation-status: not-implemented
       operationId: confirmWeeklyPlan
-      summary: "[미구현] 주간 계획 저장=확정 (서버가 검증 재실행 — 차단 존재 시 409, PLAN-28 규칙)"
+      summary: "주간 계획 저장=확정 (서버가 검증 재실행 — 차단 존재 시 409, PLAN-28 규칙)"
       x-lane: BE-2
       x-user-stories: [PLAN-03, PLAN-28]
       parameters: [{ $ref: "#/components/parameters/PlanId" }, { $ref: "#/components/parameters/IdempotencyKey" }]
@@ -1683,10 +1680,9 @@ paths:
   /weekly-plans/{planId}/validations:
     post:
       tags: [weekly-plans]
-      x-implementation-status: not-implemented
       operationId: validateWeeklyPlan
       summary: >
-        [미구현] 검증 실행 (SS-06/RB-PLAN-02). body 없음 = 현재 초안 판정 + validation_issues 영속.
+        검증 실행 (SS-06/RB-PLAN-02). body 없음 = 현재 초안 판정 + validation_issues 영속.
         body.virtualBlocks 제공 = dry-run(무영속) — PLAN-11 미리보기·FIX-07이 소비 (C-4).
       x-lane: BE-2
       x-user-stories: [RB-PLAN-02, PLAN-11, PLAN-21, PLAN-22]
@@ -1785,9 +1781,8 @@ paths:
   /weekly-plans/{planId}/blocks:
     post:
       tags: [weekly-plans]
-      x-implementation-status: not-implemented
       operationId: createPlanBlock
-      summary: "[미구현] 블록 생성 — blockType 분기 단일 정의 (D-10 통합). TASK=taskId 필수 / SCHEDULE=schedule 인라인 생성"
+      summary: "블록 생성 — blockType 분기 단일 정의 (D-10 통합). TASK=taskId 필수 / SCHEDULE=schedule 인라인 생성"
       x-lane: BE-2
       x-user-stories: [PLAN-06, PLAN-07, PLAN-08, TUT-05, TUT-06]
       parameters: [{ $ref: "#/components/parameters/PlanId" }]
