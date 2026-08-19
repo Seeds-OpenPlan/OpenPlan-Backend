@@ -29,6 +29,9 @@ import static org.hamcrest.Matchers.startsWith;
  */
 class KakaoCalendarProviderTest {
 
+    /** 카카오는 Bearer 만 쓴다 — 자격증명 조립이 아니라 응답 파싱이 이 테스트의 대상이다. */
+    private static final ProviderCredential CREDENTIAL = ProviderCredential.bearer("token");
+
     private RestClient.Builder builder;
     private MockRestServiceServer server;
     private KakaoCalendarProvider provider;
@@ -53,7 +56,7 @@ class KakaoCalendarProviderTest {
         server.expect(once(), requestTo(startsWith("https://kapi.kakao.com/v2/api/calendar/events")))
                 .andRespond(withSuccess(emptyEvents(), MediaType.APPLICATION_JSON));
 
-        provider.listEvents("token", "cal-1", "내 캘린더", from, to);
+        provider.listEvents(CREDENTIAL, "cal-1", "내 캘린더", from, to);
 
         server.verify();   // 정확히 3회 — 한 번이라도 31일을 넘겼으면 카카오가 거절한다
     }
@@ -72,7 +75,7 @@ class KakaoCalendarProviderTest {
         server.expect(once(), requestTo(startsWith("https://kapi.kakao.com/v2/api/calendar/events")))
                 .andRespond(withSuccess(sameEvent, MediaType.APPLICATION_JSON));
 
-        List<ProviderEvent> events = provider.listEvents("token", "cal-1", "내 캘린더", from, to);
+        List<ProviderEvent> events = provider.listEvents(CREDENTIAL, "cal-1", "내 캘린더", from, to);
 
         assertThat(events).hasSize(1);
         assertThat(events.get(0).externalEventId()).isEqualTo("ev-1");
@@ -90,7 +93,7 @@ class KakaoCalendarProviderTest {
                             {"start_at":"2026-08-20T01:00:00Z","end_at":"2026-08-20T02:00:00Z","all_day":false}}]}""",
                         MediaType.APPLICATION_JSON));
 
-        List<ProviderEvent> events = provider.listEvents("token", "cal-1", "내 캘린더",
+        List<ProviderEvent> events = provider.listEvents(CREDENTIAL, "cal-1", "내 캘린더",
                 Instant.parse("2026-08-20T00:00:00Z"), Instant.parse("2026-08-21T00:00:00Z"));
 
         assertThat(events).extracting(ProviderEvent::externalEventId).containsExactly("timed");
@@ -105,7 +108,7 @@ class KakaoCalendarProviderTest {
                           {"start_at":"20260820T010000Z","end_at":"20260820T020000Z","all_day":false}}]}""",
                         MediaType.APPLICATION_JSON));
 
-        List<ProviderEvent> events = provider.listEvents("token", "cal-1", "내 캘린더",
+        List<ProviderEvent> events = provider.listEvents(CREDENTIAL, "cal-1", "내 캘린더",
                 Instant.parse("2026-08-20T00:00:00Z"), Instant.parse("2026-08-21T00:00:00Z"));
 
         assertThat(events).hasSize(1);
@@ -124,7 +127,7 @@ class KakaoCalendarProviderTest {
                          "subscribe_calendars":[{"id":"holiday","name":"대한민국 공휴일"}]}""",
                         MediaType.APPLICATION_JSON));
 
-        List<ProviderCalendar> calendars = provider.listCalendars("token");
+        List<ProviderCalendar> calendars = provider.listCalendars(CREDENTIAL);
 
         assertThat(calendars).extracting(ProviderCalendar::externalCalendarId)
                 .containsExactly("primary", "holiday");
@@ -136,7 +139,7 @@ class KakaoCalendarProviderTest {
         server.expect(once(), requestTo(startsWith("https://kapi.kakao.com/v2/api/calendar/calendars")))
                 .andRespond(withServerError());
 
-        assertThatThrownBy(() -> provider.listCalendars("token"))
+        assertThatThrownBy(() -> provider.listCalendars(CREDENTIAL))
                 .isInstanceOf(OpenPlanException.class);
 
         server.verify();   // 정확히 1회 — 재시도가 있었다면 초과 호출로 실패한다

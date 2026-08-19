@@ -6,6 +6,7 @@ import com.openplan.backend.auth.oauth.OAuthProperties;
 import com.openplan.backend.auth.oauth.OAuthTokenSet;
 import com.openplan.backend.externalcalendar.crypto.ExternalTokenCipher;
 import com.openplan.backend.externalcalendar.domain.ExternalCalendarConnection;
+import com.openplan.backend.externalcalendar.provider.ProviderCredential;
 import com.openplan.backend.global.error.ErrorCode;
 import com.openplan.backend.global.error.OpenPlanException;
 import com.openplan.backend.global.time.UserClock;
@@ -81,6 +82,24 @@ public class ExternalCalendarTokens {
             log.warn("외부 캘린더 토큰 갱신 실패: connectionId={}", connection.getId(), e);
             throw providerFailure(connection);
         }
+    }
+
+    /**
+     * 지금 제공자 호출에 실을 수 있는 자격증명.
+     *
+     * <p>OAuth 제공자는 Bearer 토큰 하나지만 네이버 CalDAV 는 Basic 이라 아이디가 함께 필요하다.
+     * 그 아이디는 연결의 {@code accountIdentifier} 에 이미 있다 — 호출 측이 매번 조립하게 두면
+     * 어느 한 곳에서 빠뜨린다.
+     *
+     * <p>네이버는 {@code token_expires_at} 이 null 이라 {@link #usableAccessToken} 의 만료 판정을
+     * 그대로 통과하고 복호만 일어난다. <b>애플리케이션 비밀번호는 만료되지 않기 때문이다</b> —
+     * 사용자가 네이버 보안설정에서 회수할 때까지 유효하고, 회수되면 401 이 올라온다.
+     */
+    public ProviderCredential usableCredential(ExternalCalendarConnection connection) {
+        String secret = usableAccessToken(connection);
+        return connection.getProvider().usesOAuth()
+                ? ProviderCredential.bearer(secret)
+                : ProviderCredential.basic(connection.getAccountIdentifier(), secret);
     }
 
     /** 최초 연결 시 토큰을 암호문으로 바꾼다. */

@@ -77,7 +77,8 @@ public class KakaoCalendarProvider implements CalendarProvider {
      * 때문이다(ONB-08). 서버가 미리 지우면 고를 기회 자체가 없어진다.
      */
     @Override
-    public List<ProviderCalendar> listCalendars(String accessToken) {
+    public List<ProviderCalendar> listCalendars(ProviderCredential credential) {
+        String accessToken = credential.secret();
         String uri = UriComponentsBuilder.fromUriString(CALENDARS_URI)
                 .queryParam("filter", "ALL")
                 .build().encode().toUriString();
@@ -91,8 +92,9 @@ public class KakaoCalendarProvider implements CalendarProvider {
     }
 
     @Override
-    public List<ProviderEvent> listEvents(String accessToken, String externalCalendarId, String calendarName,
+    public List<ProviderEvent> listEvents(ProviderCredential credential, String externalCalendarId, String calendarName,
                                           Instant from, Instant to) {
+        String accessToken = credential.secret();
         // id 로 합친다 — 구간 경계에 걸친 일정이 두 조각에 모두 나타난다.
         Map<String, ProviderEvent> merged = new LinkedHashMap<>();
 

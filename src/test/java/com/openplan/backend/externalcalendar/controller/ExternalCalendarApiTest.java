@@ -144,7 +144,7 @@ class ExternalCalendarApiTest {
     void providerFailureIsBadGateway() throws Exception {
         UUID connectionId = createConnection(MAIN);
         willThrow(new OpenPlanException(ErrorCode.E_EXT_001, Map.of("provider", "GOOGLE")))
-                .given(googleProvider).listCalendars(anyString());
+                .given(googleProvider).listCalendars(any());
 
         mockMvc.perform(get(CONNECTIONS + "/" + connectionId + "/calendars").header("X-Dev-User", MAIN.toString()))
                 .andExpect(status().isBadGateway())
@@ -179,7 +179,7 @@ class ExternalCalendarApiTest {
     @DisplayName("캘린더 목록 — 이미 선택한 것은 selected=true")
     void listCalendarsMarksSelected() throws Exception {
         UUID connectionId = createConnection(MAIN);
-        given(googleProvider.listCalendars(anyString())).willReturn(List.of(
+        given(googleProvider.listCalendars(any())).willReturn(List.of(
                 new ProviderCalendar("cal-1", "내 캘린더"),
                 new ProviderCalendar("cal-2", "회사")));
         saveSelections(connectionId, """
@@ -231,7 +231,7 @@ class ExternalCalendarApiTest {
     @DisplayName("일정 조회가 곧 동기화 — 후보가 CANDIDATE 로 쌓인다")
     void listEventsSynchronizes() throws Exception {
         UUID connectionId = connectionWithCalendar();
-        given(googleProvider.listEvents(anyString(), eq("cal-1"), anyString(), any(), any()))
+        given(googleProvider.listEvents(any(), eq("cal-1"), anyString(), any(), any()))
                 .willReturn(List.of(providerEvent("ext-1", "회의")));
 
         mockMvc.perform(get(CONNECTIONS + "/" + connectionId + "/events").header("X-Dev-User", MAIN.toString()))
@@ -245,7 +245,7 @@ class ExternalCalendarApiTest {
     @DisplayName("재동기화는 같은 행을 갱신한다 — 제외한 일정이 후보로 되살아나지 않는다")
     void resyncPreservesUserDecision() throws Exception {
         UUID connectionId = connectionWithCalendar();
-        given(googleProvider.listEvents(anyString(), eq("cal-1"), anyString(), any(), any()))
+        given(googleProvider.listEvents(any(), eq("cal-1"), anyString(), any(), any()))
                 .willReturn(List.of(providerEvent("ext-1", "회의")));
         UUID eventId = firstEventId(connectionId);
         applyEvent(eventId, """
@@ -262,7 +262,7 @@ class ExternalCalendarApiTest {
     @DisplayName("AS_IS 반영 → 201 · 고정 일정이 source=EXTERNAL 로 생긴다 (AC2)")
     void applyAsIsCreatesExternalFixedSchedule() throws Exception {
         UUID connectionId = connectionWithCalendar();
-        given(googleProvider.listEvents(anyString(), eq("cal-1"), anyString(), any(), any()))
+        given(googleProvider.listEvents(any(), eq("cal-1"), anyString(), any(), any()))
                 .willReturn(List.of(providerEvent("ext-1", "회의")));
         UUID eventId = firstEventId(connectionId);
 
@@ -281,7 +281,7 @@ class ExternalCalendarApiTest {
     @DisplayName("EXCLUDE 는 고정 일정을 만들지 않는다")
     void applyExcludeCreatesNothing() throws Exception {
         UUID connectionId = connectionWithCalendar();
-        given(googleProvider.listEvents(anyString(), eq("cal-1"), anyString(), any(), any()))
+        given(googleProvider.listEvents(any(), eq("cal-1"), anyString(), any(), any()))
                 .willReturn(List.of(providerEvent("ext-1", "회의")));
         UUID eventId = firstEventId(connectionId);
 
@@ -379,7 +379,7 @@ class ExternalCalendarApiTest {
     /** 연결 + 선택 + 일정 1건을 AS_IS 로 반영해 고정 일정이 있는 상태. */
     private UUID appliedConnection() throws Exception {
         UUID connectionId = connectionWithCalendar();
-        given(googleProvider.listEvents(anyString(), eq("cal-1"), anyString(), any(), any()))
+        given(googleProvider.listEvents(any(), eq("cal-1"), anyString(), any(), any()))
                 .willReturn(List.of(providerEvent("ext-1", "회의")));
         applyEvent(firstEventId(connectionId), """
                 {"mode":"AS_IS"}""").andExpect(status().isCreated());

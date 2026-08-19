@@ -21,6 +21,7 @@ import com.openplan.backend.externalcalendar.dto.ProviderCalendarResponse;
 import com.openplan.backend.externalcalendar.dto.SaveSelectionsRequest;
 import com.openplan.backend.externalcalendar.dto.UpdateConnectionRequest;
 import com.openplan.backend.externalcalendar.provider.CalendarProviderRegistry;
+import com.openplan.backend.externalcalendar.provider.ProviderCredential;
 import com.openplan.backend.externalcalendar.provider.ProviderCalendar;
 import com.openplan.backend.externalcalendar.provider.ProviderEvent;
 import com.openplan.backend.externalcalendar.repository.ExternalCalendarConnectionRepository;
@@ -129,6 +130,7 @@ public class ExternalCalendarService {
     @Transactional
     public ExternalConnectionResponse create(UUID userId, CreateConnectionRequest request) {
         ExternalCalendarProvider provider = parseProvider(request.provider());
+        requireCredentialShape(provider, request);
         if (!providerRegistry.supports(provider)) {
             // 계약이 여는 제공자와 구현이 있는 제공자가 다를 수 있다 — 조용히 성공시키지 않는다.
             throw new OpenPlanException(ErrorCode.E_EXT_001, Map.of("provider", provider.name()));
@@ -175,6 +177,38 @@ public class ExternalCalendarService {
     }
 
     /**
+     * 제공자에 맞는 자격증명 조합이 실렸는지 확인한다 — {@code CreateConnectionRequest} 에서 옮겨온 검증.
+     *
+     * <p>빈 검증 애너테이션은 "이 필드는 항상 필요하다"만 말할 수 있는데, 계약은 제공자에 따라 필수
+     * 필드가 갈린다({@code oneOf}). DTO 에 {@code @NotBlank} 를 남겨 두면 네이버 요청이 authCode
+     * 없음으로 먼저 튕겨 <b>계약이 허용한 모양을 서버가 거부</b>한다. 그래서 검증을 없앤 게 아니라
+     * 어느 조합인지 아는 이 지점으로 옮겼다.
+     *
+     * <p>오류 코드·상세 모양을 {@code @Valid} 실패와 <b>같게</b> 맞춘다(E-COM-001 + {@code fields}).
+     * 검증 위치가 바뀌었다고 FE 가 보는 응답까지 바뀌면, 옮긴 것이 아니라 계약을 바꾼 것이 된다.
+     */
+    private void requireCredentialShape(ExternalCalendarProvider provider, CreateConnectionRequest request) {
+        List<Map<String, Object>> missing = new ArrayList<>();
+        if (provider.usesOAuth()) {
+            requireText(missing, "authCode", request.authCode());
+            requireText(missing, "redirectUri", request.redirectUri());
+            requireText(missing, "state", request.state());
+        } else {
+            requireText(missing, "naverId", request.naverId());
+            requireText(missing, "appPassword", request.appPassword());
+        }
+        if (!missing.isEmpty()) {
+            throw new OpenPlanException(ErrorCode.E_COM_001, Map.of("fields", missing));
+        }
+    }
+
+    private static void requireText(List<Map<String, Object>> missing, String field, String value) {
+        if (value == null || value.isBlank()) {
+            missing.add(Map.of("field", field, "rule", "NotBlank", "message", "필수 값입니다"));
+        }
+    }
+
+    /**
      * 연동 활성/비활성 (FIX-16) — 유래 고정 일정 상태를 <b>같은 트랜잭션에서</b> 미러한다(AC3).
      *
      * <p>미러를 나중에 하거나 별도 트랜잭션으로 두면, 연동은 꺼졌는데 그 시간이 여전히 배치 불가로
@@ -215,7 +249,7 @@ public class ExternalCalendarService {
     public List<ProviderCalendarResponse> listCalendars(UUID userId, UUID connectionId) {
         ExternalCalendarConnection connection = requireConnection(userId, connectionId);
         List<ProviderCalendar> calendars = providerRegistry.get(connection.getProvider())
-                .listCalendars(tokens.usableAccessToken(connection));
+                .listCalendars(tokens.usableCredential(connection));
 
         List<String> selectedIds = selectionRepository.findByConnectionIdOrderByCalendarNameAsc(connectionId).stream()
                 .map(ExternalCalendarSelection::getExternalCalendarId)
@@ -303,7 +337,7 @@ public class ExternalCalendarService {
         if (selections.isEmpty()) {
             return;   // 가져올 캘린더를 아직 고르지 않았다 — 제공자를 부를 이유가 없다.
         }
-        String accessToken = tokens.usableAccessToken(connection);
+        ProviderCredential credential = tokens.usableCredential(connection);
         ZoneId zone = userClock.zoneOf(userId);
         LocalDate today = userClock.todayOf(userId);
         Instant from = today.minusDays(SYNC_PAST_DAYS).atStartOfDay(zone).toInstant();
@@ -318,7 +352,7 @@ public class ExternalCalendarService {
         List<ExternalCalendarEvent> created = new ArrayList<>();
         for (ExternalCalendarSelection selection : selections) {
             List<ProviderEvent> fetched = providerRegistry.get(connection.getProvider())
-                    .listEvents(accessToken, selection.getExternalCalendarId(), selection.getCalendarName(), from, to);
+                    .listEvents(credential, selection.getExternalCalendarId(), selection.getCalendarName(), from, to);
 
             for (ProviderEvent providerEvent : fetched) {
                 ExternalCalendarEvent stored = existing.get(providerEvent.externalEventId());

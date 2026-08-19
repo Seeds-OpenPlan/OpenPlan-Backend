@@ -63,7 +63,8 @@ public class GoogleCalendarProvider implements CalendarProvider {
     }
 
     @Override
-    public List<ProviderCalendar> listCalendars(String accessToken) {
+    public List<ProviderCalendar> listCalendars(ProviderCredential credential) {
+        String accessToken = credential.secret();
         JsonNode body = get(CALENDAR_LIST_URI, accessToken, Map.of());
 
         List<ProviderCalendar> calendars = new ArrayList<>();
@@ -79,8 +80,9 @@ public class GoogleCalendarProvider implements CalendarProvider {
     }
 
     @Override
-    public List<ProviderEvent> listEvents(String accessToken, String externalCalendarId, String calendarName,
+    public List<ProviderEvent> listEvents(ProviderCredential credential, String externalCalendarId, String calendarName,
                                           Instant from, Instant to) {
+        String accessToken = credential.secret();
         String uri = UriComponentsBuilder.fromUriString(EVENTS_URI)
                 .queryParam("timeMin", DateTimeFormatter.ISO_INSTANT.format(from))
                 .queryParam("timeMax", DateTimeFormatter.ISO_INSTANT.format(to))
