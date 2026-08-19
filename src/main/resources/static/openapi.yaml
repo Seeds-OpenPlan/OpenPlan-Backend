@@ -592,9 +592,8 @@ paths:
   /external-calendar-connections:
     get:
       tags: [external-calendar-connections]
-      x-implementation-status: not-implemented
       operationId: listConnections
-      summary: "[미구현] 연동 목록·상태"
+      summary: "연동 목록·상태"
       x-lane: BE-1
       x-user-stories: [FIX-13]
       responses:
@@ -610,9 +609,8 @@ paths:
                     items: { $ref: "#/components/schemas/ExternalConnection" }
     post:
       tags: [external-calendar-connections]
-      x-implementation-status: not-implemented
       operationId: createConnection
-      summary: "[미구현] 연동 추가 (제공자 authCode 교환)"
+      summary: "연동 추가 (제공자 authCode 교환)"
       x-lane: BE-1
       x-user-stories: [ONB-07, FIX-14]
       requestBody:
@@ -621,11 +619,12 @@ paths:
           application/json:
             schema:
               type: object
-              required: [provider, authCode, redirectUri]
+              required: [provider, authCode, redirectUri, state]
               properties:
                 provider: { type: string, enum: [GOOGLE] }
                 authCode: { type: string }
                 redirectUri: { type: string }
+                state: { type: string, description: "startCalendarAuthorization 이 발급한 값 그대로" }
       responses:
         "201":
           description: 연결 완료
@@ -640,9 +639,8 @@ paths:
   /external-calendar-connections/{connectionId}:
     patch:
       tags: [external-calendar-connections]
-      x-implementation-status: not-implemented
       operationId: updateConnection
-      summary: "[미구현] 연동 활성/비활성 (FIX-16)"
+      summary: "연동 활성/비활성 (FIX-16)"
       x-lane: BE-1
       x-user-stories: [FIX-16]
       parameters: [{ $ref: "#/components/parameters/ConnectionId" }]
@@ -662,9 +660,8 @@ paths:
                   data: { $ref: "#/components/schemas/ExternalConnection" }
     delete:
       tags: [external-calendar-connections]
-      x-implementation-status: not-implemented
       operationId: deleteConnection
-      summary: "[미구현] 연동 해제 (이후 해당 캘린더 일정 미반영 — FIX-17)"
+      summary: "연동 해제 (이후 해당 캘린더 일정 미반영 — FIX-17)"
       x-lane: BE-1
       x-user-stories: [FIX-17]
       parameters: [{ $ref: "#/components/parameters/ConnectionId" }]
@@ -673,9 +670,8 @@ paths:
   /external-calendar-connections/{connectionId}/calendars:
     get:
       tags: [external-calendar-connections]
-      x-implementation-status: not-implemented
       operationId: listProviderCalendars
-      summary: "[미구현] 제공자 캘린더 목록 (ONB-08)"
+      summary: "제공자 캘린더 목록 (ONB-08)"
       x-lane: BE-1
       x-user-stories: [ONB-08]
       parameters: [{ $ref: "#/components/parameters/ConnectionId" }]
@@ -698,9 +694,8 @@ paths:
   /external-calendar-connections/{connectionId}/calendar-selections:
     put:
       tags: [external-calendar-connections]
-      x-implementation-status: not-implemented
       operationId: saveCalendarSelections
-      summary: "[미구현] 가져올 캘린더 선택 전체 교체 (목록에서 제거 = 미포함 — FIX-15)"
+      summary: "가져올 캘린더 선택 전체 교체 (목록에서 제거 = 미포함 — FIX-15)"
       x-lane: BE-1
       x-user-stories: [ONB-08, FIX-15]
       parameters: [{ $ref: "#/components/parameters/ConnectionId" }]
@@ -725,9 +720,8 @@ paths:
   /external-calendar-connections/{connectionId}/events:
     get:
       tags: [external-calendar-connections]
-      x-implementation-status: not-implemented
       operationId: listExternalEvents
-      summary: "[미구현] 가져온 일정 후보 목록 (선택 캘린더 기준 동기화 수행 후 반환)"
+      summary: "가져온 일정 후보 목록 (선택 캘린더 기준 동기화 수행 후 반환)"
       x-lane: BE-1
       x-user-stories: [ONB-08, ONB-09]
       parameters:
@@ -744,12 +738,38 @@ paths:
                   data:
                     type: array
                     items: { $ref: "#/components/schemas/ExternalEvent" }
+  /external-calendar-authorization:
+    get:
+      tags: [external-calendar-connections]
+      operationId: startCalendarAuthorization
+      summary: "캘린더 연동 인가 시작 (302 → 제공자)"
+      description: |
+        캘린더 연동에 쓸 인가 코드를 받기 위해 제공자 인가 페이지로 보낸다. 로그인 인가(oauthStart)와
+        다른 요청이다 — 요구하는 권한과 파라미터가 다르다.
+
+        서버가 조립하는 이유: 구글은 access_type=offline 없이는 refresh 토큰을 주지 않는다. 그것이
+        없으면 access 토큰이 만료되는 순간(약 1시간) 연동이 영구히 죽고 재연동 외 복구 수단이 없다.
+        게다가 재연동해도 두 번째부터는 prompt=consent 없이 refresh 토큰을 주지 않아 같은 일이
+        반복된다. 이 두 파라미터를 클라이언트가 기억하게 두면 언젠가 빠진다.
+
+        서버가 싣는 것: 캘린더 읽기 scope · access_type=offline · prompt=consent · 서명된 state.
+      x-lane: BE-1
+      x-user-stories: [ONB-07, FIX-14]
+      parameters:
+        - { name: provider, in: query, required: true, schema: { type: string, enum: [GOOGLE] } }
+        - name: redirectUri
+          in: query
+          required: true
+          description: 제공자가 code·state 를 돌려줄 화면 주소. 제공자 콘솔에 등록된 값이어야 한다.
+          schema: { type: string }
+      responses:
+        "302": { description: 제공자 인가 페이지로 리다이렉트 (state 발급) }
+        "422": { description: E-COM-009 지원하지 않는 제공자·허용되지 않은 redirectUri, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
   /external-calendar-events/{eventId}/application:
     post:
       tags: [external-calendar-events]
-      x-implementation-status: not-implemented
       operationId: applyExternalEvent
-      summary: "[미구현] 반영 방식 적용 — AS_IS/EDITED → 고정 일정(source=EXTERNAL) 생성, EXCLUDE → 제외 (ONB-09)"
+      summary: "반영 방식 적용 — AS_IS/EDITED → 고정 일정(source=EXTERNAL) 생성, EXCLUDE → 제외 (ONB-09)"
       x-lane: BE-1
       x-user-stories: [ONB-09]
       parameters: [{ name: eventId, in: path, required: true, schema: { type: string, format: uuid } }]
