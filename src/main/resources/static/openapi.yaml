@@ -621,7 +621,7 @@ paths:
               type: object
               required: [provider, authCode, redirectUri, state]
               properties:
-                provider: { type: string, enum: [GOOGLE] }
+                provider: { type: string, enum: [GOOGLE, KAKAO] }
                 authCode: { type: string }
                 redirectUri: { type: string }
                 state: { type: string, description: "startCalendarAuthorization 이 발급한 값 그대로" }
@@ -756,7 +756,7 @@ paths:
       x-lane: BE-1
       x-user-stories: [ONB-07, FIX-14]
       parameters:
-        - { name: provider, in: query, required: true, schema: { type: string, enum: [GOOGLE] } }
+        - { name: provider, in: query, required: true, schema: { type: string, enum: [GOOGLE, KAKAO] } }
         - name: redirectUri
           in: query
           required: true

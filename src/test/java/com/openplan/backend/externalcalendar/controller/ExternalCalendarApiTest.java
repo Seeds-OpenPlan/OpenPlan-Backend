@@ -4,7 +4,7 @@ import com.openplan.backend.auth.oauth.OAuthClient;
 import com.openplan.backend.auth.oauth.OAuthTokenSet;
 import com.openplan.backend.auth.oauth.OAuthUserInfo;
 import com.openplan.backend.externalcalendar.domain.ExternalCalendarProvider;
-import com.openplan.backend.externalcalendar.provider.CalendarProvider;
+import com.openplan.backend.externalcalendar.provider.GoogleCalendarProvider;
 import com.openplan.backend.externalcalendar.provider.CalendarProviderRegistry;
 import com.openplan.backend.externalcalendar.provider.ProviderCalendar;
 import com.openplan.backend.externalcalendar.provider.ProviderEvent;
@@ -75,8 +75,9 @@ class ExternalCalendarApiTest {
     private OAuthClient oauthClient;
     @MockitoBean
     private CalendarProviderRegistry providerRegistry;
+    /** 제공자 구현이 둘(구글·카카오)이라 구체 타입으로 지정한다 — {@code CalendarProvider} 로는 대역 대상이 모호하다. */
     @MockitoBean
-    private CalendarProvider googleProvider;
+    private GoogleCalendarProvider googleProvider;
 
     /**
      * state 서명은 {@link ExternalCalendarAuthorization} 자체 단위 테스트가 검증한다. 여기서 대역으로 두는

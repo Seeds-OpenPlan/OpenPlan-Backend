@@ -8,12 +8,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.util.UriComponentsBuilder;
 
-import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -42,16 +40,21 @@ public class GoogleCalendarProvider implements CalendarProvider {
     private static final String CALENDAR_LIST_URI = "https://www.googleapis.com/calendar/v3/users/me/calendarList";
     private static final String EVENTS_URI = "https://www.googleapis.com/calendar/v3/calendars/{calendarId}/events";
 
-    /** 한 번에 받아올 상한. 초과분은 다음 동기화에서 따라온다 — 페이지네이션은 후속. */
+    /**
+     * 한 번에 받아올 상한 (페이지네이션 미구현).
+     *
+     * <p>🔴 <b>초과분은 다음 동기화에서 따라오지 않는다.</b> {@code orderBy=startTime} 으로 앞에서부터
+     * 받으므로 같은 구간을 다시 불러도 같은 앞부분이 온다 — 넘친 일정은 계속 보이지 않는다.
+     * 그래서 상한에 닿으면 로그를 남긴다. 63일 구간에서 250건을 넘는 경우는 드물지만,
+     * 드문 것과 없는 것은 다르다.
+     */
     private static final int MAX_RESULTS = 250;
 
     private final RestClient restClient;
 
-    public GoogleCalendarProvider() {
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(Duration.ofSeconds(3));
-        factory.setReadTimeout(Duration.ofSeconds(10));
-        this.restClient = RestClient.builder().requestFactory(factory).build();
+    /** 타임아웃은 {@link ExternalCalendarClientConfig} 가 정한다 — 어댑터마다 갈라지지 않게. */
+    public GoogleCalendarProvider(RestClient externalCalendarRestClient) {
+        this.restClient = externalCalendarRestClient;
     }
 
     @Override
@@ -102,6 +105,10 @@ public class GoogleCalendarProvider implements CalendarProvider {
             }
             String title = text(item, "summary");
             events.add(new ProviderEvent(id, title != null ? title : "(제목 없음)", start, end, calendarName));
+        }
+        if (body.path("items").size() >= MAX_RESULTS) {
+            log.warn("구글 캘린더 일정이 조회 상한에 도달했다 — 이후 일정은 보이지 않는다: calendar={} limit={}",
+                    calendarName, MAX_RESULTS);
         }
         return events;
     }
