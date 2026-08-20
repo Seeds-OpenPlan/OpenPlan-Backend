@@ -610,22 +610,21 @@ paths:
     post:
       tags: [external-calendar-connections]
       operationId: createConnection
-      summary: "연동 추가 (구글·카카오는 authCode 교환, 네이버는 CalDAV 자격증명)"
+      summary: "연동 추가 (구글은 authCode 교환, 애플은 CalDAV 자격증명)"
       description: |
         제공자에 따라 인증 모델이 다르다. 하나의 요청으로 합친 것은 편의가 아니라, 연동 목록·해제·
         캘린더 선택이 전부 제공자와 무관하게 같은 자원을 쓰기 때문이다.
 
-        구글·카카오: startCalendarAuthorization 이 302로 보낸 인가가 끝나면 제공자가 redirectUri 로
+        구글: startCalendarAuthorization 이 302로 보낸 인가가 끝나면 제공자가 redirectUri 로
         code 와 state 를 돌려준다. 그 둘을 그대로 싣는다.
 
-        네이버: 캘린더 오픈 API 에 조회 계열 엔드포인트가 없어(공식 저장소 전수 확인, 2026-08-19)
-        OAuth 로는 일정을 읽을 수 없다. 대신 CalDAV(caldav.calendar.naver.com, Basic 인증)가
-        열려 있어 그 경로로 붙는다. 그래서 네이버는 authCode 가 아니라 네이버 ID 와 2단계 인증
-        애플리케이션 비밀번호를 싣는다.
+        애플: 서드파티가 쓸 수 있는 캘린더 REST API 가 없다 ("Sign in with Apple" 은 신원 확인용이라
+        캘린더를 읽지 못한다). 열려 있는 경로는 CalDAV(caldav.icloud.com, Basic 인증) 뿐이라 그쪽으로
+        붙는다. 그래서 애플은 authCode 가 아니라 Apple ID 와 앱 전용 비밀번호를 싣는다.
 
-        네이버가 startCalendarAuthorization 의 provider 목록에 없는 것은 누락이 아니다 — 인가 단계
-        자체가 없다. 애플리케이션 비밀번호는 사용자가 네이버 보안설정에서 직접 발급하며, 일반
-        로그인 비밀번호로는 CalDAV 가 인증되지 않는다.
+        애플이 startCalendarAuthorization 의 provider 목록에 없는 것은 누락이 아니다 — 인가 단계
+        자체가 없다. 앱 전용 비밀번호는 사용자가 appleid.apple.com 에서 직접 발급하며(2단계 인증
+        필수), 계정 비밀번호로는 CalDAV 가 인증되지 않는다.
       x-lane: BE-1
       x-user-stories: [ONB-07, FIX-14]
       requestBody:
@@ -635,12 +634,12 @@ paths:
             schema:
               oneOf:
                 - $ref: "#/components/schemas/OAuthCalendarConnectionRequest"
-                - $ref: "#/components/schemas/NaverCalendarConnectionRequest"
+                - $ref: "#/components/schemas/AppleCalendarConnectionRequest"
               discriminator:
                 propertyName: provider
                 mapping:
                   GOOGLE: "#/components/schemas/OAuthCalendarConnectionRequest"
-                  NAVER: "#/components/schemas/NaverCalendarConnectionRequest"
+                  APPLE: "#/components/schemas/AppleCalendarConnectionRequest"
       responses:
         "201":
           description: 연결 완료
@@ -651,7 +650,7 @@ paths:
                 properties:
                   data: { $ref: "#/components/schemas/ExternalConnection" }
         "409": { description: E-EXT-004 이미 연결된 계정, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
-        "422": { description: "E-EXT-002 제공자가 자격증명을 거부 (네이버 — ID·애플리케이션 비밀번호 오류). 사용자가 고칠 수 있는 입력 오류라 502 와 구분한다", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "422": { description: "E-EXT-002 제공자가 자격증명을 거부 (애플 — Apple ID·앱 전용 비밀번호 오류). 사용자가 고칠 수 있는 입력 오류라 502 와 구분한다", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
         "502": { description: E-EXT-001 제공자 오류, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
   /external-calendar-connections/{connectionId}:
     patch:
@@ -2383,23 +2382,24 @@ components:
             제공자가 인가 때 쓴 값과 대조한다 — 한 글자만 달라도 교환이 거부된다. 형식이 아니라
             검증 대상이다.
         state: { type: string, description: "startCalendarAuthorization 이 발급한 값 그대로" }
-    NaverCalendarConnectionRequest:
+    AppleCalendarConnectionRequest:
       type: object
       description: |
-        네이버 — CalDAV Basic 자격증명. authCode·state 가 없는 것은 인가 단계가 없기 때문이다.
-      required: [provider, naverId, appPassword]
+        애플(iCloud) — CalDAV Basic 자격증명. authCode·state 가 없는 것은 인가 단계가 없기 때문이다.
+      required: [provider, appleId, appPassword]
       properties:
-        provider: { type: string, enum: [NAVER] }
-        naverId:
+        provider: { type: string, enum: [APPLE] }
+        appleId:
           type: string
-          description: "네이버 아이디. 이메일 전체가 아니라 @ 앞부분이다."
+          format: email
+          description: "Apple ID. 로그인에 쓰는 이메일 전체를 넣는다."
         appPassword:
           type: string
           format: password
           description: |
-            네이버 보안설정 > 2단계 인증 > 애플리케이션 비밀번호에서 발급한 값. 일반 로그인
-            비밀번호로는 CalDAV 가 인증되지 않는다. 서버는 이 값을 암호화해 보관하며 응답에 싣지
-            않는다.
+            appleid.apple.com > 로그인 및 보안 > 앱 암호 에서 발급한 앱 전용 비밀번호(2단계 인증
+            필수). 계정 비밀번호로는 CalDAV 가 인증되지 않는다. 서버는 이 값을 암호화해 보관하며
+            응답에 싣지 않는다.
     ExternalConnection:
       type: object
       properties:

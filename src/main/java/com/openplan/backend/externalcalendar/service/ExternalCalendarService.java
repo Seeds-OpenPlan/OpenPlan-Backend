@@ -196,19 +196,19 @@ public class ExternalCalendarService {
     }
 
     /**
-     * 네이버 — 인가 단계가 없으므로 <b>실제로 붙여 봐서</b> 자격증명을 확인한다.
+     * 애플 — 인가 단계가 없으므로 <b>실제로 붙여 봐서</b> 자격증명을 확인한다.
      *
      * <p>확인 없이 저장하면 "연동됨"으로 보이는 연결이 <b>조회 때마다 실패</b>한다. 사용자는 캘린더를
      * 연결했다고 믿고 그 시간을 비워 두지 않는다. 붙을 수 있음을 증명한 것만 저장한다.
      *
-     * <p>아이디·비밀번호가 틀리면 어댑터가 {@code E-EXT-002}(422)로 올린다 — 사용자가 고칠 수 있는
+     * <p>Apple ID·앱 전용 비밀번호가 틀리면 어댑터가 {@code E-EXT-002}(422)로 올린다 — 사용자가 고칠 수 있는
      * 오류라 제공자 장애(502)와 화면이 달라야 한다.
      */
     private NewConnectionSecret verifyCalDav(ExternalCalendarProvider provider, CreateConnectionRequest request) {
-        String naverId = request.naverId().trim();
+        String accountId = request.appleId().trim();
         providerRegistry.get(provider)
-                .listCalendars(ProviderCredential.basic(naverId, request.appPassword()));
-        return new NewConnectionSecret(naverId, tokens.encrypt(request.appPassword()), null, null);
+                .listCalendars(ProviderCredential.basic(accountId, request.appPassword()));
+        return new NewConnectionSecret(accountId, tokens.encrypt(request.appPassword()), null, null);
     }
 
     /**
@@ -229,7 +229,7 @@ public class ExternalCalendarService {
             requireText(missing, "redirectUri", request.redirectUri());
             requireText(missing, "state", request.state());
         } else {
-            requireText(missing, "naverId", request.naverId());
+            requireText(missing, "appleId", request.appleId());
             requireText(missing, "appPassword", request.appPassword());
         }
         if (!missing.isEmpty()) {

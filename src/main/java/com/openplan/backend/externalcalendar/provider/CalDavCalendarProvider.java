@@ -11,7 +11,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
-import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 import org.w3c.dom.Element;
@@ -32,34 +31,33 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 네이버 캘린더 어댑터 — CalDAV (ST-B1-11 · ONB-07~09 · FIX-13~17).
+ * CalDAV 캘린더 어댑터 공통 기반 (RFC 4791) — ST-B1-11.
  *
- * <p><b>왜 CalDAV 인가.</b> 네이버 캘린더 오픈 API 에는 조회 계열 엔드포인트가 없다(공식 저장소 전수
- * 확인). 반면 {@code caldav.calendar.naver.com} 은 열려 있고 읽기가 된다 — 2026-08-20 실계정 실측.
- * 그래서 이 어댑터만 OAuth 가 아니라 <b>HTTP Basic</b> 으로 붙는다
- * ({@code WWW-Authenticate: basic realm="Naver Calendar"}).
+ * <p><b>왜 공통 기반인가.</b> 캘린더 조회를 여는 방식은 둘로 갈린다. 구글은 REST + OAuth 이지만,
+ * <b>애플은 서드파티용 캘린더 REST API 를 제공하지 않는다</b> — 열려 있는 것은 CalDAV 뿐이고
+ * 인증은 Apple ID + <b>앱 전용 비밀번호</b>의 HTTP Basic 이다
+ * ({@code caldav.icloud.com} → {@code WWW-Authenticate: Basic realm="MMCalDav"}, 2026-08-21 실측).
+ * 네이버도 같은 모양이었다. 제공자가 달라도 CalDAV 절차는 표준이므로 <b>흐름을 여기 두고
+ * 호스트·방언만 하위에서 정한다.</b>
  *
- * <p><b>네이버 방언 — 표준대로 짜면 조용히 틀리는 네 곳</b> (전부 실측):
- * <ol>
- *   <li>{@code calendar-query} 가 {@code calendar-data} 를 <b>안 준다.</b> 상태는 {@code 200 OK} 인데
- *       {@code <D:prop/>} 이 비어서 온다 → 목록(hrefs)을 받은 뒤 {@code calendar-multiget} 으로 본문을
- *       따로 받는 <b>2단계 조회</b>가 필요하다. 한 번에 끝내려 하면 일정이 0건으로 보인다.</li>
- *   <li>{@code <C:expand>} 를 <b>받고도 무시한다.</b> 붙이든 안 붙이든 응답이 같고 {@code RRULE} 이
- *       그대로 남는다 → 반복 전개는 {@link RecurrenceExpander} 가 한다.</li>
- *   <li>시각이 UTC 가 아니라 {@code DTSTART;TZID=Asia/Seoul:...} 이다 → {@link ICalDateTime} 참조.</li>
- *   <li>응답에 {@code VTIMEZONE} 이 딸려 오고 그 안에도 {@code DTSTART}·{@code RRULE} 이 있다
- *       (한국의 1987~88 서머타임) → {@link ICalParser} 가 컴포넌트 경계로 거른다.</li>
- * </ol>
+ * <p><b>조회는 2단계다.</b> 목록({@code calendar-query})으로 {@code href} 를 받고 본문
+ * ({@code calendar-multiget})을 따로 받는다. 표준상 {@code calendar-query} 가 {@code calendar-data} 를
+ * 함께 줄 수 있지만 <b>그러지 않는 서버가 실재한다</b> — 네이버는 상태 {@code 200 OK} 에
+ * {@code <D:prop/>} 이 빈 채로 왔다(2026-08-20 실측). 한 번에 끝내려 하면 그런 서버에서 일정이
+ * <b>오류 없이 0건</b>으로 보인다. 2단계는 모든 서버에서 옳고, 비용은 왕복 한 번이다.
  *
- * <p><b>다행인 것</b>: 네이버의 {@code time-range} 필터는 반복을 고려해 매칭한다 — 6월에 시작한 매주
- * 일정이 8월 조회 목록에 잡힌다(실측). 일정을 <b>놓치지는 않고</b>, 받은 마스터를 펼치기만 하면 된다.
+ * <p><b>{@code <C:expand>} 를 요청하지 않는다.</b> 서버가 펼쳐 주면 편하지만 <b>받고도 무시하는
+ * 서버가 실재하고</b>(네이버 실측 — 붙이든 안 붙이든 응답이 같았다) 그 무시는 오류로 드러나지 않는다.
+ * 대신 {@link RecurrenceExpander} 가 항상 클라이언트에서 펼친다. 서버가 이미 펼쳐 보냈다면
+ * {@code RRULE} 이 없으므로 전개기가 그대로 통과시킨다 — <b>어느 쪽이든 옳다.</b>
+ *
+ * <p><b>시각은 {@code TZID} 를 존중한다</b>(→ {@link ICalDateTime}). {@code VTIMEZONE} 안에도
+ * {@code DTSTART}·{@code RRULE} 이 있으므로 컴포넌트 경계로 걸러야 한다(→ {@link ICalParser}).
  */
-@Component
-public class NaverCalDavProvider implements CalendarProvider {
+public abstract class CalDavCalendarProvider implements CalendarProvider {
 
-    private static final Logger log = LoggerFactory.getLogger(NaverCalDavProvider.class);
+    private static final Logger log = LoggerFactory.getLogger(CalDavCalendarProvider.class);
 
-    private static final String BASE = "https://caldav.calendar.naver.com";
     private static final HttpMethod PROPFIND = HttpMethod.valueOf("PROPFIND");
     private static final HttpMethod REPORT = HttpMethod.valueOf("REPORT");
 
@@ -67,35 +65,33 @@ public class NaverCalDavProvider implements CalendarProvider {
     private static final DateTimeFormatter ICAL_UTC =
             DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'").withZone(ZoneId.of("UTC"));
 
+    /** 제공자 CalDAV 진입 호스트. 경로는 서버가 알려주는 대로 따라가므로 여기만 다르면 된다. */
+    protected abstract String baseUrl();
+
     /**
      * {@code TZID} 도 {@code Z} 도 없는 시각(floating)을 해석할 지역.
      *
-     * <p>네이버 캘린더는 한국 서비스이고 실측 응답이 전부 {@code Asia/Seoul} 이었다. floating 을 UTC 로
-     * 읽으면 9시간이 밀리므로, 모르면 UTC 가 아니라 여기로 떨어뜨린다.
+     * <p>floating 은 "보는 사람의 현지 시각"이라는 뜻이라 서버가 임의로 UTC 로 읽으면 안 된다 —
+     * 그렇게 읽으면 한국 사용자의 일정이 9시간 밀린다. 사용자층이 제공자마다 다르므로 하위에서 정한다.
      */
-    private static final ZoneId DEFAULT_ZONE = ZoneId.of("Asia/Seoul");
+    protected abstract ZoneId defaultZone();
 
     /** 한 번에 본문을 받아올 일정 수 상한 — 요청 XML 이 지나치게 커지지 않게 나눠 보낸다. */
     private static final int MULTIGET_BATCH = 100;
 
     private final RestClient restClient;
 
-    public NaverCalDavProvider(RestClient calDavRestClient) {
+    protected CalDavCalendarProvider(RestClient calDavRestClient) {
         this.restClient = calDavRestClient;
-    }
-
-    @Override
-    public ExternalCalendarProvider provider() {
-        return ExternalCalendarProvider.NAVER;
     }
 
     /**
      * 캘린더 목록 (ONB-08) — principal → calendar-home-set → 모음 순회.
      *
-     * <p>경로를 규칙으로 조립하지 않고 <b>서버가 알려주는 대로 따라간다.</b> 실측에서 홈이
-     * {@code /caldav/{id}/calendar/} 였지만, 그 모양을 상수로 박으면 네이버가 바꾸는 날 전부 404 가 된다.
+     * <p>경로를 규칙으로 조립하지 않고 <b>서버가 알려주는 대로 따라간다.</b> 홈 경로 모양은 제공자마다 다르고
+     * 예고 없이 바뀔 수 있다 — 상수로 박으면 그날 전부 404 가 된다.
      *
-     * <p><b>{@code VTODO} 모음은 거른다.</b> 네이버는 "내 할 일"을 캘린더와 같은 자리에 두는데
+     * <p><b>{@code VTODO} 모음은 거른다.</b> 제공자들은 "할 일" 모음을 캘린더와 같은 자리에 두는데
      * ({@code supported-calendar-component-set} 이 {@code VTODO}), 거르지 않으면 <b>할 일 목록이 캘린더로
      * 보이고</b> 사용자가 그것을 선택한 뒤 일정 0건을 만난다.
      */
@@ -213,11 +209,11 @@ public class NaverCalDavProvider implements CalendarProvider {
                     // 종일 일정은 시각이 없어 옮길 자리가 없고, 하루를 통째로 채우면 의도하지 않은 차단이 된다.
                     continue;
                 }
-                Instant start = ICalDateTime.parse(dtStart, DEFAULT_ZONE);
+                Instant start = ICalDateTime.parse(dtStart, defaultZone());
                 if (start == null) {
                     continue;
                 }
-                Instant end = ICalDateTime.parse(event.first("DTEND"), DEFAULT_ZONE);
+                Instant end = ICalDateTime.parse(event.first("DTEND"), defaultZone());
                 ZoneId zone = zoneOf(dtStart);
 
                 String uid = event.value("UID");
@@ -241,15 +237,15 @@ public class NaverCalDavProvider implements CalendarProvider {
         return base + "#" + start.getEpochSecond();
     }
 
-    private static ZoneId zoneOf(ICalParser.Property dtStart) {
+    private ZoneId zoneOf(ICalParser.Property dtStart) {
         String tzid = dtStart == null ? null : dtStart.param("TZID");
         if (tzid == null || tzid.isBlank()) {
-            return DEFAULT_ZONE;
+            return defaultZone();
         }
         try {
             return ZoneId.of(tzid.replace("\"", "").trim());
         } catch (Exception e) {
-            return DEFAULT_ZONE;
+            return defaultZone();
         }
     }
 
@@ -258,7 +254,7 @@ public class NaverCalDavProvider implements CalendarProvider {
         byte[] xml;
         try {
             xml = restClient.method(method)
-                    .uri(path.startsWith("http") ? path : BASE + path)
+                    .uri(path.startsWith("http") ? path : baseUrl() + path)
                     .header(HttpHeaders.AUTHORIZATION, basic(credential))
                     .header("Depth", String.valueOf(depth))
                     .contentType(MediaType.APPLICATION_XML)
@@ -268,14 +264,13 @@ public class NaverCalDavProvider implements CalendarProvider {
         } catch (RestClientResponseException e) {
             if (e.getStatusCode().value() == 401 || e.getStatusCode().value() == 403) {
                 // 아이디·앱 비밀번호가 틀렸거나 사용자가 네이버에서 회수했다. 사용자가 고칠 수 있는 오류다.
-                log.warn("네이버 CalDAV 자격증명 거부: status={}", e.getStatusCode().value());
-                throw new OpenPlanException(ErrorCode.E_EXT_002,
-                        Map.of("provider", ExternalCalendarProvider.NAVER.name()));
+                log.warn("CalDAV 자격증명 거부: provider={} status={}", provider(), e.getStatusCode().value());
+                throw new OpenPlanException(ErrorCode.E_EXT_002, Map.of("provider", provider().name()));
             }
-            log.warn("네이버 CalDAV 오류: status={} path={}", e.getStatusCode().value(), path);
+            log.warn("CalDAV 오류: provider={} status={} path={}", provider(), e.getStatusCode().value(), path);
             throw providerFailure("status=" + e.getStatusCode().value());
         } catch (Exception e) {
-            log.warn("네이버 CalDAV 호출 실패: path={}", path, e);
+            log.warn("CalDAV 호출 실패: provider={} path={}", provider(), path, e);
             throw providerFailure(e.getClass().getSimpleName());
         }
         return parseXml(xml);
@@ -299,7 +294,7 @@ public class NaverCalDavProvider implements CalendarProvider {
      * <p><b>외부 엔티티를 끈다.</b> 제공자 응답도 외부 입력이다 — DTD 를 허용하면 응답 한 줄로 서버의
      * 로컬 파일을 읽게 만드는 경로(XXE)가 열린다.
      */
-    private static Element parseXml(byte[] xml) {
+    private Element parseXml(byte[] xml) {
         if (xml == null || xml.length == 0) {
             throw providerFailure("빈 응답");
         }
@@ -365,9 +360,8 @@ public class NaverCalDavProvider implements CalendarProvider {
         return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }
 
-    private static OpenPlanException providerFailure(String detail) {
-        log.warn("네이버 CalDAV 실패: {}", detail);
-        return new OpenPlanException(ErrorCode.E_EXT_001,
-                Map.of("provider", ExternalCalendarProvider.NAVER.name()));
+    private OpenPlanException providerFailure(String detail) {
+        log.warn("CalDAV 실패: provider={} {}", provider(), detail);
+        return new OpenPlanException(ErrorCode.E_EXT_001, Map.of("provider", provider().name()));
     }
 }

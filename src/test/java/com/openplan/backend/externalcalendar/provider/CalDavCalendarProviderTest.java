@@ -23,38 +23,49 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
 /**
- * 네이버 CalDAV 어댑터 (ST-B1-11). 제공자 응답만 대역 — 요청 조립·XML 파싱·반복 전개는 실제로 돈다.
+ * CalDAV 어댑터 공통 기반 (ST-B1-11). 제공자 응답만 대역 — 요청 조립·XML 파싱·반복 전개는 실제로 돈다.
  *
- * <p><b>응답 픽스처는 2026-08-20 실계정 응답의 구조</b>다(값만 익명화). 네임스페이스 접두·CDATA·
+ * <p><b>응답 픽스처는 2026-08-20 실계정(네이버) 응답의 구조</b>다(값만 익명화). CalDAV 는 표준이라
+ * 절차 검증에는 그대로 쓸 수 있고, 애플 고유 방언은 {@code AppleCalDavLiveTest} 가 실계정으로 확정한다. 네임스페이스 접두·CDATA·
  * 빈 {@code <D:prop/>} 같은 것이 실물과 같아야 방언을 잡는 의미가 있다.
  *
  * <p><b>이 테스트가 덮지 못하는 것</b>: {@link MockRestServiceServer} 는 HTTP 스택을 통째로 대체하므로
  * {@code PROPFIND}·{@code REPORT} 가 <b>실제 전선으로 나가는지</b>는 여기서 증명되지 않는다.
  * 그것은 {@code CalDavHttpMethodTest} 가 로컬 실서버로 확인한다.
  */
-class NaverCalDavProviderTest {
+class CalDavCalendarProviderTest {
 
-    private static final ProviderCredential CREDENTIAL = ProviderCredential.basic("tester", "app-password");
-    private static final String BASE = "https://caldav.calendar.naver.com";
-    private static final String HOME = "/caldav/tester/calendar/";
+    /** 테스트용 구체 어댑터 — 기반 클래스의 절차만 검증한다(호스트·지역은 애플과 동일하게 둔다). */
+    private static final class TestCalDavProvider extends CalDavCalendarProvider {
+        private TestCalDavProvider(RestClient client) { super(client); }
+        @Override public com.openplan.backend.externalcalendar.domain.ExternalCalendarProvider provider() {
+            return com.openplan.backend.externalcalendar.domain.ExternalCalendarProvider.APPLE;
+        }
+        @Override protected String baseUrl() { return BASE; }
+        @Override protected java.time.ZoneId defaultZone() { return java.time.ZoneId.of("Asia/Seoul"); }
+    }
+
+    private static final ProviderCredential CREDENTIAL = ProviderCredential.basic("tester@icloud.com", "app-password");
+    private static final String BASE = "https://caldav.icloud.com";
+    private static final String HOME = "/1234567/calendars/";
     private static final String CAL = HOME + "e8faeab7-cccf-45e2-8b69-e813570d829c/";
-    private static final String EVENT_HREF = CAL + "AAAA1111_tester%40naver.com_caldavApp.ics";
+    private static final String EVENT_HREF = CAL + "AAAA1111_tester%40icloud.com_caldavApp.ics";
 
     private MockRestServiceServer server;
-    private NaverCalDavProvider provider;
+    private CalDavCalendarProvider provider;
 
     @BeforeEach
     void setUp() {
         RestClient.Builder builder = RestClient.builder();
         server = MockRestServiceServer.bindTo(builder).build();
-        provider = new NaverCalDavProvider(builder.build());
+        provider = new TestCalDavProvider(builder.build());
     }
 
     @Test
     @DisplayName("경로를 규칙으로 조립하지 않고 principal → home 순으로 따라간다")
     void 서버가_알려준_경로를_따라간다() {
         expectPropfind(BASE + "/", principalResponse());
-        expectPropfind(BASE + "/principals/users/tester/", homeResponse());
+        expectPropfind(BASE + "/1234567/principal/", homeResponse());
         expectPropfind(BASE + HOME, calendarsResponse());
 
         List<ProviderCalendar> calendars = provider.listCalendars(CREDENTIAL);
@@ -67,7 +78,7 @@ class NaverCalDavProviderTest {
     @DisplayName("VTODO 모음(내 할 일)은 캘린더 목록에서 거른다")
     void 할일_모음은_캘린더가_아니다() {
         expectPropfind(BASE + "/", principalResponse());
-        expectPropfind(BASE + "/principals/users/tester/", homeResponse());
+        expectPropfind(BASE + "/1234567/principal/", homeResponse());
         expectPropfind(BASE + HOME, calendarsResponse());
 
         List<ProviderCalendar> calendars = provider.listCalendars(CREDENTIAL);
@@ -81,12 +92,12 @@ class NaverCalDavProviderTest {
     @Test
     @DisplayName("Basic 자격증명을 싣는다 — 아이디와 비밀번호가 함께 있어야 한 번의 호출이 선다")
     void Basic_헤더를_조립한다() {
-        // "tester:app-password" 의 Base64
-        String expected = "Basic dGVzdGVyOmFwcC1wYXNzd29yZA==";
+        // "tester@icloud.com:app-password" 의 Base64
+        String expected = "Basic dGVzdGVyQGljbG91ZC5jb206YXBwLXBhc3N3b3Jk";
         server.expect(once(), requestTo(BASE + "/"))
                 .andExpect(header("Authorization", expected))
                 .andRespond(withSuccess(principalResponse(), MediaType.APPLICATION_XML));
-        expectPropfind(BASE + "/principals/users/tester/", homeResponse());
+        expectPropfind(BASE + "/1234567/principal/", homeResponse());
         expectPropfind(BASE + HOME, calendarsResponse());
 
         provider.listCalendars(CREDENTIAL);
@@ -190,7 +201,7 @@ class NaverCalDavProviderTest {
                 <?xml version="1.0" encoding="UTF-8"?>
                 <D:multistatus %s>
                   <D:response><D:href>/</D:href><D:propstat><D:prop>
-                    <D:current-user-principal><D:href>/principals/users/tester/</D:href></D:current-user-principal>
+                    <D:current-user-principal><D:href>/1234567/principal/</D:href></D:current-user-principal>
                   </D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>
                 </D:multistatus>""".formatted(NS);
     }
@@ -199,7 +210,7 @@ class NaverCalDavProviderTest {
         return """
                 <?xml version="1.0" encoding="UTF-8"?>
                 <D:multistatus %s>
-                  <D:response><D:href>/principals/users/tester/</D:href><D:propstat><D:prop>
+                  <D:response><D:href>/1234567/principal/</D:href><D:propstat><D:prop>
                     <caldav:calendar-home-set><D:href>%s</D:href></caldav:calendar-home-set>
                   </D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>
                 </D:multistatus>""".formatted(NS, HOME);
@@ -253,7 +264,7 @@ class NaverCalDavProviderTest {
                 END:DAYLIGHT
                 END:VTIMEZONE
                 BEGIN:VEVENT
-                UID:AAAA1111_tester@naver.com_caldavApp
+                UID:AAAA1111_tester@icloud.com_caldavApp
                 SUMMARY:팀 점검
                 DTSTART;TZID=Asia/Seoul:20260820T100000
                 DTEND;TZID=Asia/Seoul:20260820T110000
@@ -266,7 +277,7 @@ class NaverCalDavProviderTest {
                 BEGIN:VCALENDAR
                 VERSION:2.0
                 BEGIN:VEVENT
-                UID:weekly-tester@naver.com
+                UID:weekly-tester@icloud.com
                 SUMMARY:주간 회의
                 DTSTART:20260602T010000Z
                 DTEND:20260602T020000Z

@@ -9,12 +9,11 @@ import com.openplan.backend.auth.oauth.OAuthProviderType;
  * 로그인 가능한 제공자와 <b>캘린더를 읽을 수 있는</b> 제공자가 같지 않고, <b>읽는 방식도 같지 않기</b>
  * 때문이다. 두 집합을 한 enum 으로 묶으면 "로그인 되니 연동도 같은 방식이겠지"라는 오독이 코드 안에 남는다.
  *
- * <p><b>네이버는 인증 모델이 다르다.</b> 캘린더 오픈 API 에는 조회 계열 엔드포인트가 없고
- * ({@code createSchedule} 하나뿐 — 공식 저장소 전수 확인, 2026-08-19), OAuth 로는 일정을 읽을 수 없다.
- * 대신 CalDAV({@code caldav.calendar.naver.com})가 열려 있고 이쪽은 읽기가 된다
- * ({@code PROPFIND} 가 404 가 아니라 401 · {@code WWW-Authenticate: basic realm="Naver Calendar"} — 2026-08-20 실측).
- * 그래서 네이버만 {@link CalendarAuthModel#CALDAV_BASIC} 이고, 인가 코드 대신 아이디와
- * <b>2단계 인증 애플리케이션 비밀번호</b>를 받는다.
+ * <p><b>애플은 인증 모델이 다르다.</b> 애플은 서드파티가 쓸 수 있는 캘린더 REST API 를 제공하지 않아
+ * ("Sign in with Apple" 은 신원 확인용이라 캘린더를 읽지 못한다) 열려 있는 경로가 CalDAV 뿐이고,
+ * 인증은 Apple ID + <b>앱 전용 비밀번호</b>의 HTTP Basic 이다
+ * ({@code caldav.icloud.com} → {@code WWW-Authenticate: Basic realm="MMCalDav"} — 2026-08-21 실측).
+ * 그래서 애플만 {@link CalendarAuthModel#CALDAV_BASIC} 이고, 인가 코드 대신 자격증명을 받는다.
  *
  * <p>openapi 의 {@code createConnection} 은 이 갈라짐을 {@code oneOf} + {@code discriminator(provider)} 로
  * 표현한다 — 오퍼레이션을 쪼개지 않은 것은 연동 목록·해제·캘린더 선택이 제공자와 무관하게 같은 자원을
@@ -26,8 +25,14 @@ public enum ExternalCalendarProvider {
     GOOGLE(OAuthProviderType.GOOGLE, "https://www.googleapis.com/auth/calendar.readonly",
             CalendarAuthModel.OAUTH),
 
-    /** CalDAV Basic — 오픈 API 에 조회가 없어 인가가 아니라 애플리케이션 비밀번호로 붙는다. */
-    NAVER(OAuthProviderType.NAVER, "", CalendarAuthModel.CALDAV_BASIC);
+    /**
+     * 애플(iCloud) — CalDAV Basic.
+     *
+     * <p>{@code oauthProvider} 가 {@code null} 인 것이 누락이 아니다. 애플 캘린더는 인가 단계 자체가
+     * 없어 교환할 코드도, 조회할 클라이언트 자격증명도 없다. 여기에 임의의 OAuth 제공자를 끼워 넣으면
+     * "인가를 시작할 수 있다"는 거짓 신호가 코드 안에 남는다.
+     */
+    APPLE(null, "", CalendarAuthModel.CALDAV_BASIC);
 
     /**
      * 제공자에 붙는 방식. 연동 생성이 무엇을 요구하는지가 여기서 갈린다.
@@ -78,7 +83,12 @@ public enum ExternalCalendarProvider {
         return calendarScope;
     }
 
-    /** 인가 코드 교환에 쓰는 OAuth 제공자 정의(엔드포인트·자격증명 조회 키). */
+    /**
+     * 인가 코드 교환에 쓰는 OAuth 제공자 정의(엔드포인트·자격증명 조회 키).
+     *
+     * <p>{@link CalendarAuthModel#CALDAV_BASIC} 제공자는 {@code null} 이다 — 인가 단계가 없다.
+     * 호출 전에 {@link #usesOAuth()} 로 갈래를 확인할 것.
+     */
     public OAuthProviderType oauthProvider() {
         return oauthProvider;
     }

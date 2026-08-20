@@ -12,8 +12,8 @@ package com.openplan.backend.externalcalendar.provider;
  * 낭비로 보일 수 있으나, 대안은 제공자마다 다른 서명을 두는 것이고 그러면 레지스트리가 어댑터를
  * 균질하게 다루지 못한다.
  *
- * @param accountIdentifier Basic 인증의 사용자명(네이버 아이디). OAuth 제공자에서는 참고값.
- * @param secret            평문 비밀 — OAuth 는 access 토큰, CalDAV 는 애플리케이션 비밀번호.
+ * @param accountIdentifier Basic 인증의 사용자명(Apple ID). OAuth 제공자에서는 참고값.
+ * @param secret            평문 비밀 — OAuth 는 access 토큰, CalDAV 는 앱 전용 비밀번호.
  */
 public record ProviderCredential(String accountIdentifier, String secret) {
 
