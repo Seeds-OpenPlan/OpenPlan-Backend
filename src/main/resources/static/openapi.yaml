@@ -1839,9 +1839,8 @@ paths:
   /schedules/{scheduleId}:
     patch:
       tags: [schedules]
-      x-implementation-status: not-implemented
       operationId: updateSchedule
-      summary: "[미구현] 일정 편집 (제목·예상시간·우선순위·메모 — B2 보강 컬럼, version 필수)"
+      summary: "일정 편집 (제목·예상시간·우선순위·메모 — B2 보강 컬럼, version 필수)"
       x-lane: BE-2
       x-user-stories: [PLAN-17]
       parameters: [{ name: scheduleId, in: path, required: true, schema: { type: string, format: uuid } }]
