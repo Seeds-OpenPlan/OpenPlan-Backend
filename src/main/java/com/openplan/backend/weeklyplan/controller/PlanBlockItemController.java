@@ -1,12 +1,17 @@
 package com.openplan.backend.weeklyplan.controller;
 
+import com.openplan.backend.global.response.ApiResponse;
 import com.openplan.backend.global.security.CurrentUser;
+import com.openplan.backend.weeklyplan.dto.PlanBlockMoveRequest;
+import com.openplan.backend.weeklyplan.dto.PlanBlockResponse;
 import com.openplan.backend.weeklyplan.service.PlanBlockService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -26,6 +31,18 @@ public class PlanBlockItemController {
 
     public PlanBlockItemController(PlanBlockService planBlockService) {
         this.planBlockService = planBlockService;
+    }
+
+    @PatchMapping("/{blockId}")
+    @Operation(summary = "블록 이동·시간 조정 (PLAN-19·20)",
+            description = "부분 수정 — startAt/endAt 시각 조정, targetWeekStartDate로 주차 이동(대상 주 초안 get-or-create). "
+                    + "확정 계획이면 DRAFT 복귀·양쪽 주 total 재계산. 시작>=종료 → 422 E-PLAN-002, 5분 단위 위반 → 422 E-COM-009. "
+                    + "부재·타인 → 404. 겹침은 막지 않음(검증 엔진 소관).")
+    public ApiResponse<PlanBlockResponse> move(
+            @CurrentUser UUID userId,
+            @PathVariable UUID blockId,
+            @RequestBody PlanBlockMoveRequest request) {
+        return ApiResponse.ok(planBlockService.moveBlock(userId, blockId, request));
     }
 
     @DeleteMapping("/{blockId}")
