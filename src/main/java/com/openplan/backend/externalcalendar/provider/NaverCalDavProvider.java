@@ -255,7 +255,7 @@ public class NaverCalDavProvider implements CalendarProvider {
 
     /** CalDAV 한 번 왕복 — 실패는 여기서 계약된 오류로 바꾼다. */
     private Element dav(ProviderCredential credential, String path, int depth, HttpMethod method, String body) {
-        String xml;
+        byte[] xml;
         try {
             xml = restClient.method(method)
                     .uri(path.startsWith("http") ? path : BASE + path)
@@ -264,7 +264,7 @@ public class NaverCalDavProvider implements CalendarProvider {
                     .contentType(MediaType.APPLICATION_XML)
                     .body(body)
                     .retrieve()
-                    .body(String.class);
+                    .body(byte[].class);
         } catch (RestClientResponseException e) {
             if (e.getStatusCode().value() == 401 || e.getStatusCode().value() == 403) {
                 // 아이디·앱 비밀번호가 틀렸거나 사용자가 네이버에서 회수했다. 사용자가 고칠 수 있는 오류다.
@@ -290,11 +290,17 @@ public class NaverCalDavProvider implements CalendarProvider {
     /**
      * 응답 XML 파싱.
      *
+     * <p><b>왜 {@code String} 이 아니라 바이트로 받는가.</b> 문자열로 받으면 디코딩을 HTTP 헤더의
+     * {@code charset} 에 맡기게 되는데, 그것이 없으면 Spring 은 ISO-8859-1 로 읽는다 — 한글 일정 제목이
+     * <b>예외 없이 깨진 글자로</b> 들어온다. XML 은 본문 첫 줄의 {@code encoding} 선언이 권위이므로
+     * 바이트를 그대로 넘겨 파서가 판단하게 한다. (실제 네이버는 {@code charset=UTF-8} 을 붙이지만,
+     * 제공자 헤더에 의존하는 대신 규격이 정한 순서를 따른다.)
+     *
      * <p><b>외부 엔티티를 끈다.</b> 제공자 응답도 외부 입력이다 — DTD 를 허용하면 응답 한 줄로 서버의
      * 로컬 파일을 읽게 만드는 경로(XXE)가 열린다.
      */
-    private static Element parseXml(String xml) {
-        if (xml == null || xml.isBlank()) {
+    private static Element parseXml(byte[] xml) {
+        if (xml == null || xml.length == 0) {
             throw providerFailure("빈 응답");
         }
         try {
@@ -308,8 +314,7 @@ public class NaverCalDavProvider implements CalendarProvider {
             factory.setXIncludeAware(false);
             factory.setExpandEntityReferences(false);
             DocumentBuilder builder = factory.newDocumentBuilder();
-            return builder.parse(new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)))
-                    .getDocumentElement();
+            return builder.parse(new ByteArrayInputStream(xml)).getDocumentElement();
         } catch (Exception e) {
             throw providerFailure("XML 파싱 실패");
         }
