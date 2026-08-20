@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -38,4 +39,21 @@ public interface PlanBlockRepository extends JpaRepository<PlanBlock, UUID> {
 
     /** 검증 스냅샷 조립용(ST-B2-09) — 그 주 블록 엔티티. BlockView 매핑에 start/end·type·taskId만 필요. */
     List<PlanBlock> findByWeeklyPlanId(UUID weeklyPlanId);
+
+    /**
+     * 소유자 스코프 단건(blockId) — 삭제·이동 공용(PLAN-16·18·19·20). {@code plan_blocks}에 user_id가 없어
+     * 소속 {@code weekly_plans.user_id}로 소유를 판정한다. 부재·타인 → empty → 404 E-COM-004(존재 은닉).
+     */
+    @Query("""
+            SELECT pb FROM PlanBlock pb
+             WHERE pb.id = :blockId
+               AND pb.weeklyPlanId IN (SELECT wp.id FROM WeeklyPlan wp WHERE wp.userId = :userId)
+            """)
+    Optional<PlanBlock> findByIdAndUserId(@Param("blockId") UUID blockId, @Param("userId") UUID userId);
+
+    /**
+     * 같은 태스크의 <b>다른</b> 블록이 남아 있는지(TASK 블록 삭제 후 UNASSIGNED 복귀 판정 — PLAN-16 / TT-2).
+     * 삭제 대상 자신을 제외해야 하므로 {@code excludeBlockId}로 뺀다.
+     */
+    boolean existsByTaskIdAndIdNot(UUID taskId, UUID excludeBlockId);
 }
