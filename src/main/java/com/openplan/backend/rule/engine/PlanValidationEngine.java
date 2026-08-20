@@ -2,6 +2,7 @@ package com.openplan.backend.rule.engine;
 
 import com.openplan.backend.rule.model.AvailabilityWindow;
 import com.openplan.backend.rule.model.BlockView;
+import com.openplan.backend.rule.model.FixedWindow;
 import com.openplan.backend.rule.model.PlanSnapshot;
 import com.openplan.backend.rule.model.RuleId;
 import com.openplan.backend.rule.model.Severity;
@@ -12,6 +13,7 @@ import com.openplan.backend.rule.port.PlanValidationPort;
 import java.time.DayOfWeek;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -26,8 +28,8 @@ import java.util.Map;
  *              시각은 오직 {@code snapshot.referenceTime()}. (RuleEnginePurityTest 로 강제)
  * C-2: 저장소 핸들 없음 — 순수 함수, 자동 확정 불가.
  *
- * 구현 현황: V1(겹침·차단) · V3(가용시간 초과·경고).
- *   V2·V4·V5·V6 = 미구현. V7 = 임계값 승인 완료(D-19, ASSUMPTION-Q2 버퍼 10%)이나 구현은 W6 예정.
+ * 구현 현황: V1(겹침·차단) · V2(고정 일정 충돌·차단) · V3(가용시간 초과·경고).
+ *   V4·V5·V6 = 미구현. V7 = 임계값 승인 완료(D-19, ASSUMPTION-Q2 버퍼 10%)이나 구현은 W6 예정.
  */
 public final class PlanValidationEngine implements PlanValidationPort {
 
@@ -58,11 +60,11 @@ public final class PlanValidationEngine implements PlanValidationPort {
         List<ValidationIssue> issues = new ArrayList<>();
 
         issues.addAll(checkOverlap(snapshot));          // V1 (BLOCK)
+        issues.addAll(checkFixedConflict(snapshot));    // V2 (BLOCK)
         issues.addAll(checkCapacityExceeded(snapshot)); // V3 (WARNING)
 
         // 미구현 — rule-engine-contract §3.3:
-        //   V2_FIXED_CONFLICT(차단) · V4_OUT_OF_AVAILABILITY(경고)
-        //   V5_OUT_OF_WBS(경고) · V6_AFTER_DUE_DATE(경고)
+        //   V4_OUT_OF_AVAILABILITY(경고) · V5_OUT_OF_WBS(경고) · V6_AFTER_DUE_DATE(경고)
         //   V7_BUFFER_SHORTAGE: 임계값 10% 승인 완료(D-19) — 구현은 W6.
 
         issues.sort(ORDER);
@@ -117,6 +119,72 @@ public final class PlanValidationEngine implements PlanValidationPort {
     /** 계약 §3.3 V1: {@code a.start < b.end && b.start < a.end}. 인접(end == start)은 비겹침. */
     private static boolean overlaps(BlockView a, BlockView b) {
         return a.startAt().isBefore(b.endAt()) && b.startAt().isBefore(a.endAt());
+    }
+
+    /**
+     * V2: 블록이 <b>해당 주 유효</b> 고정 일정 창과 교차하면 BLOCK (계약 §3.3 V2).
+     * 창의 {@code weekday}+시간을 해당 주 날짜로 전개한 뒤 V1과 <b>동일한 교차식</b>을 쓴다 —
+     * 인접({@code block.end == fixed.start})은 비겹침.
+     *
+     * <p>이슈 단위는 <b>(블록, 고정 일정) 쌍당 1건</b>. 대표 {@code planBlockId} = 블록,
+     * {@code counterpartId} = {@code fixedScheduleId} (계약 §3.3 "V2는 항상 블록 쪽 — 선정 불요").
+     * 한 블록이 여러 창과 겹치면 쌍 수만큼 나오고, 전순서 4번째 키인 {@code counterpartId} 가 가른다.
+     *
+     * <p><b>주차 예외(PLAN-33)·INACTIVE 는 여기서 보지 않는다</b> — 스냅샷 조립(BE-2) 소관이라
+     * 예외된 일정은 애초에 {@code activeFixedSchedules} 에 없다. 즉 <b>미발생 = 그 주 한정 비활성</b>
+     * 이라는 의미론이 성립한다(B12 · {@link com.openplan.backend.rule.model.FixedWindow} javadoc).
+     * 엔진은 받은 창을 전부 유효로 취급한다.
+     *
+     * <p>{@code effectiveFrom}/{@code effectiveTo} 는 <b>양쪽 다 null 허용</b>(무기한)이다 —
+     * DB {@code fixed_schedules.start_date/end_date} 가 nullable 이고
+     * {@code FixedScheduleValidator.validateDates} 가 "한쪽만/둘 다 null 은 허용"으로 못박았다.
+     * null 을 열린 구간으로 다루지 않으면 무기한 고정 일정이 통째로 판정에서 빠진다.
+     */
+    private List<ValidationIssue> checkFixedConflict(PlanSnapshot s) {
+        List<ValidationIssue> issues = new ArrayList<>();
+
+        for (BlockView block : s.blocks()) {
+            for (FixedWindow window : s.activeFixedSchedules()) {
+                LocalDate occurrence = dateInWeek(s.weekStartDate(), window.weekday());
+                if (outsideEffectiveRange(window, occurrence)) continue;
+
+                Instant fixedStart = occurrence.atTime(window.startTime()).atZone(s.zone()).toInstant();
+                Instant fixedEnd = occurrence.atTime(window.endTime()).atZone(s.zone()).toInstant();
+                if (!block.startAt().isBefore(fixedEnd) || !fixedStart.isBefore(block.endAt())) continue;
+
+                long overlapMinutes = Duration.between(
+                        max(block.startAt(), fixedStart), min(block.endAt(), fixedEnd)).toMinutes();
+
+                ZonedDateTime blockStart = block.startAt().atZone(s.zone());
+                ZonedDateTime blockEnd = block.endAt().atZone(s.zone());
+
+                issues.add(new ValidationIssue(
+                        RuleId.V2_FIXED_CONFLICT, Severity.BLOCK,
+                        block.blockId(), window.fixedScheduleId(),
+                        null, null, // 쌍 규칙은 판정 축 필드만 채운다 (계약 §3.3)
+                        RuleMessages.v2FixedConflict(
+                                blockStart.getDayOfWeek(), blockStart.toLocalTime(), blockEnd.toLocalTime(),
+                                window.weekday(), window.startTime(), window.endTime(),
+                                overlapMinutes)));
+            }
+        }
+        return issues;
+    }
+
+    /**
+     * 주 시작일이 속한 주에서 해당 요일의 실제 날짜. {@code weekStartDate} 가 무슨 요일이든
+     * 0~6일 뒤에서 찾는다 — 주 시작 요일을 월요일로 단정하지 않기 위해서다(계약은 주 시작 요일을
+     * 고정하지 않고 {@code weekStartDate} 만 준다).
+     */
+    private static LocalDate dateInWeek(LocalDate weekStartDate, DayOfWeek weekday) {
+        int offset = Math.floorMod(weekday.getValue() - weekStartDate.getDayOfWeek().getValue(), 7);
+        return weekStartDate.plusDays(offset);
+    }
+
+    /** 계약 §3.3 V2 "effectiveFrom/To 범위 밖 제외". null = 열린 구간(무기한). */
+    private static boolean outsideEffectiveRange(FixedWindow window, LocalDate occurrence) {
+        return (window.effectiveFrom() != null && occurrence.isBefore(window.effectiveFrom()))
+                || (window.effectiveTo() != null && occurrence.isAfter(window.effectiveTo()));
     }
 
     private static Instant max(Instant a, Instant b) {

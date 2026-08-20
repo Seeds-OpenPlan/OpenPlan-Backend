@@ -3,6 +3,7 @@ package com.openplan.backend.rule.engine;
 import com.openplan.backend.rule.model.AvailabilityWindow;
 import com.openplan.backend.rule.model.BlockType;
 import com.openplan.backend.rule.model.BlockView;
+import com.openplan.backend.rule.model.FixedWindow;
 import com.openplan.backend.rule.model.PlanSnapshot;
 import com.openplan.backend.rule.model.RuleId;
 import com.openplan.backend.rule.model.Severity;
@@ -27,7 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 검증 엔진 골든 — V1(겹침·차단) · V3(가용시간 초과·경고).
+ * 검증 엔진 골든 — V1(겹침·차단) · V2(고정 일정 충돌·차단) · V3(가용시간 초과·경고).
  * JSON 골든 하네스(ST-B3-10, 계약 §5)로 확장 예정이며 그 전까지 이 클래스가 정본 기대값을 박제한다.
  */
 class PlanValidationEngineTest {
@@ -358,5 +359,216 @@ class PlanValidationEngineTest {
         assertEquals(Severity.BLOCK, r.issues().get(0).severity());
         assertEquals(RuleId.V3_CAPACITY_EXCEEDED, r.issues().get(1).ruleId());
         assertFalse(r.savable());
+    }
+
+    // ───────────────────────── V2 고정 일정 충돌 (계약 §3.3 V2) ─────────────────────────
+
+    /**
+     * V2 골든용 고정 일정 UUID — F1 &lt; F2. 한 블록이 두 창과 겹칠 때 전순서 4번째 키
+     * ({@code counterpartId}) 가 가르는 것을 박제하려면 대소 관계가 통제돼야 한다.
+     */
+    private static final UUID FIXED_1 = UUID.fromString("000000f1-0000-0000-0000-000000000000");
+    private static final UUID FIXED_2 = UUID.fromString("000000f2-0000-0000-0000-000000000000");
+
+    /** 무기한 고정 창 (effectiveFrom/To 둘 다 null — DB 상 허용된 기본형). */
+    private FixedWindow fixedWindow(UUID id, DayOfWeek weekday, int startHour, int endHour) {
+        return new FixedWindow(id, weekday, LocalTime.of(startHour, 0), LocalTime.of(endHour, 0), null, null);
+    }
+
+    private PlanSnapshot snapshotWithFixed(List<BlockView> blocks, List<FixedWindow> fixed,
+                                           List<AvailabilityWindow> avails) {
+        return new PlanSnapshot(MONDAY, ZONE, REF, blocks, fixed, avails, Map.of());
+    }
+
+    @Test
+    @DisplayName("F1: 블록이 고정 창과 겹침 → V2 BLOCK 1건, planBlockId=블록·counterpartId=fixedScheduleId, 저장 불가")
+    void F1_고정창과_겹치면_V2() {
+        ValidationReport r = engine.validate(snapshotWithFixed(
+                List.of(taskBlock(BLOCK_A, 0, 10, 0, 60)),      // 월 10:00~11:00
+                List.of(fixedWindow(FIXED_1, DayOfWeek.MONDAY, 10, 12)),
+                List.of(wideMondayAvail())));
+
+        assertEquals(1, r.issues().size());
+        ValidationIssue issue = r.issues().get(0);
+        assertEquals(RuleId.V2_FIXED_CONFLICT, issue.ruleId());
+        assertEquals(Severity.BLOCK, issue.severity());
+        assertEquals(BLOCK_A, issue.planBlockId());
+        assertEquals(FIXED_1, issue.counterpartId());
+        assertNull(issue.taskId());   // 쌍 규칙은 판정 축 필드만 (계약 §3.3)
+        assertNull(issue.weekday());
+        assertFalse(r.savable());
+    }
+
+    @Test
+    @DisplayName("F2: 정확히 인접(블록 end == 창 start) → V2 미발생 (V1과 동일 교차식, 경계는 비겹침)")
+    void F2_인접은_겹침이_아니다() {
+        ValidationReport r = engine.validate(snapshotWithFixed(
+                List.of(taskBlock(BLOCK_A, 0, 9, 0, 60)),       // 월 09:00~10:00
+                List.of(fixedWindow(FIXED_1, DayOfWeek.MONDAY, 10, 12)),
+                List.of(wideMondayAvail())));
+
+        assertTrue(r.issues().isEmpty());
+        assertTrue(r.savable());
+    }
+
+    @Test
+    @DisplayName("F3: 요일이 다른 창은 전개 날짜가 달라 겹치지 않는다")
+    void F3_다른_요일_창은_무관() {
+        ValidationReport r = engine.validate(snapshotWithFixed(
+                List.of(taskBlock(BLOCK_A, 0, 10, 0, 60)),      // 월요일 배치
+                List.of(fixedWindow(FIXED_1, DayOfWeek.TUESDAY, 10, 12)),
+                List.of(wideMondayAvail())));
+
+        assertTrue(r.issues().isEmpty());
+    }
+
+    @Test
+    @DisplayName("F4: 사유 문구 정본 고정 — 상대 표기가 '배치'가 아니라 '고정 일정' (V1과 구분)")
+    void F4_사유_문구_정본() {
+        ValidationReport r = engine.validate(snapshotWithFixed(
+                List.of(taskBlock(BLOCK_A, 0, 10, 0, 60)),
+                List.of(fixedWindow(FIXED_1, DayOfWeek.MONDAY, 10, 12)),
+                List.of(wideMondayAvail())));
+
+        assertEquals("월요일 10:00~11:00 배치가 10:00~12:00 고정 일정과 겹칩니다. (60분 겹침)",
+                r.issues().get(0).reason());
+    }
+
+    @Test
+    @DisplayName("F5: 한 블록이 두 창과 겹침 → 쌍 2건, counterpartId 오름차순 (입력 순서 무관)")
+    void F5_다중_상대는_counterpartId가_가른다() {
+        ValidationReport reversed = engine.validate(snapshotWithFixed(
+                List.of(taskBlock(BLOCK_A, 0, 10, 0, 120)),     // 월 10:00~12:00
+                List.of(fixedWindow(FIXED_2, DayOfWeek.MONDAY, 11, 13),
+                        fixedWindow(FIXED_1, DayOfWeek.MONDAY, 9, 11)),  // 역순 입력
+                List.of(wideMondayAvail())));
+
+        assertEquals(2, reversed.issues().size());
+        assertEquals(FIXED_1, reversed.issues().get(0).counterpartId());
+        assertEquals(FIXED_2, reversed.issues().get(1).counterpartId());
+    }
+
+    @Test
+    @DisplayName("F6: effectiveTo 가 그 주 이전이면 제외 — 만료된 고정 일정은 판정하지 않는다")
+    void F6_유효기간_밖은_제외() {
+        FixedWindow expired = new FixedWindow(FIXED_1, DayOfWeek.MONDAY,
+                LocalTime.of(10, 0), LocalTime.of(12, 0),
+                null, MONDAY.minusDays(1));   // 그 주 월요일 하루 전에 종료
+
+        ValidationReport r = engine.validate(snapshotWithFixed(
+                List.of(taskBlock(BLOCK_A, 0, 10, 0, 60)), List.of(expired),
+                List.of(wideMondayAvail())));
+
+        assertTrue(r.issues().isEmpty());
+    }
+
+    @Test
+    @DisplayName("F7: effectiveFrom 이 그 주 이후면 제외 — 아직 시작 안 한 고정 일정")
+    void F7_시작전_고정일정은_제외() {
+        FixedWindow future = new FixedWindow(FIXED_1, DayOfWeek.MONDAY,
+                LocalTime.of(10, 0), LocalTime.of(12, 0),
+                MONDAY.plusDays(7), null);
+
+        ValidationReport r = engine.validate(snapshotWithFixed(
+                List.of(taskBlock(BLOCK_A, 0, 10, 0, 60)), List.of(future),
+                List.of(wideMondayAvail())));
+
+        assertTrue(r.issues().isEmpty());
+    }
+
+    @Test
+    @DisplayName("F8: 경계 — 전개 날짜가 effectiveFrom/To 와 정확히 같으면 유효 (범위 포함)")
+    void F8_유효기간_경계는_포함() {
+        FixedWindow exact = new FixedWindow(FIXED_1, DayOfWeek.MONDAY,
+                LocalTime.of(10, 0), LocalTime.of(12, 0), MONDAY, MONDAY);
+
+        ValidationReport r = engine.validate(snapshotWithFixed(
+                List.of(taskBlock(BLOCK_A, 0, 10, 0, 60)), List.of(exact),
+                List.of(wideMondayAvail())));
+
+        assertEquals(1, r.issues().size());
+        assertEquals(RuleId.V2_FIXED_CONFLICT, r.issues().get(0).ruleId());
+    }
+
+    /**
+     * 계약 §5 필수 케이스 — <b>주차 예외 쌍</b>.
+     * 같은 배치를 두 스냅샷에 주되 창의 유무만 바꾼다. 예외가 적용된 주는 조립이 창을 빼므로
+     * V2 가 안 나오고, 예외 없는 주는 나온다 → <b>미발생 = 그 주 한정 비활성</b> 의미론이 고정된다(B12).
+     * 엔진은 예외 자체를 모른다는 사실을 이 쌍이 증명한다.
+     */
+    @Test
+    @DisplayName("F9(계약 §5 필수): 주차 예외 쌍 — 같은 배치라도 창이 빠진 주는 V2 미발생")
+    void F9_주차예외_쌍_케이스() {
+        List<BlockView> samePlacement = List.of(taskBlock(BLOCK_A, 0, 10, 0, 60));
+        FixedWindow window = fixedWindow(FIXED_1, DayOfWeek.MONDAY, 10, 12);
+
+        // 예외가 적용된 주 — 조립(BE-2)이 창을 제외해 입력에 없다
+        ValidationReport excepted = engine.validate(snapshotWithFixed(
+                samePlacement, List.of(), List.of(wideMondayAvail())));
+
+        // 예외 없는 주 — 같은 배치인데 V2 가 난다
+        ValidationReport normal = engine.validate(snapshotWithFixed(
+                samePlacement, List.of(window), List.of(wideMondayAvail())));
+
+        assertTrue(excepted.issues().isEmpty());
+        assertTrue(excepted.savable());
+        assertEquals(1, normal.issues().size());
+        assertEquals(RuleId.V2_FIXED_CONFLICT, normal.issues().get(0).ruleId());
+        assertFalse(normal.savable());
+    }
+
+    @Test
+    @DisplayName("F10: 자정 넘는 블록이 다음날 창과 겹침 → 창 요일이 블록 요일과 달라 요일 접두가 붙는다")
+    void F10_자정교차_블록은_창_요일_접두() {
+        // 월 23:00 ~ 화 01:00 배치 vs 화요일 00:00~02:00 창
+        ValidationReport r = engine.validate(snapshotWithFixed(
+                List.of(taskBlock(BLOCK_A, 0, 23, 0, 120)),
+                List.of(fixedWindow(FIXED_1, DayOfWeek.TUESDAY, 0, 2)),
+                // 자정 넘는 블록 120분은 전량 startAt 요일(월)에 귀속되므로 월 가용만 넉넉하면 V3 미발생
+                List.of(wideMondayAvail())));
+
+        assertEquals(1, r.issues().size());
+        assertEquals("월요일 23:00~01:00 배치가 화요일 00:00~02:00 고정 일정과 겹칩니다. (60분 겹침)",
+                r.issues().get(0).reason());
+    }
+
+    @Test
+    @DisplayName("F11: 복합(V1 + V2 + V3) → ruleId 가 2키라 V1 → V2 → V3 순, 저장 불가")
+    void F11_복합_정렬() {
+        // 월 10:00~11:00(A) 과 10:30~12:00(B) 이 서로 겹치고(V1), 둘 다 10:00~12:00 창과 겹치며(V2 2건),
+        // 배치 총량 150분 > 가용 60분(V3)
+        ValidationReport r = engine.validate(snapshotWithFixed(
+                List.of(taskBlock(BLOCK_A, 0, 10, 0, 60), taskBlock(BLOCK_B, 0, 10, 30, 90)),
+                List.of(fixedWindow(FIXED_1, DayOfWeek.MONDAY, 10, 12)),
+                List.of(mondayAvail(9, 10))));
+
+        assertEquals(4, r.issues().size());
+        assertEquals(RuleId.V1_OVERLAP, r.issues().get(0).ruleId());
+        assertEquals(RuleId.V2_FIXED_CONFLICT, r.issues().get(1).ruleId());
+        assertEquals(BLOCK_A, r.issues().get(1).planBlockId());   // planBlockId 오름차순
+        assertEquals(RuleId.V2_FIXED_CONFLICT, r.issues().get(2).ruleId());
+        assertEquals(BLOCK_B, r.issues().get(2).planBlockId());
+        assertEquals(RuleId.V3_CAPACITY_EXCEEDED, r.issues().get(3).ruleId());
+        assertFalse(r.savable());
+    }
+
+    @Test
+    @DisplayName("F12: 동일 입력 → 동일 판정 (P1 결정성, 창 입력 순서 무관)")
+    void F12_결정성() {
+        List<BlockView> blocks = List.of(taskBlock(BLOCK_A, 0, 10, 0, 120));
+        List<AvailabilityWindow> avails = List.of(wideMondayAvail());
+        FixedWindow w1 = fixedWindow(FIXED_1, DayOfWeek.MONDAY, 9, 11);
+        FixedWindow w2 = fixedWindow(FIXED_2, DayOfWeek.MONDAY, 11, 13);
+
+        ValidationReport first = engine.validate(snapshotWithFixed(blocks, List.of(w1, w2), avails));
+        ValidationReport second = engine.validate(snapshotWithFixed(blocks, List.of(w2, w1), avails));
+
+        assertEquals(first.issues().size(), second.issues().size());
+        for (int i = 0; i < first.issues().size(); i++) {
+            assertEquals(first.issues().get(i).ruleId(), second.issues().get(i).ruleId());
+            assertEquals(first.issues().get(i).planBlockId(), second.issues().get(i).planBlockId());
+            assertEquals(first.issues().get(i).counterpartId(), second.issues().get(i).counterpartId());
+            assertEquals(first.issues().get(i).reason(), second.issues().get(i).reason());
+        }
     }
 }
