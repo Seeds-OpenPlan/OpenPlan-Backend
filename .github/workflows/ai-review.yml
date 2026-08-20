@@ -53,9 +53,17 @@ jobs:
           # 🔴 토큰 수명 1년 · `claude setup-token` 을 실행한 사람의 구독에 묶인다.
           #    만료되면 인증 실패로 CI 가 빨개진다 — 2027-08 쯤 갱신할 것.
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # 🔴 코멘트를 올리는 MCP 서버는 --allowedTools 에 그 도구가 적혀 있을 때만
+          #    시작한다. 안 적으면 서버가 아예 안 떠서 아무것도 못 올린다.
+          # 🔴 --allowedTools 를 쓰면 여기 없는 도구는 "권한을 물어보는" 상태가 되는데
+          #    CI 에는 답할 사람이 없어 그대로 막힌다. 그래서 읽기 도구도 함께 적는다
+          #    (2026-08-21 실측: 안 적었더니 권한 거부 12건으로 23턴을 헛돌았다).
           claude_args: |
             --model claude-sonnet-5
             --max-turns 25
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Read,Grep,Glob,Bash"
+          # 지적을 한 코멘트로 모은다.
+          use_sticky_comment: true
           prompt: |
             PR #${{ github.event.pull_request.number || inputs.pr_number }} 를 리뷰한다.
 
@@ -67,12 +75,14 @@ jobs:
             `src/main/resources/db/migration/` 의 마이그레이션을 **직접 열어 대조**한다.
             이 저장소에서 나온 결함은 대부분 코드가 아니라 계약과의 어긋남이었다.
 
-            끝나면 리뷰 결과를 **PR 코멘트 하나로** 남긴다.
+            지적은 **해당 줄에 인라인 코멘트**로 달고, 마지막에 **결론 요약**을 남긴다.
+            지적이 하나도 없으면 요약만 남긴다 — 아무것도 안 남기면 안 된다.
 
             지켜야 할 것:
             - **승인(Approve)하지 않는다. 머지하지 않는다.** 코멘트만 단다.
             - 파일을 고치거나 커밋하지 않는다. 읽고 지적만 한다.
-            - 테스트를 실행하지 않는다 — 별도 CI 가 맡는다.
+            - 저장소의 테스트 스위트는 실행하지 않는다 — 별도 CI 가 맡는다.
+              다만 지적을 입증하려 **짧은 코드 조각을 돌려보는 것은 허용**한다.
             - **Nit 은 적지 않는다**(마감까지 끈다). Blocking 과 Should-fix 만 보고한다.
             - **총 10건 상한.** 넘으면 심각한 순으로 자르고 몇 건을 잘랐는지 밝힌다.
             - 재현 조건을 구체적으로 쓸 수 없으면 **적지 않는다.**
