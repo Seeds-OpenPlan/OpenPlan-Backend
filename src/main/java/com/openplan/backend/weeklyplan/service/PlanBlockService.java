@@ -15,9 +15,12 @@ import com.openplan.backend.task.repository.TaskRepository;
 import com.openplan.backend.weeklyplan.domain.PlanBlock;
 import com.openplan.backend.weeklyplan.domain.PlanBlockType;
 import com.openplan.backend.weeklyplan.domain.WeeklyPlan;
+import com.openplan.backend.weeklyplan.dto.BlockBatchRequest;
 import com.openplan.backend.weeklyplan.dto.PlanBlockCreateRequest;
 import com.openplan.backend.weeklyplan.dto.PlanBlockMoveRequest;
 import com.openplan.backend.weeklyplan.dto.PlanBlockResponse;
+import com.openplan.backend.weeklyplan.dto.WeeklyPlanResponse;
+import com.openplan.backend.weeklyplan.dto.WeeklyPlanView;
 import com.openplan.backend.weeklyplan.repository.PlanBlockRepository;
 import com.openplan.backend.weeklyplan.repository.PlanBlockView;
 import com.openplan.backend.weeklyplan.repository.WeeklyPlanRepository;
@@ -228,6 +231,63 @@ public class PlanBlockService {
                     WeeklyPlan plan = new WeeklyPlan(userId, weekStartDate, weekStartDate.plusDays(6), clock.now());
                     return weeklyPlanRepository.saveAndFlush(plan);
                 });
+    }
+
+    /**
+     * 블록 일괄 적용 (RB-PLAN-01·PLAN-29). {@code operations}를 순서대로 <b>한 트랜잭션</b>에서 실행한다 —
+     * 하나라도 실패하면 전체 롤백(원자적). 낱개 로직({@link #createBlock}·{@link #moveBlock}·{@link #deleteBlock})을
+     * 그대로 재사용한다(같은 빈 self-invocation이라 이 메서드의 tx에 합류). 적용 후 최신 {@link WeeklyPlanView} 반환.
+     *
+     * <p>CREATE는 경로의 {@code planId}에 배치한다. MOVE는 정본 {@code PlanBlockInput}이라 시각 조정만(주차 이동 없음).
+     * 계획 부재·타인 → 404. op별 필수 필드 누락 → 422.
+     */
+    @Transactional
+    public WeeklyPlanView applyBatch(UUID userId, UUID planId, BlockBatchRequest request) {
+        WeeklyPlan plan = weeklyPlanRepository.findByIdAndUserId(planId, userId)
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404 (계획 부재·타인)
+
+        for (BlockBatchRequest.Operation op : request.operations()) {
+            String kind = op.op() == null ? "" : op.op().trim();
+            switch (kind) {
+                case "CREATE" -> {
+                    if (op.block() == null) {
+                        throw invalidField("block", "required");
+                    }
+                    createBlock(userId, planId, op.block());
+                }
+                case "MOVE" -> {
+                    if (op.planBlockId() == null) {
+                        throw invalidField("planBlockId", "required");
+                    }
+                    if (op.block() == null) {
+                        throw invalidField("block", "required");
+                    }
+                    moveBlock(userId, op.planBlockId(), toMoveRequest(op.block()));
+                }
+                case "DELETE" -> {
+                    if (op.planBlockId() == null) {
+                        throw invalidField("planBlockId", "required");
+                    }
+                    deleteBlock(userId, op.planBlockId());
+                }
+                default -> throw invalidField("op", "invalid"); // 미정의 op → 422
+            }
+        }
+
+        // 적용 후 최신 뷰 조립 — 재계산은 각 op가 이미 수행했으므로 계획 total은 갱신돼 있다.
+        WeeklyPlan latest = weeklyPlanRepository.findByIdAndUserId(planId, userId)
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004));
+        List<PlanBlockResponse> blocks = planBlockRepository.findViewsByWeeklyPlanId(planId)
+                .stream().map(PlanBlockResponse::fromView).toList();
+        return WeeklyPlanView.of(WeeklyPlanResponse.from(latest, blocks.size()), blocks);
+    }
+
+    /** 배치 MOVE의 block(PlanBlockInput) → 이동 요청. 시각만 조정(정본상 주차 이동은 배치에 없음). */
+    private PlanBlockMoveRequest toMoveRequest(PlanBlockCreateRequest block) {
+        PlanBlockMoveRequest move = new PlanBlockMoveRequest();
+        move.setStartAt(block.startAt());
+        move.setEndAt(block.endAt());
+        return move;
     }
 
     /** blockType 문자열 → enum. 미정의값 → 422 E-COM-009. */
