@@ -7,6 +7,7 @@ import com.openplan.backend.rule.model.FixedWindow;
 import com.openplan.backend.rule.model.PlanSnapshot;
 import com.openplan.backend.rule.model.RuleId;
 import com.openplan.backend.rule.model.Severity;
+import com.openplan.backend.rule.model.TaskFacts;
 import com.openplan.backend.rule.model.ValidationIssue;
 import com.openplan.backend.rule.model.ValidationReport;
 import org.junit.jupiter.api.DisplayName;
@@ -111,8 +112,10 @@ class PlanValidationEngineTest {
         ValidationReport r = engine.validate(
                 snapshot(List.of(blockOnMonday(9, 90)), List.of(mondayAvail(9, 10))));
 
-        assertEquals(1, r.issues().size());
+        // V4 도입 후 2건 — 창(09~10) 밖으로 나간 배치라 "총량 초과(V3)"와 "창 밖(V4)"이 함께 성립한다.
+        assertEquals(2, r.issues().size());
         assertEquals(RuleId.V3_CAPACITY_EXCEEDED, r.issues().get(0).ruleId());
+        assertEquals(RuleId.V4_OUT_OF_AVAILABILITY, r.issues().get(1).ruleId());
         assertEquals(Severity.WARNING, r.issues().get(0).severity());
         assertEquals(DayOfWeek.MONDAY, r.issues().get(0).weekday());
         assertTrue(r.savable(), "경고만 있으면 저장 가능");
@@ -146,20 +149,29 @@ class PlanValidationEngineTest {
                 List.of(blockOnDay(2, 9, 90), blockOnDay(0, 9, 90)),
                 List.of(avail(DayOfWeek.WEDNESDAY, 9, 10), mondayAvail(9, 10))));
 
-        assertEquals(2, r.issues().size());
+        // V3 2건(월·수) + V4 2건(각 블록이 창 밖) = 4건. ruleId 가 2키라 V3 둘이 앞선다.
+        assertEquals(4, r.issues().size());
+        assertEquals(RuleId.V3_CAPACITY_EXCEEDED, r.issues().get(0).ruleId());
         assertEquals(DayOfWeek.MONDAY, r.issues().get(0).weekday());
+        assertEquals(RuleId.V3_CAPACITY_EXCEEDED, r.issues().get(1).ruleId());
         assertEquals(DayOfWeek.WEDNESDAY, r.issues().get(1).weekday());
     }
 
     // ── 경계 정책 (계약 §3.3 "V3 판정 경계", 확정 2026-07-25) ────────────────────
 
     @Test
-    @DisplayName("경계: 배치 총량 == 가용 총량 → 무위반 (판정식이 > 이므로 같으면 통과)")
-    void 경계_배치와_가용이_같으면_무위반() {
+    @DisplayName("경계: 배치 총량 == 가용 총량 → V3 아님(> 이므로), 대신 V7 (버퍼 0%)")
+    void 경계_배치와_가용이_같으면_V3_아니라_V7() {
         ValidationReport r = engine.validate(
                 snapshot(List.of(blockOnMonday(9, 60)), List.of(mondayAvail(9, 10))));
 
-        assertTrue(r.issues().isEmpty(), "가용을 꽉 채운 계획은 초과가 아니다");
+        // V3는 여전히 미발생 — 판정식이 > 라 같으면 초과가 아니다(기존 경계 유지).
+        // V7 도입 후: buffer=0 이고 0×100 < 60×10 이라 "여유 없음"으로 잡힌다.
+        // 두 규칙은 상호 배타이며 여기서 갈리는 지점이 정확히 이 경계다.
+        assertEquals(1, r.issues().size());
+        assertEquals(RuleId.V7_BUFFER_SHORTAGE, r.issues().get(0).ruleId());
+        assertEquals(Severity.WARNING, r.issues().get(0).severity());
+        assertTrue(r.savable());
     }
 
     @Test
@@ -168,20 +180,26 @@ class PlanValidationEngineTest {
         ValidationReport r = engine.validate(
                 snapshot(List.of(blockOnMonday(9, 60)), List.of(inactiveAvail(DayOfWeek.MONDAY, 9, 12))));
 
-        assertEquals(1, r.issues().size());
+        // 활성 창이 0개라 V4 도 함께 — 담을 창 자체가 없다. V7 은 미발생(가용 0인 요일은 순회 대상 아님).
+        assertEquals(2, r.issues().size());
         assertEquals("월요일 배치 시간이 가용 시간을 초과했습니다. (가용 0분 / 배치 60분, 60분 초과)",
                 r.issues().get(0).reason());
+        assertEquals(RuleId.V4_OUT_OF_AVAILABILITY, r.issues().get(1).ruleId());
+        assertEquals("월요일에는 가용 시간이 없습니다. (09:00~10:00 배치)", r.issues().get(1).reason());
     }
 
     @Test
-    @DisplayName("가용창이 아예 없는 요일에 배치 → 가용 0분으로 V3 발생 (V4 미구현 상태의 무경고 공백 방지)")
+    @DisplayName("가용창이 아예 없는 요일에 배치 → V3(가용 0분) + V4(담을 창 없음)")
     void 가용창_없는_요일에_배치하면_V3() {
         ValidationReport r = engine.validate(snapshot(
                 List.of(blockOnMonday(9, 60)),
                 List.of(avail(DayOfWeek.TUESDAY, 9, 18)))); // 월요일 가용창 없음
 
-        assertEquals(1, r.issues().size());
+        // 계약 §3.3 경계 c 의 근거였던 "V4 미구현이라 V3 로 공백을 막는다"가 해소된 지점.
+        // 계약은 V4 구현 후에도 V3 억제가 아니라 FE 표시 계층 병합을 먼저 검토하라고 했으므로 둘 다 낸다.
+        assertEquals(2, r.issues().size());
         assertEquals(RuleId.V3_CAPACITY_EXCEEDED, r.issues().get(0).ruleId());
+        assertEquals(RuleId.V4_OUT_OF_AVAILABILITY, r.issues().get(1).ruleId());
         assertEquals(DayOfWeek.MONDAY, r.issues().get(0).weekday());
     }
 
@@ -193,9 +211,11 @@ class PlanValidationEngineTest {
                 List.of(blockOnMonday(9, 30), scheduleBlockOnDay(0, 14, 60)),
                 List.of(mondayAvail(9, 10))));
 
-        assertEquals(1, r.issues().size());
+        // 14시 블록이 09~10 창 밖이라 V4 가 함께 나온다(09:00 블록은 창 안이라 V4 없음).
+        assertEquals(2, r.issues().size());
         assertEquals("월요일 배치 시간이 가용 시간을 초과했습니다. (가용 60분 / 배치 90분, 30분 초과)",
                 r.issues().get(0).reason());
+        assertEquals(RuleId.V4_OUT_OF_AVAILABILITY, r.issues().get(1).ruleId());
     }
 
     @Test
@@ -205,8 +225,11 @@ class PlanValidationEngineTest {
         ValidationReport r = engine.validate(
                 snapshot(List.of(blockOnDay(0, 23, 120)), List.of(mondayAvail(9, 10))));
 
-        assertEquals(1, r.issues().size(), "요일이 쪼개지면 화요일 이슈까지 2건이 된다");
-        assertEquals(DayOfWeek.MONDAY, r.issues().get(0).weekday());
+        // V3 + V4. 자정을 넘는 블록은 담을 창이 존재할 수 없어(창은 startTime<endTime) 항상 V4 다.
+        // 핵심 단언은 그대로 — 두 이슈 모두 월요일이며 화요일 이슈가 생기지 않는다.
+        assertEquals(2, r.issues().size());
+        assertTrue(r.issues().stream().allMatch(i -> i.weekday() == DayOfWeek.MONDAY),
+                "요일이 쪼개지면 화요일 이슈가 생긴다");
         assertEquals("월요일 배치 시간이 가용 시간을 초과했습니다. (가용 60분 / 배치 120분, 60분 초과)",
                 r.issues().get(0).reason());
     }
@@ -312,7 +335,8 @@ class PlanValidationEngineTest {
                         taskBlock(BLOCK_B, 1, 0, 30, 60)),   // 화 00:30 ~ 01:30
                 List.of(wideMondayAvail(), avail(DayOfWeek.TUESDAY, 0, 23))));
 
-        assertEquals(1, r.issues().size());
+        // 자정을 넘는 A 블록에 V4 가 함께 붙는다(담을 창이 존재할 수 없음). 이 테스트의 대상은 V1 문구다.
+        assertEquals(2, r.issues().size());
         assertEquals("월요일 23:00~01:00 배치가 화요일 00:30~01:30 배치와 겹칩니다. (30분 겹침)",
                 r.issues().get(0).reason());
     }
@@ -354,7 +378,8 @@ class PlanValidationEngineTest {
                 List.of(taskBlock(BLOCK_A, 0, 10, 0, 60), taskBlock(BLOCK_B, 0, 10, 30, 90)),
                 List.of(mondayAvail(9, 10))));
 
-        assertEquals(2, r.issues().size());
+        // V1 + V3 + V4 2건(두 블록 모두 09~10 창 밖) = 4건. 선두가 차단이라는 것이 이 테스트의 핵심이다.
+        assertEquals(4, r.issues().size());
         assertEquals(RuleId.V1_OVERLAP, r.issues().get(0).ruleId());
         assertEquals(Severity.BLOCK, r.issues().get(0).severity());
         assertEquals(RuleId.V3_CAPACITY_EXCEEDED, r.issues().get(1).ruleId());
@@ -527,7 +552,8 @@ class PlanValidationEngineTest {
                 // 자정 넘는 블록 120분은 전량 startAt 요일(월)에 귀속되므로 월 가용만 넉넉하면 V3 미발생
                 List.of(wideMondayAvail())));
 
-        assertEquals(1, r.issues().size());
+        // 자정을 넘는 블록이라 V4 가 함께 붙는다. 이 테스트의 대상은 V2 문구다.
+        assertEquals(2, r.issues().size());
         assertEquals("월요일 23:00~01:00 배치가 화요일 00:00~02:00 고정 일정과 겹칩니다. (60분 겹침)",
                 r.issues().get(0).reason());
     }
@@ -542,7 +568,8 @@ class PlanValidationEngineTest {
                 List.of(fixedWindow(FIXED_1, DayOfWeek.MONDAY, 10, 12)),
                 List.of(mondayAvail(9, 10))));
 
-        assertEquals(4, r.issues().size());
+        // V1 1 + V2 2 + V3 1 + V4 2(두 블록 모두 09~10 창 밖) = 6. 순서(V1→V2→V3→V4)가 이 테스트의 대상이다.
+        assertEquals(6, r.issues().size());
         assertEquals(RuleId.V1_OVERLAP, r.issues().get(0).ruleId());
         assertEquals(RuleId.V2_FIXED_CONFLICT, r.issues().get(1).ruleId());
         assertEquals(BLOCK_A, r.issues().get(1).planBlockId());   // planBlockId 오름차순
@@ -570,5 +597,234 @@ class PlanValidationEngineTest {
             assertEquals(first.issues().get(i).counterpartId(), second.issues().get(i).counterpartId());
             assertEquals(first.issues().get(i).reason(), second.issues().get(i).reason());
         }
+    }
+
+    // ═══════════════════ V4 가용 시간 밖 (계약 §3.3 V4) ═══════════════════
+
+    private static final UUID TASK_1 = UUID.fromString("00000001-0000-0000-0000-000000000000");
+
+    /** 지정 taskId 의 TASK 블록 — taskFacts 와 연결하기 위해 랜덤 taskId 를 쓰지 않는다. */
+    private BlockView taskBlockOf(UUID blockId, UUID taskId, int plusDays, int startHour, int durationMinutes) {
+        return blockWith(blockId, BlockType.TASK, taskId, null, plusDays, startHour, 0, durationMinutes);
+    }
+
+    private PlanSnapshot snapshotWithFacts(List<BlockView> blocks, List<AvailabilityWindow> avails,
+                                           Map<UUID, TaskFacts> facts) {
+        return new PlanSnapshot(MONDAY, ZONE, REF, blocks, List.of(), avails, facts);
+    }
+
+    /** 하루를 넉넉히 여는 창 — V4·V7 노이즈 없이 V5·V6 만 보기 위한 배경. */
+    private AvailabilityWindow allDayMonday() {
+        return avail(DayOfWeek.MONDAY, 0, 23);
+    }
+
+    @Test
+    @DisplayName("V4: 창 안에 완전히 포함되면 무위반")
+    void V4_창_안이면_무위반() {
+        ValidationReport r = engine.validate(
+                snapshot(List.of(blockOnMonday(10, 60)), List.of(mondayAvail(9, 18))));
+
+        assertTrue(r.issues().stream().noneMatch(i -> i.ruleId() == RuleId.V4_OUT_OF_AVAILABILITY));
+    }
+
+    @Test
+    @DisplayName("V4: 끝이 창을 넘으면 위반 — 부분 포함은 통과가 아니다")
+    void V4_끝이_창을_넘으면_위반() {
+        ValidationReport r = engine.validate(
+                snapshot(List.of(blockOnMonday(17, 120)), List.of(mondayAvail(9, 18))));
+
+        assertTrue(r.issues().stream().anyMatch(i -> i.ruleId() == RuleId.V4_OUT_OF_AVAILABILITY));
+    }
+
+    @Test
+    @DisplayName("V4: 창이 인접해 있으면 합집합으로 본다 — 09~12 + 12~18 에 11~13 배치는 무위반")
+    void V4_인접한_창은_이어진_것으로_본다() {
+        // 창 하나하나와 비교하면 어느 창에도 완전히 안 들어가 위반이 되지만,
+        // 실제로는 쓸 수 없는 시간이 사이에 없다.
+        ValidationReport r = engine.validate(snapshot(
+                List.of(blockOnMonday(11, 120)),
+                List.of(mondayAvail(9, 12), mondayAvail(12, 18))));
+
+        assertTrue(r.issues().stream().noneMatch(i -> i.ruleId() == RuleId.V4_OUT_OF_AVAILABILITY));
+    }
+
+    @Test
+    @DisplayName("V4: 창 사이에 빈틈이 있으면 위반 — 09~11 + 13~18 에 10~14 배치")
+    void V4_창_사이_빈틈은_위반() {
+        ValidationReport r = engine.validate(snapshot(
+                List.of(blockOnMonday(10, 240)),
+                List.of(mondayAvail(9, 11), mondayAvail(13, 18))));
+
+        assertTrue(r.issues().stream().anyMatch(i -> i.ruleId() == RuleId.V4_OUT_OF_AVAILABILITY));
+    }
+
+    @Test
+    @DisplayName("V4: 사유 문구 정본 — 가용 창을 시작 시각 오름차순으로 잇는다")
+    void V4_사유_문구_정본() {
+        // 입력 순서를 뒤집어 넣어도 문구의 창 순서는 09~11 → 13~18 이어야 한다(P1).
+        ValidationReport r = engine.validate(snapshot(
+                List.of(blockOnMonday(10, 240)),
+                List.of(mondayAvail(13, 18), mondayAvail(9, 11))));
+
+        ValidationIssue v4 = r.issues().stream()
+                .filter(i -> i.ruleId() == RuleId.V4_OUT_OF_AVAILABILITY).findFirst().orElseThrow();
+        assertEquals("월요일 10:00~14:00 배치가 가용 시간 밖입니다. (가용 09:00~11:00, 13:00~18:00)",
+                v4.reason());
+    }
+
+    // ═══════════════════ V5 WBS 기간 밖 (계약 §3.3 V5) ═══════════════════
+
+    @Test
+    @DisplayName("V5: WBS 기간 안이면 무위반")
+    void V5_WBS_안이면_무위반() {
+        ValidationReport r = engine.validate(snapshotWithFacts(
+                List.of(taskBlockOf(BLOCK_A, TASK_1, 0, 10, 60)),
+                List.of(allDayMonday()),
+                Map.of(TASK_1, new TaskFacts(null, MONDAY.minusDays(1), MONDAY.plusDays(3), 60, 1))));
+
+        assertTrue(r.issues().stream().noneMatch(i -> i.ruleId() == RuleId.V5_OUT_OF_WBS));
+    }
+
+    @Test
+    @DisplayName("V5: WBS 기간보다 뒤에 배치되면 위반 + 문구 정본")
+    void V5_WBS_밖이면_위반() {
+        ValidationReport r = engine.validate(snapshotWithFacts(
+                List.of(taskBlockOf(BLOCK_A, TASK_1, 0, 10, 60)),
+                List.of(allDayMonday()),
+                Map.of(TASK_1, new TaskFacts(null, MONDAY.minusDays(5), MONDAY.minusDays(1), 60, 1))));
+
+        ValidationIssue v5 = r.issues().stream()
+                .filter(i -> i.ruleId() == RuleId.V5_OUT_OF_WBS).findFirst().orElseThrow();
+        assertEquals(Severity.WARNING, v5.severity());
+        assertEquals(BLOCK_A, v5.planBlockId());
+        assertEquals(TASK_1, v5.taskId());
+        assertEquals("월요일 배치가 WBS 기간 밖입니다. (WBS 2026-07-22~2026-07-26, 배치 2026-07-27)",
+                v5.reason());
+    }
+
+    @Test
+    @DisplayName("V5: WBS 미설정 태스크는 판정 제외 — 기능을 안 쓰는 것이 잘못이 아니다")
+    void V5_WBS_미설정은_제외() {
+        ValidationReport r = engine.validate(snapshotWithFacts(
+                List.of(taskBlockOf(BLOCK_A, TASK_1, 0, 10, 60)),
+                List.of(allDayMonday()),
+                Map.of(TASK_1, new TaskFacts(null, null, null, 60, 1))));
+
+        assertTrue(r.issues().stream().noneMatch(i -> i.ruleId() == RuleId.V5_OUT_OF_WBS));
+    }
+
+    @Test
+    @DisplayName("V5: 시작·끝 중 하나만 있으면 구간이 성립하지 않아 제외")
+    void V5_한쪽만_설정되면_제외() {
+        ValidationReport r = engine.validate(snapshotWithFacts(
+                List.of(taskBlockOf(BLOCK_A, TASK_1, 0, 10, 60)),
+                List.of(allDayMonday()),
+                Map.of(TASK_1, new TaskFacts(null, MONDAY.plusDays(3), null, 60, 1))));
+
+        assertTrue(r.issues().stream().noneMatch(i -> i.ruleId() == RuleId.V5_OUT_OF_WBS));
+    }
+
+    // ═══════════════════ V6 마감일 이후 (계약 §3.3 V6) ═══════════════════
+
+    @Test
+    @DisplayName("V6: 마감 당일 배치는 무위반 — 판정식이 > 이므로 같으면 통과")
+    void V6_마감_당일은_무위반() {
+        ValidationReport r = engine.validate(snapshotWithFacts(
+                List.of(taskBlockOf(BLOCK_A, TASK_1, 0, 10, 60)),
+                List.of(allDayMonday()),
+                Map.of(TASK_1, new TaskFacts(MONDAY, null, null, 60, 1))));
+
+        assertTrue(r.issues().stream().noneMatch(i -> i.ruleId() == RuleId.V6_AFTER_DUE_DATE));
+    }
+
+    @Test
+    @DisplayName("V6: 마감 다음날 배치는 위반 + 문구 정본")
+    void V6_마감_이후면_위반() {
+        ValidationReport r = engine.validate(snapshotWithFacts(
+                List.of(taskBlockOf(BLOCK_A, TASK_1, 0, 10, 60)),
+                List.of(allDayMonday()),
+                Map.of(TASK_1, new TaskFacts(MONDAY.minusDays(1), null, null, 60, 1))));
+
+        ValidationIssue v6 = r.issues().stream()
+                .filter(i -> i.ruleId() == RuleId.V6_AFTER_DUE_DATE).findFirst().orElseThrow();
+        assertEquals("월요일 배치가 마감일 이후입니다. (마감 2026-07-26, 배치 2026-07-27)", v6.reason());
+    }
+
+    @Test
+    @DisplayName("V6: dueDate 가 null 이면 판정 제외")
+    void V6_마감_없으면_제외() {
+        ValidationReport r = engine.validate(snapshotWithFacts(
+                List.of(taskBlockOf(BLOCK_A, TASK_1, 0, 10, 60)),
+                List.of(allDayMonday()),
+                Map.of(TASK_1, new TaskFacts(null, null, null, 60, 1))));
+
+        assertTrue(r.issues().stream().noneMatch(i -> i.ruleId() == RuleId.V6_AFTER_DUE_DATE));
+    }
+
+    @Test
+    @DisplayName("V6: 자정 넘는 블록은 시작 날짜로 판단 — 마감일 23시 시작은 위반이 아니다")
+    void V6_자정_교차는_시작_날짜로_판단() {
+        // 끝 날짜로 보면 마감 당일에 일하는 정상 배치가 경고를 받는다.
+        ValidationReport r = engine.validate(snapshotWithFacts(
+                List.of(taskBlockOf(BLOCK_A, TASK_1, 0, 23, 120)),
+                List.of(allDayMonday()),
+                Map.of(TASK_1, new TaskFacts(MONDAY, null, null, 120, 1))));
+
+        assertTrue(r.issues().stream().noneMatch(i -> i.ruleId() == RuleId.V6_AFTER_DUE_DATE));
+    }
+
+    // ═══════════════════ V7 버퍼 부족 (us-decisions-kr §2 Q2 · D-19) ═══════════════════
+
+    @Test
+    @DisplayName("V7: 경계 — 버퍼가 정확히 10%면 미발생 (판정식이 < 이므로 같으면 통과)")
+    void V7_경계_정확히_10퍼센트면_미발생() {
+        // 가용 600분(09~19), 배치 540분 → 버퍼 60분. 60×100 == 600×10 이라 미발생.
+        ValidationReport r = engine.validate(
+                snapshot(List.of(blockOnMonday(9, 540)), List.of(mondayAvail(9, 19))));
+
+        assertTrue(r.issues().stream().noneMatch(i -> i.ruleId() == RuleId.V7_BUFFER_SHORTAGE));
+    }
+
+    @Test
+    @DisplayName("V7: 버퍼가 10% 미만이면 발생 + 문구 정본")
+    void V7_10퍼센트_미만이면_발생() {
+        // 가용 600분, 배치 541분 → 버퍼 59분. 5900 < 6000.
+        ValidationReport r = engine.validate(
+                snapshot(List.of(blockOnMonday(9, 541)), List.of(mondayAvail(9, 19))));
+
+        ValidationIssue v7 = r.issues().stream()
+                .filter(i -> i.ruleId() == RuleId.V7_BUFFER_SHORTAGE).findFirst().orElseThrow();
+        assertEquals(Severity.WARNING, v7.severity());
+        assertEquals(DayOfWeek.MONDAY, v7.weekday());
+        assertEquals("월요일 여유 시간이 부족합니다. (가용 600분 / 배치 541분, 남은 59분)", v7.reason());
+    }
+
+    @Test
+    @DisplayName("V7: V3와 상호 배타 — 초과한 요일에는 버퍼 부족이 붙지 않는다")
+    void V7_V3와_상호_배타() {
+        ValidationReport r = engine.validate(
+                snapshot(List.of(blockOnMonday(9, 90)), List.of(mondayAvail(9, 10))));
+
+        assertTrue(r.issues().stream().anyMatch(i -> i.ruleId() == RuleId.V3_CAPACITY_EXCEEDED));
+        assertTrue(r.issues().stream().noneMatch(i -> i.ruleId() == RuleId.V7_BUFFER_SHORTAGE),
+                "같은 요일에 초과와 여유 부족이 함께 나오면 사용자가 무엇을 해야 하는지 알 수 없다");
+    }
+
+    @Test
+    @DisplayName("V7: 가용 0분인 요일은 미발생 — 계약의 'V7 미발생(배치가 있으면 V4 영역)'")
+    void V7_가용_0인_요일은_미발생() {
+        ValidationReport r = engine.validate(
+                snapshot(List.of(blockOnMonday(9, 60)), List.of(inactiveAvail(DayOfWeek.MONDAY, 9, 12))));
+
+        assertTrue(r.issues().stream().noneMatch(i -> i.ruleId() == RuleId.V7_BUFFER_SHORTAGE));
+        assertTrue(r.issues().stream().anyMatch(i -> i.ruleId() == RuleId.V4_OUT_OF_AVAILABILITY));
+    }
+
+    @Test
+    @DisplayName("V7: 배치가 없는 요일은 미발생 — 여유가 100%다")
+    void V7_배치_없으면_미발생() {
+        ValidationReport r = engine.validate(snapshot(List.of(), List.of(mondayAvail(9, 19))));
+
+        assertTrue(r.issues().isEmpty());
     }
 }

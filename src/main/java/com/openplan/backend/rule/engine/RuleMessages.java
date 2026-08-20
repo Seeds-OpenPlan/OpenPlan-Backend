@@ -1,7 +1,10 @@
 package com.openplan.backend.rule.engine;
 
 import java.time.DayOfWeek;
+import java.time.LocalDate;
 import java.time.LocalTime;
+
+import java.util.List;
 
 /**
  * 판정 사유 문구 정본 (C-3: reason 는 null 불가).
@@ -92,6 +95,67 @@ final class RuleMessages {
         return weekdayKo(blockWeekday) + " " + hhmm(blockStart) + "~" + hhmm(blockEnd)
                 + " 배치가 " + fixedPrefix + hhmm(fixedStart) + "~" + hhmm(fixedEnd)
                 + " 고정 일정과 겹칩니다. (" + overlapMinutes + "분 겹침)";
+    }
+
+    /**
+     * V4 가용 시간 밖 배치. 템플릿(정본):
+     * {@code "{요일} {HH:MM}~{HH:MM} 배치가 가용 시간 밖입니다. (가용 {HH:MM}~{HH:MM}, ...)"}
+     * 가용 창이 하나도 없는 요일은 {@code "{요일}에는 가용 시간이 없습니다. ({HH:MM}~{HH:MM} 배치)"}.
+     *
+     * <p>가용 창 목록을 문구에 담는 이유는 V3와 같다 — {@code ValidationIssue}에 시각 필드가 없어
+     * 사용자가 <b>어디로 옮겨야 하는지</b>를 알 수 없다. 창이 여럿이면 시작 시각 오름차순으로 잇는다
+     * (정렬 없이 이으면 입력 순서에 따라 문구가 달라져 골든이 깨진다 — P1).
+     *
+     * @param windows 해당 요일의 활성 가용 창, <b>시작 시각 오름차순으로 정렬된 상태</b>로 넘긴다
+     */
+    static String v4OutOfAvailability(DayOfWeek weekday, LocalTime blockStart, LocalTime blockEnd,
+                                      List<LocalTime[]> windows) {
+        if (windows.isEmpty()) {
+            return weekdayKo(weekday) + "에는 가용 시간이 없습니다."
+                    + " (" + hhmm(blockStart) + "~" + hhmm(blockEnd) + " 배치)";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (LocalTime[] w : windows) {
+            if (sb.length() > 0) sb.append(", ");
+            sb.append(hhmm(w[0])).append("~").append(hhmm(w[1]));
+        }
+        return weekdayKo(weekday) + " " + hhmm(blockStart) + "~" + hhmm(blockEnd)
+                + " 배치가 가용 시간 밖입니다. (가용 " + sb + ")";
+    }
+
+    /**
+     * V5 WBS 기간 밖 배치. 템플릿(정본):
+     * {@code "{요일} 배치가 WBS 기간 밖입니다. (WBS {yyyy-MM-dd}~{yyyy-MM-dd}, 배치 {yyyy-MM-dd})"}
+     *
+     * <p>날짜는 {@link LocalDate#toString()} — ISO-8601 고정이라 {@code DateTimeFormatter} 없이도
+     * 로케일에 의존하지 않는다(P1). 포매터를 쓰지 않는 이유는 {@link #hhmm} 과 같다.
+     */
+    static String v5OutOfWbs(DayOfWeek weekday, LocalDate placedOn, LocalDate wbsStart, LocalDate wbsEnd) {
+        return weekdayKo(weekday) + " 배치가 WBS 기간 밖입니다."
+                + " (WBS " + wbsStart + "~" + wbsEnd + ", 배치 " + placedOn + ")";
+    }
+
+    /**
+     * V6 마감일 이후 배치. 템플릿(정본):
+     * {@code "{요일} 배치가 마감일 이후입니다. (마감 {yyyy-MM-dd}, 배치 {yyyy-MM-dd})"}
+     */
+    static String v6AfterDueDate(DayOfWeek weekday, LocalDate placedOn, LocalDate dueDate) {
+        return weekdayKo(weekday) + " 배치가 마감일 이후입니다."
+                + " (마감 " + dueDate + ", 배치 " + placedOn + ")";
+    }
+
+    /**
+     * V7 버퍼 부족. 템플릿(정본):
+     * {@code "{요일} 여유 시간이 부족합니다. (가용 {a}분 / 배치 {p}분, 남은 {b}분)"}
+     *
+     * <p>V3와 문구를 구분하는 이유: V3는 <b>이미 초과</b>라 덜어내야 하고, V7은 <b>아직 초과는
+     * 아니지만 여유가 없는</b> 상태라 조치가 다르다. 남은 분을 그대로 보여줘야 사용자가
+     * "얼마나 더 넣을 수 있는가"를 판단할 수 있다.
+     */
+    static String v7BufferShortage(DayOfWeek weekday, long capacityMinutes, long placedMinutes) {
+        return weekdayKo(weekday) + " 여유 시간이 부족합니다."
+                + " (가용 " + capacityMinutes + "분 / 배치 " + placedMinutes + "분, "
+                + "남은 " + (capacityMinutes - placedMinutes) + "분)";
     }
 
     /**
