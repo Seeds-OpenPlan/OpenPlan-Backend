@@ -123,6 +123,42 @@ public class PlanBlockService {
         return PlanBlockResponse.of(block, title, projectId);
     }
 
+    /**
+     * 블록 삭제/해제 (PLAN-16·18 / TUT-07). {@code createBlock}의 부작용을 역방향으로 대칭 처리한다:
+     * <ul>
+     *   <li><b>TASK</b>: 블록 삭제 → 그 태스크에 <b>남은 블록이 없으면</b> {@code onLastBlockRemoved()}
+     *       (IN_PROGRESS→UNASSIGNED, TT-2). 다른 블록이 남아 있으면 상태 유지(불변식 "IN_PROGRESS ⇔ 블록≥1").</li>
+     *   <li><b>SCHEDULE</b>: 블록 삭제 → 함께 만들었던 {@code schedules} 행도 연쇄 삭제(PLAN-18).</li>
+     * </ul>
+     * 공통: 확정 계획이면 DRAFT 복귀 → flush → 주 total 재계산(C1). 부재·타인 → 404(존재 은닉). 성공 204.
+     */
+    @Transactional
+    public void deleteBlock(UUID userId, UUID blockId) {
+        PlanBlock block = planBlockRepository.findByIdAndUserId(blockId, userId)
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404 (블록 부재·타인)
+
+        UUID planId = block.getWeeklyPlanId();
+        weeklyPlanRepository.findById(planId).ifPresent(WeeklyPlan::reopenToDraftIfConfirmed); // 확정 편집 재개→DRAFT
+
+        if (block.getBlockType() == PlanBlockType.TASK) {
+            UUID taskId = block.getTaskId();
+            planBlockRepository.delete(block);
+            // 자신을 뺀 뒤 남은 블록이 없으면 미배치 복귀 (TT-2 — COMPLETED·UNASSIGNED는 onLastBlockRemoved가 방어)
+            if (!planBlockRepository.existsByTaskIdAndIdNot(taskId, blockId)) {
+                taskRepository.findById(taskId).ifPresent(Task::onLastBlockRemoved);
+            }
+        } else { // SCHEDULE — 블록 + 연결 일정 연쇄 삭제 (PLAN-18)
+            UUID scheduleId = block.getScheduleId();
+            planBlockRepository.delete(block);
+            if (scheduleId != null) {
+                scheduleRepository.deleteById(scheduleId);
+            }
+        }
+
+        planBlockRepository.flush(); // C1 — 삭제·상태 변경 DB 반영 후 재계산이 새 상태를 봄
+        recalculator.recalculate(List.of(planId));
+    }
+
     /** blockType 문자열 → enum. 미정의값 → 422 E-COM-009. */
     private PlanBlockType parseBlockType(String raw) {
         try {
