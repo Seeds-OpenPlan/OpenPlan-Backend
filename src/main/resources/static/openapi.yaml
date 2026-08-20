@@ -2103,9 +2103,8 @@ paths:
   /dashboard:
     get:
       tags: [dashboard]
-      x-implementation-status: not-implemented
       operationId: getDashboard
-      summary: "[미구현] 대시보드 조립 응답 — 단일 GET (D-12 레버 5, NFR-011 2초)"
+      summary: "대시보드 조립 응답 — 단일 GET (D-12 레버 5, NFR-011 2초)"
       x-lane: BE-2
       x-user-stories: [DASH-01, DASH-02, DASH-03, DASH-04, DASH-05, DASH-06, DASH-07, RB-DASH-01, RB-DASH-02]
       parameters:
@@ -2122,9 +2121,8 @@ paths:
   /stats/summaries:
     get:
       tags: [stats]
-      x-implementation-status: not-implemented
       operationId: getStatsSummaries
-      summary: "[미구현] 주간/월간 요약 (SC-06 유지 4종)"
+      summary: "주간/월간 요약 (SC-06 유지 4종)"
       x-lane: BE-2
       x-user-stories: [STATS-SCREEN]
       parameters:
@@ -2142,9 +2140,8 @@ paths:
   /stats/deviations:
     get:
       tags: [stats]
-      x-implementation-status: not-implemented
       operationId: getDeviations
-      summary: "[미구현] 편차 분석 (SS-10 — 프로젝트/카테고리 그룹, P1 결정적)"
+      summary: "편차 분석 (SS-10 — 프로젝트/카테고리 그룹, P1 결정적)"
       x-lane: BE-2
       x-user-stories: [RB-STAT-01]
       parameters:
@@ -2163,9 +2160,8 @@ paths:
   /stats/time-patterns:
     get:
       tags: [stats]
-      x-implementation-status: not-implemented
       operationId: getTimePatterns
-      summary: "[미구현] 구간별 완료율 (SS-12 — DAWN/MORNING/AFTERNOON/NIGHT 고정 경계)"
+      summary: "구간별 완료율 (SS-12 — DAWN/MORNING/AFTERNOON/NIGHT 고정 경계)"
       x-lane: BE-2
       x-user-stories: [RB-STAT-03]
       parameters:
@@ -2676,7 +2672,7 @@ components:
           type: [object, "null"]
           description: RB-DASH-01/SS-01 — 최상위 1행동 (전순서 Q3, W3 확정)
           properties:
-            actionType: { type: string, enum: [RESOLVE_FIXED_CONFLICT, PLACE_UNASSIGNED, REPLACE_TODAY_INCOMPLETE, FIX_OUT_OF_WBS, RESOLVE_CAPACITY, HANDLE_DEADLINE] }
+            actionType: { type: string, enum: [RESOLVE_FIXED_CONFLICT, RESOLVE_OVERLAP, PLACE_UNASSIGNED, REPLACE_TODAY_INCOMPLETE, FIX_OUT_OF_WBS, RESOLVE_CAPACITY, HANDLE_DEADLINE] }
             reason: { type: string }
             routePath: { type: string }
         riskIssues:
