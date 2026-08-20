@@ -18,7 +18,7 @@ import com.openplan.backend.auth.oauth.OAuthProviderType;
  *
  * <p>openapi 의 {@code createConnection} 은 이 갈라짐을 {@code oneOf} + {@code discriminator(provider)} 로
  * 표현한다 — 오퍼레이션을 쪼개지 않은 것은 연동 목록·해제·캘린더 선택이 제공자와 무관하게 같은 자원을
- * 쓰기 때문이다. 반면 {@code startCalendarAuthorization} 의 provider 는 {@code [GOOGLE, KAKAO]} 로 남는다 —
+ * 쓰기 때문이다. 반면 {@code startCalendarAuthorization} 의 provider 는 {@code [GOOGLE]} 만 남는다 —
  * <b>네이버가 빠진 것은 누락이 아니라 인가 단계 자체가 없기 때문이다.</b>
  */
 public enum ExternalCalendarProvider {
@@ -27,10 +27,7 @@ public enum ExternalCalendarProvider {
             CalendarAuthModel.OAUTH),
 
     /** CalDAV Basic — 오픈 API 에 조회가 없어 인가가 아니라 애플리케이션 비밀번호로 붙는다. */
-    NAVER(OAuthProviderType.NAVER, "", CalendarAuthModel.CALDAV_BASIC),
-
-    /** 톡캘린더 API 는 있으나 사용 권한 승인 전에는 앱 멤버만 호출 가능. */
-    KAKAO(OAuthProviderType.KAKAO, "talk_calendar", CalendarAuthModel.OAUTH);
+    NAVER(OAuthProviderType.NAVER, "", CalendarAuthModel.CALDAV_BASIC);
 
     /**
      * 제공자에 붙는 방식. 연동 생성이 무엇을 요구하는지가 여기서 갈린다.

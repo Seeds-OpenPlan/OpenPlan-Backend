@@ -640,7 +640,6 @@ paths:
                 propertyName: provider
                 mapping:
                   GOOGLE: "#/components/schemas/OAuthCalendarConnectionRequest"
-                  KAKAO: "#/components/schemas/OAuthCalendarConnectionRequest"
                   NAVER: "#/components/schemas/NaverCalendarConnectionRequest"
       responses:
         "201":
@@ -774,7 +773,7 @@ paths:
       x-lane: BE-1
       x-user-stories: [ONB-07, FIX-14]
       parameters:
-        - { name: provider, in: query, required: true, schema: { type: string, enum: [GOOGLE, KAKAO] } }
+        - { name: provider, in: query, required: true, schema: { type: string, enum: [GOOGLE] } }
         - name: redirectUri
           in: query
           required: true
@@ -2373,10 +2372,10 @@ components:
         reason: { type: string, description: "예: '최근 4주 실제 시간 중앙값 기준' — AI 표현 금지 (P4)" }
     OAuthCalendarConnectionRequest:
       type: object
-      description: "구글·카카오 — startCalendarAuthorization 인가 결과를 교환한다."
+      description: "구글 — startCalendarAuthorization 인가 결과를 교환한다."
       required: [provider, authCode, redirectUri, state]
       properties:
-        provider: { type: string, enum: [GOOGLE, KAKAO] }
+        provider: { type: string, enum: [GOOGLE] }
         authCode: { type: string }
         redirectUri:
           type: string
