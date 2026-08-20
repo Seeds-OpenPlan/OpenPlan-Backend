@@ -1,0 +1,368 @@
+package com.openplan.backend.externalcalendar.provider;
+
+import com.openplan.backend.externalcalendar.domain.ExternalCalendarProvider;
+import com.openplan.backend.externalcalendar.provider.ical.ICalDateTime;
+import com.openplan.backend.externalcalendar.provider.ical.ICalParser;
+import com.openplan.backend.externalcalendar.provider.ical.RecurrenceExpander;
+import com.openplan.backend.global.error.ErrorCode;
+import com.openplan.backend.global.error.OpenPlanException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
+import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientResponseException;
+import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+
+import javax.xml.XMLConstants;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * 네이버 캘린더 어댑터 — CalDAV (ST-B1-11 · ONB-07~09 · FIX-13~17).
+ *
+ * <p><b>왜 CalDAV 인가.</b> 네이버 캘린더 오픈 API 에는 조회 계열 엔드포인트가 없다(공식 저장소 전수
+ * 확인). 반면 {@code caldav.calendar.naver.com} 은 열려 있고 읽기가 된다 — 2026-08-20 실계정 실측.
+ * 그래서 이 어댑터만 OAuth 가 아니라 <b>HTTP Basic</b> 으로 붙는다
+ * ({@code WWW-Authenticate: basic realm="Naver Calendar"}).
+ *
+ * <p><b>네이버 방언 — 표준대로 짜면 조용히 틀리는 네 곳</b> (전부 실측):
+ * <ol>
+ *   <li>{@code calendar-query} 가 {@code calendar-data} 를 <b>안 준다.</b> 상태는 {@code 200 OK} 인데
+ *       {@code <D:prop/>} 이 비어서 온다 → 목록(hrefs)을 받은 뒤 {@code calendar-multiget} 으로 본문을
+ *       따로 받는 <b>2단계 조회</b>가 필요하다. 한 번에 끝내려 하면 일정이 0건으로 보인다.</li>
+ *   <li>{@code <C:expand>} 를 <b>받고도 무시한다.</b> 붙이든 안 붙이든 응답이 같고 {@code RRULE} 이
+ *       그대로 남는다 → 반복 전개는 {@link RecurrenceExpander} 가 한다.</li>
+ *   <li>시각이 UTC 가 아니라 {@code DTSTART;TZID=Asia/Seoul:...} 이다 → {@link ICalDateTime} 참조.</li>
+ *   <li>응답에 {@code VTIMEZONE} 이 딸려 오고 그 안에도 {@code DTSTART}·{@code RRULE} 이 있다
+ *       (한국의 1987~88 서머타임) → {@link ICalParser} 가 컴포넌트 경계로 거른다.</li>
+ * </ol>
+ *
+ * <p><b>다행인 것</b>: 네이버의 {@code time-range} 필터는 반복을 고려해 매칭한다 — 6월에 시작한 매주
+ * 일정이 8월 조회 목록에 잡힌다(실측). 일정을 <b>놓치지는 않고</b>, 받은 마스터를 펼치기만 하면 된다.
+ */
+@Component
+public class NaverCalDavProvider implements CalendarProvider {
+
+    private static final Logger log = LoggerFactory.getLogger(NaverCalDavProvider.class);
+
+    private static final String BASE = "https://caldav.calendar.naver.com";
+    private static final HttpMethod PROPFIND = HttpMethod.valueOf("PROPFIND");
+    private static final HttpMethod REPORT = HttpMethod.valueOf("REPORT");
+
+    /** iCalendar 기본형 UTC — {@code time-range} 필터가 요구하는 표기. */
+    private static final DateTimeFormatter ICAL_UTC =
+            DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'").withZone(ZoneId.of("UTC"));
+
+    /**
+     * {@code TZID} 도 {@code Z} 도 없는 시각(floating)을 해석할 지역.
+     *
+     * <p>네이버 캘린더는 한국 서비스이고 실측 응답이 전부 {@code Asia/Seoul} 이었다. floating 을 UTC 로
+     * 읽으면 9시간이 밀리므로, 모르면 UTC 가 아니라 여기로 떨어뜨린다.
+     */
+    private static final ZoneId DEFAULT_ZONE = ZoneId.of("Asia/Seoul");
+
+    /** 한 번에 본문을 받아올 일정 수 상한 — 요청 XML 이 지나치게 커지지 않게 나눠 보낸다. */
+    private static final int MULTIGET_BATCH = 100;
+
+    private final RestClient restClient;
+
+    public NaverCalDavProvider(RestClient calDavRestClient) {
+        this.restClient = calDavRestClient;
+    }
+
+    @Override
+    public ExternalCalendarProvider provider() {
+        return ExternalCalendarProvider.NAVER;
+    }
+
+    /**
+     * 캘린더 목록 (ONB-08) — principal → calendar-home-set → 모음 순회.
+     *
+     * <p>경로를 규칙으로 조립하지 않고 <b>서버가 알려주는 대로 따라간다.</b> 실측에서 홈이
+     * {@code /caldav/{id}/calendar/} 였지만, 그 모양을 상수로 박으면 네이버가 바꾸는 날 전부 404 가 된다.
+     *
+     * <p><b>{@code VTODO} 모음은 거른다.</b> 네이버는 "내 할 일"을 캘린더와 같은 자리에 두는데
+     * ({@code supported-calendar-component-set} 이 {@code VTODO}), 거르지 않으면 <b>할 일 목록이 캘린더로
+     * 보이고</b> 사용자가 그것을 선택한 뒤 일정 0건을 만난다.
+     */
+    @Override
+    public List<ProviderCalendar> listCalendars(ProviderCredential credential) {
+        String principal = firstHref(
+                dav(credential, "/", 0, PROPFIND, """
+                        <?xml version="1.0" encoding="utf-8"?>
+                        <d:propfind xmlns:d="DAV:"><d:prop><d:current-user-principal/></d:prop></d:propfind>"""),
+                "current-user-principal");
+        if (principal == null) {
+            throw providerFailure("current-user-principal 없음");
+        }
+
+        String home = firstHref(
+                dav(credential, principal, 0, PROPFIND, """
+                        <?xml version="1.0" encoding="utf-8"?>
+                        <d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+                          <d:prop><c:calendar-home-set/></d:prop></d:propfind>"""),
+                "calendar-home-set");
+        if (home == null) {
+            throw providerFailure("calendar-home-set 없음");
+        }
+
+        Element root = dav(credential, home, 1, PROPFIND, """
+                <?xml version="1.0" encoding="utf-8"?>
+                <d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+                  <d:prop><d:resourcetype/><d:displayname/><c:supported-calendar-component-set/></d:prop>
+                </d:propfind>""");
+
+        List<ProviderCalendar> calendars = new ArrayList<>();
+        for (Element response : children(root, "response")) {
+            String href = text(response, "href");
+            if (href == null || href.equals(home)) {
+                continue;
+            }
+            if (element(response, "calendar") == null) {
+                continue;
+            }
+            if (!supportsEvents(response)) {
+                continue;
+            }
+            String name = text(response, "displayname");
+            calendars.add(new ProviderCalendar(href, name != null && !name.isBlank() ? name : href));
+        }
+        return calendars;
+    }
+
+    /**
+     * 기간 내 일정 (ONB-08/09) — 2단계 조회 후 반복 전개.
+     *
+     * <p><b>{@code externalEventId} 를 합성한다.</b> 반복 일정은 {@code .ics} 파일 하나(UID 하나)가 여러
+     * 회차가 되는데, 재동기화는 이 값으로 같은 행을 찾는다. UID 만 쓰면 <b>매주 회의 전체가 한 행으로
+     * 뭉개져</b> 회차마다 다른 반영 여부(제외·수정)를 담을 수 없다. 그래서 {@code UID#시작시각} 으로 둔다.
+     */
+    @Override
+    public List<ProviderEvent> listEvents(ProviderCredential credential, String externalCalendarId,
+                                          String calendarName, Instant from, Instant to) {
+        String query = """
+                <?xml version="1.0" encoding="utf-8"?>
+                <c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+                  <d:prop><d:getetag/></d:prop>
+                  <c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT">
+                    <c:time-range start="%s" end="%s"/>
+                  </c:comp-filter></c:comp-filter></c:filter>
+                </c:calendar-query>""".formatted(ICAL_UTC.format(from), ICAL_UTC.format(to));
+
+        List<String> hrefs = new ArrayList<>();
+        for (Element response : children(dav(credential, externalCalendarId, 1, REPORT, query), "response")) {
+            String href = text(response, "href");
+            if (href != null && !href.equals(externalCalendarId)) {
+                hrefs.add(href);
+            }
+        }
+        if (hrefs.isEmpty()) {
+            return List.of();
+        }
+
+        List<ProviderEvent> events = new ArrayList<>();
+        for (int offset = 0; offset < hrefs.size(); offset += MULTIGET_BATCH) {
+            List<String> batch = hrefs.subList(offset, Math.min(offset + MULTIGET_BATCH, hrefs.size()));
+            collect(fetchBodies(credential, externalCalendarId, batch), calendarName, from, to, events);
+        }
+        return events;
+    }
+
+    /** {@code calendar-multiget} — 방언 ①: 본문은 여기서만 온다. */
+    private List<String> fetchBodies(ProviderCredential credential, String calendarHref, List<String> hrefs) {
+        StringBuilder body = new StringBuilder("""
+                <?xml version="1.0" encoding="utf-8"?>
+                <c:calendar-multiget xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+                  <d:prop><c:calendar-data/></d:prop>
+                """);
+        for (String href : hrefs) {
+            body.append("  <d:href>").append(escapeXml(href)).append("</d:href>\n");
+        }
+        body.append("</c:calendar-multiget>");
+
+        List<String> bodies = new ArrayList<>();
+        for (Element response : children(dav(credential, calendarHref, 1, REPORT, body.toString()), "response")) {
+            String data = text(response, "calendar-data");
+            if (data != null && !data.isBlank()) {
+                bodies.add(data);
+            }
+        }
+        return bodies;
+    }
+
+    private void collect(List<String> icsBodies, String calendarName, Instant from, Instant to,
+                         List<ProviderEvent> target) {
+        for (String ics : icsBodies) {
+            for (ICalParser.Component event : ICalParser.parseEvents(ics)) {
+                ICalParser.Property dtStart = event.first("DTSTART");
+                if (ICalDateTime.isAllDay(dtStart)) {
+                    // 종일 일정은 시각이 없어 옮길 자리가 없고, 하루를 통째로 채우면 의도하지 않은 차단이 된다.
+                    continue;
+                }
+                Instant start = ICalDateTime.parse(dtStart, DEFAULT_ZONE);
+                if (start == null) {
+                    continue;
+                }
+                Instant end = ICalDateTime.parse(event.first("DTEND"), DEFAULT_ZONE);
+                ZoneId zone = zoneOf(dtStart);
+
+                String uid = event.value("UID");
+                String title = event.value("SUMMARY");
+                for (RecurrenceExpander.Occurrence occurrence :
+                        RecurrenceExpander.expand(event, start, end, zone, from, to)) {
+                    if (!occurrence.endAt().isAfter(occurrence.startAt())) {
+                        continue;
+                    }
+                    target.add(new ProviderEvent(
+                            occurrenceId(uid, occurrence.startAt()),
+                            title != null && !title.isBlank() ? title : "(제목 없음)",
+                            occurrence.startAt(), occurrence.endAt(), calendarName));
+                }
+            }
+        }
+    }
+
+    private static String occurrenceId(String uid, Instant start) {
+        String base = uid != null && !uid.isBlank() ? uid : "unknown";
+        return base + "#" + start.getEpochSecond();
+    }
+
+    private static ZoneId zoneOf(ICalParser.Property dtStart) {
+        String tzid = dtStart == null ? null : dtStart.param("TZID");
+        if (tzid == null || tzid.isBlank()) {
+            return DEFAULT_ZONE;
+        }
+        try {
+            return ZoneId.of(tzid.replace("\"", "").trim());
+        } catch (Exception e) {
+            return DEFAULT_ZONE;
+        }
+    }
+
+    /** CalDAV 한 번 왕복 — 실패는 여기서 계약된 오류로 바꾼다. */
+    private Element dav(ProviderCredential credential, String path, int depth, HttpMethod method, String body) {
+        String xml;
+        try {
+            xml = restClient.method(method)
+                    .uri(path.startsWith("http") ? path : BASE + path)
+                    .header(HttpHeaders.AUTHORIZATION, basic(credential))
+                    .header("Depth", String.valueOf(depth))
+                    .contentType(MediaType.APPLICATION_XML)
+                    .body(body)
+                    .retrieve()
+                    .body(String.class);
+        } catch (RestClientResponseException e) {
+            if (e.getStatusCode().value() == 401 || e.getStatusCode().value() == 403) {
+                // 아이디·앱 비밀번호가 틀렸거나 사용자가 네이버에서 회수했다. 사용자가 고칠 수 있는 오류다.
+                log.warn("네이버 CalDAV 자격증명 거부: status={}", e.getStatusCode().value());
+                throw new OpenPlanException(ErrorCode.E_EXT_002,
+                        Map.of("provider", ExternalCalendarProvider.NAVER.name()));
+            }
+            log.warn("네이버 CalDAV 오류: status={} path={}", e.getStatusCode().value(), path);
+            throw providerFailure("status=" + e.getStatusCode().value());
+        } catch (Exception e) {
+            log.warn("네이버 CalDAV 호출 실패: path={}", path, e);
+            throw providerFailure(e.getClass().getSimpleName());
+        }
+        return parseXml(xml);
+    }
+
+    private static String basic(ProviderCredential credential) {
+        String raw = credential.accountIdentifier() + ":" + credential.secret();
+        return "Basic " + Base64.getEncoder()
+                .encodeToString(raw.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * 응답 XML 파싱.
+     *
+     * <p><b>외부 엔티티를 끈다.</b> 제공자 응답도 외부 입력이다 — DTD 를 허용하면 응답 한 줄로 서버의
+     * 로컬 파일을 읽게 만드는 경로(XXE)가 열린다.
+     */
+    private static Element parseXml(String xml) {
+        if (xml == null || xml.isBlank()) {
+            throw providerFailure("빈 응답");
+        }
+        try {
+            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+            factory.setNamespaceAware(true);
+            factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+            factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+            factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+            factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
+            factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
+            factory.setXIncludeAware(false);
+            factory.setExpandEntityReferences(false);
+            DocumentBuilder builder = factory.newDocumentBuilder();
+            return builder.parse(new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)))
+                    .getDocumentElement();
+        } catch (Exception e) {
+            throw providerFailure("XML 파싱 실패");
+        }
+    }
+
+    /** {@code supported-calendar-component-set} 에 {@code VEVENT} 가 있는가 — 없으면 할 일 모음이다. */
+    private static boolean supportsEvents(Element response) {
+        NodeList comps = response.getElementsByTagNameNS("*", "comp");
+        if (comps.getLength() == 0) {
+            // 표기가 없으면 일정 모음으로 본다 — 거르는 쪽으로 틀리면 사용자의 캘린더가 사라진다.
+            return true;
+        }
+        for (int i = 0; i < comps.getLength(); i++) {
+            if ("VEVENT".equalsIgnoreCase(((Element) comps.item(i)).getAttribute("name"))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static List<Element> children(Element root, String localName) {
+        List<Element> out = new ArrayList<>();
+        NodeList nodes = root.getElementsByTagNameNS("*", localName);
+        for (int i = 0; i < nodes.getLength(); i++) {
+            if (nodes.item(i).getNodeType() == Node.ELEMENT_NODE) {
+                out.add((Element) nodes.item(i));
+            }
+        }
+        return out;
+    }
+
+    private static Element element(Element scope, String localName) {
+        NodeList nodes = scope.getElementsByTagNameNS("*", localName);
+        return nodes.getLength() == 0 ? null : (Element) nodes.item(0);
+    }
+
+    private static String text(Element scope, String localName) {
+        Element found = element(scope, localName);
+        return found == null ? null : found.getTextContent().trim();
+    }
+
+    private static String firstHref(Element root, String parentLocalName) {
+        Element parent = element(root, parentLocalName);
+        return parent == null ? null : text(parent, "href");
+    }
+
+    private static String escapeXml(String value) {
+        return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+    }
+
+    private static OpenPlanException providerFailure(String detail) {
+        log.warn("네이버 CalDAV 실패: {}", detail);
+        return new OpenPlanException(ErrorCode.E_EXT_001,
+                Map.of("provider", ExternalCalendarProvider.NAVER.name()));
+    }
+}

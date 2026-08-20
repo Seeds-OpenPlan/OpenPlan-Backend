@@ -140,33 +140,18 @@ public class ExternalCalendarService {
             log.error("EXT_TOKEN_KEY 미설정 — 외부 캘린더 연동을 저장할 수 없다");
             throw new OpenPlanException(ErrorCode.E_COM_005);
         }
-        // 코드를 쓰기 전에 확인한다 — 남의 인가 코드를 내 세션에 붙이는 경로를 먼저 끊는다.
-        authorization.verifyState(provider, request.state());
+        NewConnectionSecret secret = provider.usesOAuth()
+                ? exchangeOAuth(provider, request)
+                : verifyCalDav(provider, request);
 
-        OAuthProperties.Client client = oauthProperties.client(provider.oauthProvider())
-                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_EXT_001, Map.of("provider", provider.name())));
-
-        OAuthTokenSet tokenSet;
-        OAuthUserInfo userInfo;
-        try {
-            tokenSet = oauthClient.exchangeCodeForTokens(provider.oauthProvider(), client,
-                    request.authCode(), request.redirectUri());
-            userInfo = oauthClient.fetchUserInfo(provider.oauthProvider(), tokenSet.accessToken());
-        } catch (OAuthException e) {
-            log.warn("외부 캘린더 연결 실패: provider={}", provider, e);
-            throw new OpenPlanException(ErrorCode.E_EXT_001, Map.of("provider", provider.name()));
-        }
-
-        String accountIdentifier = userInfo.email() != null ? userInfo.email() : userInfo.providerUserId();
-        if (connectionRepository.existsByUserIdAndProviderAndAccountIdentifier(userId, provider, accountIdentifier)) {
+        if (connectionRepository.existsByUserIdAndProviderAndAccountIdentifier(
+                userId, provider, secret.accountIdentifier())) {
             throw new OpenPlanException(ErrorCode.E_EXT_004);
         }
 
         ExternalCalendarConnection connection = ExternalCalendarConnection.connect(
-                userId, provider, accountIdentifier,
-                tokens.encrypt(tokenSet.accessToken()),
-                tokens.encrypt(tokenSet.refreshToken()),
-                tokens.expiresAt(tokenSet.expiresInSeconds()),
+                userId, provider, secret.accountIdentifier(),
+                secret.accessTokenEnc(), secret.refreshTokenEnc(), secret.tokenExpiresAt(),
                 userClock.now());
         try {
             connectionRepository.saveAndFlush(connection);
@@ -174,6 +159,56 @@ public class ExternalCalendarService {
             throw new OpenPlanException(ErrorCode.E_EXT_004);
         }
         return ExternalConnectionResponse.of(connection, List.of());
+    }
+
+    /**
+     * 저장 직전의 자격증명 — 제공자별 갈래가 여기서 하나로 합쳐진다.
+     *
+     * <p>네이버는 {@code refreshTokenEnc}·{@code tokenExpiresAt} 이 <b>둘 다 null</b> 이다. 애플리케이션
+     * 비밀번호는 만료되지 않고 갱신 개념도 없기 때문이며, 만료를 모르는 값으로 두면
+     * {@code ExternalCalendarTokens} 의 만료 판정이 그대로 통과시킨다 — 스키마를 바꿀 필요가 없었다.
+     */
+    private record NewConnectionSecret(String accountIdentifier, String accessTokenEnc,
+                                       String refreshTokenEnc, Instant tokenExpiresAt) {
+    }
+
+    /** 구글·카카오 — 인가 코드를 토큰으로 바꾸고 계정을 확인한다. */
+    private NewConnectionSecret exchangeOAuth(ExternalCalendarProvider provider, CreateConnectionRequest request) {
+        // 코드를 쓰기 전에 확인한다 — 남의 인가 코드를 내 세션에 붙이는 경로를 먼저 끊는다.
+        authorization.verifyState(provider, request.state());
+
+        OAuthProperties.Client client = oauthProperties.client(provider.oauthProvider())
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_EXT_001, Map.of("provider", provider.name())));
+
+        try {
+            OAuthTokenSet tokenSet = oauthClient.exchangeCodeForTokens(provider.oauthProvider(), client,
+                    request.authCode(), request.redirectUri());
+            OAuthUserInfo userInfo = oauthClient.fetchUserInfo(provider.oauthProvider(), tokenSet.accessToken());
+            String accountIdentifier = userInfo.email() != null ? userInfo.email() : userInfo.providerUserId();
+            return new NewConnectionSecret(accountIdentifier,
+                    tokens.encrypt(tokenSet.accessToken()),
+                    tokens.encrypt(tokenSet.refreshToken()),
+                    tokens.expiresAt(tokenSet.expiresInSeconds()));
+        } catch (OAuthException e) {
+            log.warn("외부 캘린더 연결 실패: provider={}", provider, e);
+            throw new OpenPlanException(ErrorCode.E_EXT_001, Map.of("provider", provider.name()));
+        }
+    }
+
+    /**
+     * 네이버 — 인가 단계가 없으므로 <b>실제로 붙여 봐서</b> 자격증명을 확인한다.
+     *
+     * <p>확인 없이 저장하면 "연동됨"으로 보이는 연결이 <b>조회 때마다 실패</b>한다. 사용자는 캘린더를
+     * 연결했다고 믿고 그 시간을 비워 두지 않는다. 붙을 수 있음을 증명한 것만 저장한다.
+     *
+     * <p>아이디·비밀번호가 틀리면 어댑터가 {@code E-EXT-002}(422)로 올린다 — 사용자가 고칠 수 있는
+     * 오류라 제공자 장애(502)와 화면이 달라야 한다.
+     */
+    private NewConnectionSecret verifyCalDav(ExternalCalendarProvider provider, CreateConnectionRequest request) {
+        String naverId = request.naverId().trim();
+        providerRegistry.get(provider)
+                .listCalendars(ProviderCredential.basic(naverId, request.appPassword()));
+        return new NewConnectionSecret(naverId, tokens.encrypt(request.appPassword()), null, null);
     }
 
     /**
