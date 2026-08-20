@@ -1803,9 +1803,8 @@ paths:
   /plan-blocks/{blockId}:
     patch:
       tags: [plan-blocks]
-      x-implementation-status: not-implemented
       operationId: movePlanBlock
-      summary: "[미구현] 블록 이동·시간 조정 (PLAN-19) · 주차 이동은 targetWeekStartDate (PLAN-20 — 대상 주차 초안 get-or-create)"
+      summary: "블록 이동·시간 조정 (PLAN-19) · 주차 이동은 targetWeekStartDate (PLAN-20 — 대상 주차 초안 get-or-create)"
       x-lane: BE-2
       x-user-stories: [PLAN-19, PLAN-20, PLAN-09]
       parameters: [{ $ref: "#/components/parameters/BlockId" }]
