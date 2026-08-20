@@ -1831,9 +1831,8 @@ paths:
         "422": { description: "E-PLAN-002 시작>=종료 (NFR-009) · E-COM-009 5분 단위", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
     delete:
       tags: [plan-blocks]
-      x-implementation-status: not-implemented
       operationId: deletePlanBlock
-      summary: "[미구현] TASK 블록=배치 해제(태스크 UNASSIGNED 복귀 — PLAN-16) / SCHEDULE 블록=일정 삭제(schedules 행 연쇄 — PLAN-18)"
+      summary: "TASK 블록=배치 해제(태스크 UNASSIGNED 복귀 — PLAN-16) / SCHEDULE 블록=일정 삭제(schedules 행 연쇄 — PLAN-18)"
       x-lane: BE-2
       x-user-stories: [PLAN-16, PLAN-18, TUT-07]
       parameters: [{ $ref: "#/components/parameters/BlockId" }]
