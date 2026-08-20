@@ -78,4 +78,15 @@ public class Schedule {
         this.status = ScheduleStatus.ACTIVE;
         this.createdAt = createdAt;
     }
+
+    /**
+     * 일정 편집 (PLAN-17) — 제목·예상시간·우선순위·메모를 검증 통과값으로 갈아끼운다. 시각(start/end)·상태는
+     * 편집으로 못 바꾼다(시각 변경은 블록 이동 소관). version은 flush 시 {@code @Version}이 증가시킨다(낙관락).
+     */
+    public void edit(String title, Integer estimatedMinutes, Integer priority, String memo) {
+        this.title = title;
+        this.estimatedMinutes = estimatedMinutes;
+        this.priority = priority;
+        this.memo = memo;
+    }
 }
