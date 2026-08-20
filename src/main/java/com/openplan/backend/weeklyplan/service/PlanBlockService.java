@@ -16,12 +16,17 @@ import com.openplan.backend.weeklyplan.domain.PlanBlock;
 import com.openplan.backend.weeklyplan.domain.PlanBlockType;
 import com.openplan.backend.weeklyplan.domain.WeeklyPlan;
 import com.openplan.backend.weeklyplan.dto.PlanBlockCreateRequest;
+import com.openplan.backend.weeklyplan.dto.PlanBlockMoveRequest;
 import com.openplan.backend.weeklyplan.dto.PlanBlockResponse;
 import com.openplan.backend.weeklyplan.repository.PlanBlockRepository;
+import com.openplan.backend.weeklyplan.repository.PlanBlockView;
 import com.openplan.backend.weeklyplan.repository.WeeklyPlanRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
+import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -157,6 +162,72 @@ public class PlanBlockService {
 
         planBlockRepository.flush(); // C1 — 삭제·상태 변경 DB 반영 후 재계산이 새 상태를 봄
         recalculator.recalculate(List.of(planId));
+    }
+
+    /**
+     * 블록 이동·시간 조정 (PLAN-19·20 / PLAN-09). 부분 수정 — 담겨 온 필드만 반영.
+     * <ul>
+     *   <li><b>시각(PLAN-19)</b>: startAt/endAt 병합 후 5분 단위·start&lt;end 검증(E-COM-009·E-PLAN-002).</li>
+     *   <li><b>주차 이동(PLAN-20)</b>: targetWeekStartDate가 오면 대상 주 계획을 get-or-create해 블록을 옮긴다.
+     *       원본·대상 계획 both 확정이면 DRAFT 복귀, 양쪽 주 total을 재계산한다.</li>
+     * </ul>
+     * 부재·타인 블록 → 404. 겹침·가용초과는 막지 않는다(검증 엔진 소관).
+     */
+    @Transactional
+    public PlanBlockResponse moveBlock(UUID userId, UUID blockId, PlanBlockMoveRequest req) {
+        PlanBlock block = planBlockRepository.findByIdAndUserId(blockId, userId)
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404 (블록 부재·타인)
+
+        // 시각 병합 — 안 담긴 필드는 기존 값 유지
+        Instant startAt = req.isProvided("startAt") ? req.getStartAt() : block.getStartAt();
+        Instant endAt = req.isProvided("endAt") ? req.getEndAt() : block.getEndAt();
+        if (req.isProvided("startAt") || req.isProvided("endAt")) {
+            if (startAt == null || endAt == null) {
+                throw invalidField(startAt == null ? "startAt" : "endAt", "required");
+            }
+            if (!startAt.isBefore(endAt)) { // 422 E-PLAN-002 (start >= end)
+                throw new OpenPlanException(ErrorCode.E_PLAN_002);
+            }
+            requireFiveMinuteAligned(startAt, "startAt"); // 422 E-COM-009
+            requireFiveMinuteAligned(endAt, "endAt");
+        }
+
+        UUID sourcePlanId = block.getWeeklyPlanId();
+        UUID targetPlanId = sourcePlanId;
+
+        // 주차 이동(PLAN-20) — 대상 주 계획 get-or-create
+        if (req.isProvided("targetWeekStartDate") && req.getTargetWeekStartDate() != null) {
+            WeeklyPlan targetPlan = getOrCreateWeekPlan(userId, req.getTargetWeekStartDate());
+            targetPlanId = targetPlan.getId();
+            targetPlan.reopenToDraftIfConfirmed(); // 대상 계획에 편집 발생 → DRAFT
+        }
+
+        // 원본 계획 확정 편집 재개 → DRAFT
+        weeklyPlanRepository.findById(sourcePlanId).ifPresent(WeeklyPlan::reopenToDraftIfConfirmed);
+
+        planBlockRepository.flush(); // reopen(엔티티) 반영 후 벌크 UPDATE (clearAutomatically로 컨텍스트 비움)
+        planBlockRepository.reschedule(blockId, startAt, endAt, targetPlanId);
+
+        // 재계산 — 주차 이동이면 원본·대상 both, 아니면 원본만
+        List<UUID> affected = new ArrayList<>();
+        affected.add(sourcePlanId);
+        if (!targetPlanId.equals(sourcePlanId)) {
+            affected.add(targetPlanId);
+        }
+        recalculator.recalculate(affected);
+
+        PlanBlockView view = planBlockRepository.findViewByBlockId(blockId)
+                .orElseThrow(() -> new IllegalStateException("이동 직후 블록 뷰 재조회 실패 — blockId=" + blockId));
+        return PlanBlockResponse.fromView(view);
+    }
+
+    /** 대상 주 계획 get-or-create (PLAN-20). 있으면 기존, 없으면 생성(주 total 재계산이 뒤따르므로 total=0으로 시작). */
+    private WeeklyPlan getOrCreateWeekPlan(UUID userId, LocalDate weekStartDate) {
+        return weeklyPlanRepository.findByUserIdAndWeekStartDate(userId, weekStartDate)
+                .orElseGet(() -> {
+                    WeeklyPlan plan = new WeeklyPlan(userId, weekStartDate, weekStartDate.plusDays(6), clock.now());
+                    return weeklyPlanRepository.saveAndFlush(plan);
+                });
     }
 
     /** blockType 문자열 → enum. 미정의값 → 422 E-COM-009. */

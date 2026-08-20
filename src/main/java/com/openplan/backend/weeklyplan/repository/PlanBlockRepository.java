@@ -2,9 +2,11 @@ package com.openplan.backend.weeklyplan.repository;
 
 import com.openplan.backend.weeklyplan.domain.PlanBlock;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -56,4 +58,38 @@ public interface PlanBlockRepository extends JpaRepository<PlanBlock, UUID> {
      * 삭제 대상 자신을 제외해야 하므로 {@code excludeBlockId}로 뺀다.
      */
     boolean existsByTaskIdAndIdNot(UUID taskId, UUID excludeBlockId);
+
+    /** 단건 뷰(blockId) — 이동 응답용. {@link #findViewsByWeeklyPlanId}와 동일 조인·별칭. */
+    @Query(value = """
+            SELECT pb.plan_block_id   AS "planBlockId",
+                   pb.weekly_plan_id  AS "weeklyPlanId",
+                   pb.block_type      AS "blockType",
+                   pb.task_id         AS "taskId",
+                   pb.schedule_id     AS "scheduleId",
+                   COALESCE(t.title, s.title) AS "title",
+                   t.project_id       AS "projectId",
+                   pb.start_at        AS "startAt",
+                   pb.end_at          AS "endAt",
+                   pb.status          AS "status"
+            FROM plan_blocks pb
+            LEFT JOIN tasks t     ON t.task_id = pb.task_id
+            LEFT JOIN schedules s ON s.schedule_id = pb.schedule_id
+            WHERE pb.plan_block_id = :blockId
+            """, nativeQuery = true)
+    Optional<PlanBlockView> findViewByBlockId(@Param("blockId") UUID blockId);
+
+    /**
+     * 블록 이동·시간 조정 (PLAN-19·20) — 시각과 소속 주간계획을 한 번에 바꾼다. {@code weekly_plan_id}는
+     * 엔티티에서 {@code updatable=false}(생성 후 불변 의도)라 dirty update로는 못 바꾸므로, 이동은 이 벌크
+     * UPDATE로 우회한다(같은 주 이동이면 {@code planId}가 기존과 동일). {@code clearAutomatically}로 영속
+     * 컨텍스트를 비워 이후 뷰 재조회가 갱신된 값을 본다.
+     */
+    @Modifying(clearAutomatically = true)
+    @Query("""
+            UPDATE PlanBlock pb
+               SET pb.startAt = :startAt, pb.endAt = :endAt, pb.weeklyPlanId = :planId
+             WHERE pb.id = :blockId
+            """)
+    void reschedule(@Param("blockId") UUID blockId, @Param("startAt") Instant startAt,
+                    @Param("endAt") Instant endAt, @Param("planId") UUID planId);
 }
