@@ -1745,9 +1745,8 @@ paths:
   /weekly-plans/{planId}/block-batches:
     post:
       tags: [weekly-plans]
-      x-implementation-status: not-implemented
       operationId: applyBlockBatch
-      summary: "[미구현] 블록 일괄 적용 (제안 수용 = 사용자 확정 행위 — P2)"
+      summary: "블록 일괄 적용 (제안 수용 = 사용자 확정 행위 — P2)"
       x-lane: BE-2
       x-user-stories: [RB-PLAN-01, PLAN-29]
       parameters: [{ $ref: "#/components/parameters/PlanId" }]
