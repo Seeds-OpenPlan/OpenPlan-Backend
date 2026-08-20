@@ -23,7 +23,7 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
 /**
- * 네이버 CalDAV 어댑터 (ST-B1-11). 제공자 응답만 대역 — 요청 조립·XML 파싱·반복 전개는 실제로 돈다.
+ * 애플 CalDAV 어댑터 (ST-B1-11). 제공자 응답만 대역 — 요청 조립·XML 파싱·반복 전개는 실제로 돈다.
  *
  * <p><b>응답 픽스처는 2026-08-20 실계정 응답의 구조</b>다(값만 익명화). 네임스페이스 접두·CDATA·
  * 빈 {@code <D:prop/>} 같은 것이 실물과 같아야 방언을 잡는 의미가 있다.
@@ -32,22 +32,22 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
  * {@code PROPFIND}·{@code REPORT} 가 <b>실제 전선으로 나가는지</b>는 여기서 증명되지 않는다.
  * 그것은 {@code CalDavHttpMethodTest} 가 로컬 실서버로 확인한다.
  */
-class NaverCalDavProviderTest {
+class AppleCalDavProviderTest {
 
     private static final ProviderCredential CREDENTIAL = ProviderCredential.basic("tester", "app-password");
-    private static final String BASE = "https://caldav.calendar.naver.com";
+    private static final String BASE = "https://caldav.icloud.com";
     private static final String HOME = "/caldav/tester/calendar/";
     private static final String CAL = HOME + "e8faeab7-cccf-45e2-8b69-e813570d829c/";
-    private static final String EVENT_HREF = CAL + "AAAA1111_tester%40naver.com_caldavApp.ics";
+    private static final String EVENT_HREF = CAL + "AAAA1111_tester%40icloud.com_caldavApp.ics";
 
     private MockRestServiceServer server;
-    private NaverCalDavProvider provider;
+    private AppleCalDavProvider provider;
 
     @BeforeEach
     void setUp() {
         RestClient.Builder builder = RestClient.builder();
         server = MockRestServiceServer.bindTo(builder).build();
-        provider = new NaverCalDavProvider(builder.build());
+        provider = new AppleCalDavProvider(builder.build());
     }
 
     @Test
@@ -183,7 +183,7 @@ class NaverCalDavProviderTest {
 
     private static final String NS = """
             xmlns:D="DAV:" xmlns:caldav="urn:ietf:params:xml:ns:caldav" \
-            xmlns:cs="http://calendarserver.org/ns/" xmlns:navercal="http://calendar.naver.com/\"""";
+            xmlns:cs="http://calendarserver.org/ns/" xmlns:applecal="http://apple.com/ns/ical/\"""";
 
     private static String principalResponse() {
         return """
@@ -253,7 +253,7 @@ class NaverCalDavProviderTest {
                 END:DAYLIGHT
                 END:VTIMEZONE
                 BEGIN:VEVENT
-                UID:AAAA1111_tester@naver.com_caldavApp
+                UID:AAAA1111_tester@icloud.com_caldavApp
                 SUMMARY:팀 점검
                 DTSTART;TZID=Asia/Seoul:20260820T100000
                 DTEND;TZID=Asia/Seoul:20260820T110000
@@ -266,7 +266,7 @@ class NaverCalDavProviderTest {
                 BEGIN:VCALENDAR
                 VERSION:2.0
                 BEGIN:VEVENT
-                UID:weekly-tester@naver.com
+                UID:weekly-tester@icloud.com
                 SUMMARY:주간 회의
                 DTSTART:20260602T010000Z
                 DTEND:20260602T020000Z

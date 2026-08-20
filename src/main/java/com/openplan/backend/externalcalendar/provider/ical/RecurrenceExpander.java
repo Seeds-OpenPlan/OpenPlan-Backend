@@ -19,15 +19,15 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * {@code RRULE} 을 조회 구간 안의 실제 발생으로 펼친다 (ST-B1-11 · 네이버 CalDAV).
+ * {@code RRULE} 을 조회 구간 안의 실제 발생으로 펼친다 (ST-B1-11 · 애플 CalDAV).
  *
  * <p><b>왜 서버가 아니라 우리가 펼치는가.</b> CalDAV 표준은 서버가 펼쳐 주는 {@code <C:expand>} 를
- * 정의하지만, <b>네이버는 그 요소를 받고도 무시한다</b> — 붙이든 안 붙이든 응답이 완전히 같고
+ * 정의하지만, <b>애플은 그 요소를 받고도 무시한다</b> — 붙이든 안 붙이든 응답이 완전히 같고
  * {@code RRULE} 이 그대로 남아 온다(2026-08-20 실측: 마스터 1건 · DTSTART 가 조회 구간 밖의 원래 날짜).
  * 오류도 경고도 없으므로, 서버가 해 줄 것이라 믿고 짜면 <b>매주 회의가 엉뚱한 날짜의 단발 일정 하나로</b>
  * 보인다.
  *
- * <p><b>다행인 것 하나.</b> 네이버의 {@code time-range} 필터는 반복을 고려해 매칭한다 — 6월에 시작한
+ * <p><b>다행인 것 하나.</b> 애플의 {@code time-range} 필터는 반복을 고려해 매칭한다 — 6월에 시작한
  * 매주 일정이 8월 조회 목록에 잡힌다(실측). 그래서 <b>일정을 놓치지는 않고</b>, 받은 마스터를 여기서
  * 펼치기만 하면 된다.
  *
@@ -164,7 +164,7 @@ public final class RecurrenceExpander {
      * 주 단위 반복. {@code BYDAY} 가 있으면 그 요일들, 없으면 원점의 요일.
      *
      * <p>{@code BYDAY} 의 {@code 2SU} 같은 순서 접두는 <b>월 단위에서만 의미가 있다</b> — 주 단위에서는
-     * 요일만 취한다. (네이버 VTIMEZONE 의 서머타임 규칙이 정확히 이 모양인데, 그것은 파서가 이미 걸러
+     * 요일만 취한다. (애플 VTIMEZONE 의 서머타임 규칙이 정확히 이 모양인데, 그것은 파서가 이미 걸러
      * 여기까지 오지 않는다.)
      */
     private static List<ZonedDateTime> weekly(ZonedDateTime origin, int interval, String byDay, String weekStart,

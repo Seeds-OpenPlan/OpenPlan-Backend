@@ -6,14 +6,14 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * iCalendar(RFC 5545) 본문에서 {@code VEVENT} 만 꺼낸다 (ST-B1-11 · 네이버 CalDAV).
+ * iCalendar(RFC 5545) 본문에서 {@code VEVENT} 만 꺼낸다 (ST-B1-11 · 애플 CalDAV).
  *
  * <p><b>왜 라이브러리를 안 쓰는가.</b> 우리가 쓰는 것은 VEVENT 의 여섯 필드뿐이고(UID·SUMMARY·DTSTART·
  * DTEND·RRULE·EXDATE), 나머지는 전부 버린다. 전체 규격을 다루는 의존성을 들이는 대신 필요한 만큼만
  * 읽는다 — 다만 <b>덜 읽어서 조용히 틀리는 것</b>이 이 클래스의 유일한 실패 모드이므로, 아래 두 함정을
  * 명시적으로 처리한다.
  *
- * <p><b>함정 ① — {@code VTIMEZONE} 안에도 {@code DTSTART} 와 {@code RRULE} 이 있다.</b> 네이버 응답에는
+ * <p><b>함정 ① — {@code VTIMEZONE} 안에도 {@code DTSTART} 와 {@code RRULE} 이 있다.</b> 애플 응답에는
  * 이벤트마다 {@code VTIMEZONE} 이 붙어 오고, 그 안의 {@code STANDARD}/{@code DAYLIGHT} 하위 컴포넌트가
  * {@code DTSTART:19870510T000000} · {@code RRULE:FREQ=YEARLY;UNTIL=19880507T170000Z;BYMONTH=5;BYDAY=2SU}
  * 를 담고 있다(한국의 1987~88 서머타임). <b>컴포넌트 경계를 무시하고 줄 단위로 훑으면 1988년 서머타임

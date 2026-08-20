@@ -63,7 +63,7 @@ class GoogleCalendarProviderTest {
         provider.listEvents(CREDENTIAL, CALENDAR_ID, "내 캘린더",
                 Instant.parse("2026-08-17T00:00:00Z"), Instant.parse("2026-08-31T00:00:00Z"));
 
-        // 네이버와 달리 구글은 서버가 펼쳐 준다 — 이 파라미터가 빠지면 매주 회의가
+        // 애플와 달리 구글은 서버가 펼쳐 준다 — 이 파라미터가 빠지면 매주 회의가
         // 규칙 한 건으로 와서 그 주에 안 보인다.
         server.verify();
     }
@@ -205,7 +205,7 @@ class GoogleCalendarProviderTest {
         assertThat(result).extracting(ProviderEvent::externalEventId).doesNotHaveDuplicates();
     }
 
-    /** 구글이 실제로 주는 모양 — 시각은 오프셋 표기다(네이버의 TZID 방식과 다르다). */
+    /** 구글이 실제로 주는 모양 — 시각은 오프셋 표기다(애플의 TZID 방식과 다르다). */
     private static String events() {
         return """
                 {"items":[

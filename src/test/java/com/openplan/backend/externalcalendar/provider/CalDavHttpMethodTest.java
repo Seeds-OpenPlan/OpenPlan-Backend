@@ -21,7 +21,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * CalDAV 확장 메서드가 <b>실제 전선으로 나가는지</b> (ST-B1-11).
  *
- * <p><b>왜 이 테스트가 따로 필요한가.</b> {@code NaverCalDavProviderTest} 는
+ * <p><b>왜 이 테스트가 따로 필요한가.</b> {@code AppleCalDavProviderTest} 는
  * {@code MockRestServiceServer} 로 HTTP 스택을 통째로 대체하므로, 요청 객체에 {@code PROPFIND} 를
  * 담는 것까지만 확인한다. <b>그 요청이 소켓으로 나갈 수 있는지는 전혀 검증하지 않는다</b> — 목이 통과해도
  * 실서버에서는 전송 자체가 실패할 수 있고, 그 차이가 정확히 아래 첫 번째 테스트다.

@@ -10,7 +10,7 @@ import java.util.List;
  *
  * <p><b>인터페이스로 두는 이유가 형식이 아니다.</b> 세 제공자의 사정이 실제로 갈라져 있다 —
  * 구글은 REST 조회가 열려 있고, 카카오는 API 는 있으나 {@code talk_calendar} 사용 권한 승인 전에는
- * 앱 멤버만 호출할 수 있으며, <b>네이버는 오픈 API 에 조회가 없어 프로토콜 자체가 다르다</b>(CalDAV).
+ * 앱 멤버만 호출할 수 있으며, <b>애플은 오픈 API 에 조회가 없어 프로토콜 자체가 다르다</b>(CalDAV).
  * 어떤 제공자가 어떤 방식으로 붙든 위 계층이 바뀌지 않도록 여기서 끊는다.
  *
  * <p>구현체는 실패를 {@link com.openplan.backend.global.error.OpenPlanException}

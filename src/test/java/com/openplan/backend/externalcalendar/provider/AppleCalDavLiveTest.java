@@ -15,11 +15,11 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 진짜 네이버 서버 왕복 (ST-B1-11) — <b>자격증명이 있을 때만 돈다.</b>
+ * 진짜 애플 서버 왕복 (ST-B1-11) — <b>자격증명이 있을 때만 돈다.</b>
  *
- * <p><b>왜 따로 두는가.</b> {@code NaverCalDavProviderTest} 는 응답을 대역하고
- * {@code CalDavHttpMethodTest} 는 로컬 서버를 쓴다. 둘 다 <b>"네이버가 우리 요청을 실제로 받아주는가"</b>
- * 는 증명하지 못한다 — 우리가 조립한 요청 XML 이 네이버의 파서를 통과하는지, 우리가 짐작한 응답 구조가
+ * <p><b>왜 따로 두는가.</b> {@code AppleCalDavProviderTest} 는 응답을 대역하고
+ * {@code CalDavHttpMethodTest} 는 로컬 서버를 쓴다. 둘 다 <b>"애플이 우리 요청을 실제로 받아주는가"</b>
+ * 는 증명하지 못한다 — 우리가 조립한 요청 XML 이 애플의 파서를 통과하는지, 우리가 짐작한 응답 구조가
  * 계정마다 같은지는 진짜 왕복으로만 알 수 있다.
  *
  * <p><b>CI 에서는 돌지 않는다.</b> 환경변수가 없으면 통째로 건너뛴다. 자격증명을 저장소에 두지 않기
@@ -27,30 +27,30 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <h2>실행 방법</h2>
  * <pre>
- * # 1. 네이버에서 애플리케이션 비밀번호 발급
+ * # 1. 애플에서 애플리케이션 비밀번호 발급
  * #    내 정보·보안 → 보안설정 → 2단계 인증 [관리] → 애플리케이션 비밀번호 관리 → 생성하기
  * # 2. 환경변수로 넘겨 실행 (명령 인자로 주면 셸 히스토리에 남는다)
- * set NAVER_CALDAV_ID=아이디
- * set NAVER_CALDAV_PASSWORD=발급된비밀번호
- * gradlew.bat test --tests *NaverCalDavLiveTest*
- * # 3. 끝나면 네이버에서 애플리케이션 비밀번호를 삭제한다
+ * set APPLE_CALDAV_ID=아이디
+ * set APPLE_CALDAV_PASSWORD=발급된비밀번호
+ * gradlew.bat test --tests *AppleCalDavLiveTest*
+ * # 3. 끝나면 애플에서 애플리케이션 비밀번호를 삭제한다
  * </pre>
  *
  * <p><b>개인 일정 내용을 로그에 남기지 않는다.</b> 제목·장소는 찍지 않고 건수와 구조만 확인한다 —
  * 검증에 필요한 것은 "파싱이 되는가"이지 "무엇이 들어 있는가"가 아니다.
  */
-@EnabledIfEnvironmentVariable(named = "NAVER_CALDAV_ID", matches = ".+")
-class NaverCalDavLiveTest {
+@EnabledIfEnvironmentVariable(named = "APPLE_CALDAV_ID", matches = ".+")
+class AppleCalDavLiveTest {
 
-    private static final Logger log = LoggerFactory.getLogger(NaverCalDavLiveTest.class);
+    private static final Logger log = LoggerFactory.getLogger(AppleCalDavLiveTest.class);
 
-    private final NaverCalDavProvider provider = new NaverCalDavProvider(
+    private final AppleCalDavProvider provider = new AppleCalDavProvider(
             RestClient.builder().requestFactory(new JdkClientHttpRequestFactory()).build());
 
     private ProviderCredential credential() {
         return ProviderCredential.basic(
-                System.getenv("NAVER_CALDAV_ID"),
-                System.getenv("NAVER_CALDAV_PASSWORD"));
+                System.getenv("APPLE_CALDAV_ID"),
+                System.getenv("APPLE_CALDAV_PASSWORD"));
     }
 
     @Test
@@ -100,7 +100,7 @@ class NaverCalDavLiveTest {
     @DisplayName("실서버 — 틀린 비밀번호는 422 로 갈라진다")
     void 틀린_자격증명은_422() {
         ProviderCredential wrong = ProviderCredential.basic(
-                System.getenv("NAVER_CALDAV_ID"), "definitely-not-the-password");
+                System.getenv("APPLE_CALDAV_ID"), "definitely-not-the-password");
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> provider.listCalendars(wrong))
                 .isInstanceOf(com.openplan.backend.global.error.OpenPlanException.class)

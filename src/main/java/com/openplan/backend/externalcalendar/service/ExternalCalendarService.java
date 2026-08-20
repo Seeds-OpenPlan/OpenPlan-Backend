@@ -164,7 +164,7 @@ public class ExternalCalendarService {
     /**
      * 저장 직전의 자격증명 — 제공자별 갈래가 여기서 하나로 합쳐진다.
      *
-     * <p>네이버는 {@code refreshTokenEnc}·{@code tokenExpiresAt} 이 <b>둘 다 null</b> 이다. 애플리케이션
+     * <p>애플은 {@code refreshTokenEnc}·{@code tokenExpiresAt} 이 <b>둘 다 null</b> 이다. 애플리케이션
      * 비밀번호는 만료되지 않고 갱신 개념도 없기 때문이며, 만료를 모르는 값으로 두면
      * {@code ExternalCalendarTokens} 의 만료 판정이 그대로 통과시킨다 — 스키마를 바꿀 필요가 없었다.
      */
@@ -196,7 +196,7 @@ public class ExternalCalendarService {
     }
 
     /**
-     * 네이버 — 인가 단계가 없으므로 <b>실제로 붙여 봐서</b> 자격증명을 확인한다.
+     * 애플 — 인가 단계가 없으므로 <b>실제로 붙여 봐서</b> 자격증명을 확인한다.
      *
      * <p>확인 없이 저장하면 "연동됨"으로 보이는 연결이 <b>조회 때마다 실패</b>한다. 사용자는 캘린더를
      * 연결했다고 믿고 그 시간을 비워 두지 않는다. 붙을 수 있음을 증명한 것만 저장한다.
@@ -205,17 +205,17 @@ public class ExternalCalendarService {
      * 오류라 제공자 장애(502)와 화면이 달라야 한다.
      */
     private NewConnectionSecret verifyCalDav(ExternalCalendarProvider provider, CreateConnectionRequest request) {
-        String naverId = request.naverId().trim();
+        String appleId = request.appleId().trim();
         providerRegistry.get(provider)
-                .listCalendars(ProviderCredential.basic(naverId, request.appPassword()));
-        return new NewConnectionSecret(naverId, tokens.encrypt(request.appPassword()), null, null);
+                .listCalendars(ProviderCredential.basic(appleId, request.appPassword()));
+        return new NewConnectionSecret(appleId, tokens.encrypt(request.appPassword()), null, null);
     }
 
     /**
      * 제공자에 맞는 자격증명 조합이 실렸는지 확인한다 — {@code CreateConnectionRequest} 에서 옮겨온 검증.
      *
      * <p>빈 검증 애너테이션은 "이 필드는 항상 필요하다"만 말할 수 있는데, 계약은 제공자에 따라 필수
-     * 필드가 갈린다({@code oneOf}). DTO 에 {@code @NotBlank} 를 남겨 두면 네이버 요청이 authCode
+     * 필드가 갈린다({@code oneOf}). DTO 에 {@code @NotBlank} 를 남겨 두면 애플 요청이 authCode
      * 없음으로 먼저 튕겨 <b>계약이 허용한 모양을 서버가 거부</b>한다. 그래서 검증을 없앤 게 아니라
      * 어느 조합인지 아는 이 지점으로 옮겼다.
      *
@@ -229,7 +229,7 @@ public class ExternalCalendarService {
             requireText(missing, "redirectUri", request.redirectUri());
             requireText(missing, "state", request.state());
         } else {
-            requireText(missing, "naverId", request.naverId());
+            requireText(missing, "appleId", request.appleId());
             requireText(missing, "appPassword", request.appPassword());
         }
         if (!missing.isEmpty()) {

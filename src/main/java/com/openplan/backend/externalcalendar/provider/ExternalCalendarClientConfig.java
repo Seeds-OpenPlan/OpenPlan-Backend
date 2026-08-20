@@ -32,7 +32,7 @@ public class ExternalCalendarClientConfig {
     }
 
     /**
-     * CalDAV 전용 클라이언트 (네이버).
+     * CalDAV 전용 클라이언트 (애플).
      *
      * <p><b>왜 위 빈을 같이 못 쓰는가.</b> {@link SimpleClientHttpRequestFactory} 는
      * {@code HttpURLConnection} 기반인데, 그 구현은 메서드 이름을 GET·POST·HEAD·OPTIONS·PUT·DELETE·TRACE

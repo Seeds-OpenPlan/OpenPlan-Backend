@@ -9,10 +9,10 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 
 /**
- * iCalendar 날짜·시각 값을 {@link Instant} 로 (ST-B1-11 · 네이버 CalDAV).
+ * iCalendar 날짜·시각 값을 {@link Instant} 로 (ST-B1-11 · 애플 CalDAV).
  *
  * <p><b>카카오 것을 재사용할 수 없는 이유.</b> 카카오는 {@code 20260820T010000Z} 처럼 UTC 로 주지만,
- * 네이버는 {@code DTSTART;TZID=Asia/Seoul:20260820T100000} 로 <b>지역 시각 + 별도 TZID</b> 를 준다
+ * 애플은 {@code DTSTART;TZID=Asia/Seoul:20260820T100000} 로 <b>지역 시각 + 별도 TZID</b> 를 준다
  * (2026-08-20 실측). 값만 보고 파싱하면 KST 시각을 UTC 로 읽어 <b>모든 일정이 9시간 어긋난다</b> —
  * 예외도 로그도 없이 그럴듯한 시각이 나오므로 눈으로는 못 잡는다.
  *

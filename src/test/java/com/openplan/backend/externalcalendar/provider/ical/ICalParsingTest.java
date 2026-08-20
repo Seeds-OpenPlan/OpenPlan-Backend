@@ -11,7 +11,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 네이버 CalDAV 응답 파싱 (ST-B1-11).
+ * 애플 CalDAV 응답 파싱 (ST-B1-11).
  *
  * <p><b>픽스처는 2026-08-20 실계정 응답의 구조를 그대로 옮긴 것</b>이다 — 값(제목·장소·설명)만 바꿨다.
  * 구조를 지어내면 방언을 못 잡는데, 이 어댑터의 실패 모드는 전부 <b>예외 없이 조용히 틀리는</b> 것이라
@@ -22,14 +22,14 @@ class ICalParsingTest {
     private static final ZoneId SEOUL = ZoneId.of("Asia/Seoul");
 
     /**
-     * 네이버가 실제로 주는 모양 — 이벤트마다 {@code VTIMEZONE} 이 붙고, 그 안에 한국의 1987~88
+     * 애플이 실제로 주는 모양 — 이벤트마다 {@code VTIMEZONE} 이 붙고, 그 안에 한국의 1987~88
      * 서머타임 규칙이 {@code DTSTART} 와 {@code RRULE} 로 들어 있다. 실측 143건에서 잡힌 RRULE 17건이
      * 전부 이것이었다.
      */
-    private static final String NAVER_SINGLE_EVENT = """
+    private static final String APPLE_SINGLE_EVENT = """
             BEGIN:VCALENDAR
             VERSION:2.0
-            PRODID:-//Naver//Calendar//KO
+            PRODID:-//Apple//Calendar//KO
             CALSCALE:GREGORIAN
             BEGIN:VTIMEZONE
             TZID:Asia/Seoul
@@ -48,7 +48,7 @@ class ICalParsingTest {
             END:STANDARD
             END:VTIMEZONE
             BEGIN:VEVENT
-            UID:AAAA1111-2222-3333-4444-555566667777_test@naver.com_caldavApp
+            UID:AAAA1111-2222-3333-4444-555566667777_test@icloud.com_caldavApp
             SEQUENCE:0
             SUMMARY:팀 점검
             CLASS:PUBLIC
@@ -74,7 +74,7 @@ class ICalParsingTest {
         @Test
         @DisplayName("VTIMEZONE 의 DTSTART·RRULE 을 일정 것으로 읽지 않는다")
         void 서머타임_규칙을_일정_반복으로_읽지_않는다() {
-            List<ICalParser.Component> events = ICalParser.parseEvents(NAVER_SINGLE_EVENT);
+            List<ICalParser.Component> events = ICalParser.parseEvents(APPLE_SINGLE_EVENT);
 
             assertThat(events).hasSize(1);
             ICalParser.Component event = events.getFirst();
@@ -86,7 +86,7 @@ class ICalParsingTest {
         @Test
         @DisplayName("VALARM 의 TRIGGER 를 일정 속성으로 담지 않는다")
         void 알람_속성이_일정에_섞이지_않는다() {
-            ICalParser.Component event = ICalParser.parseEvents(NAVER_SINGLE_EVENT).getFirst();
+            ICalParser.Component event = ICalParser.parseEvents(APPLE_SINGLE_EVENT).getFirst();
 
             assertThat(event.first("TRIGGER")).isNull();
             assertThat(event.first("ACTION")).isNull();
@@ -100,7 +100,7 @@ class ICalParsingTest {
         @Test
         @DisplayName("TZID=Asia/Seoul 은 지역 시각이다 — UTC 로 읽으면 9시간 어긋난다")
         void 지역시각을_올바로_변환한다() {
-            ICalParser.Component event = ICalParser.parseEvents(NAVER_SINGLE_EVENT).getFirst();
+            ICalParser.Component event = ICalParser.parseEvents(APPLE_SINGLE_EVENT).getFirst();
 
             Instant start = ICalDateTime.parse(event.first("DTSTART"), SEOUL);
 
@@ -169,7 +169,7 @@ class ICalParsingTest {
     }
 
     @Nested
-    @DisplayName("반복 전개 — 네이버가 안 펼쳐 주므로 우리가 한다")
+    @DisplayName("반복 전개 — 애플이 안 펼쳐 주므로 우리가 한다")
     class Recurrence {
 
         /** 실측 probe 와 같은 모양: 6월에 시작한 매주 화요일 일정. */
@@ -237,7 +237,7 @@ class ICalParsingTest {
         @Test
         @DisplayName("반복이 없으면 원본 한 건 — 창과 겹칠 때만")
         void 단발은_그대로() {
-            ICalParser.Component event = ICalParser.parseEvents(NAVER_SINGLE_EVENT).getFirst();
+            ICalParser.Component event = ICalParser.parseEvents(APPLE_SINGLE_EVENT).getFirst();
             Instant start = Instant.parse("2026-08-20T01:00:00Z");
             Instant end = Instant.parse("2026-08-20T02:00:00Z");
 
