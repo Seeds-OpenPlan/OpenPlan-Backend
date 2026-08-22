@@ -3,6 +3,7 @@ package com.openplan.backend.weeklyplan.service;
 import com.openplan.backend.global.error.ErrorCode;
 import com.openplan.backend.global.error.OpenPlanException;
 import com.openplan.backend.global.time.UserClock;
+import com.openplan.backend.project.service.port.WeeklyPlanTotalsRecalculator;
 import com.openplan.backend.rule.model.BlockType;
 import com.openplan.backend.rule.model.BlockView;
 import com.openplan.backend.rule.model.PlanSnapshot;
@@ -15,14 +16,20 @@ import com.openplan.backend.weeklyplan.domain.PlanBlockType;
 import com.openplan.backend.weeklyplan.domain.ReplanOption;
 import com.openplan.backend.weeklyplan.domain.WeeklyPlan;
 import com.openplan.backend.weeklyplan.dto.GenerateReplanResponse;
+import com.openplan.backend.weeklyplan.dto.PlanBlockResponse;
 import com.openplan.backend.weeklyplan.dto.ReplanOptionResponse;
+import com.openplan.backend.weeklyplan.dto.WeeklyPlanResponse;
+import com.openplan.backend.weeklyplan.dto.WeeklyPlanView;
 import com.openplan.backend.weeklyplan.repository.PlanBlockRepository;
 import com.openplan.backend.weeklyplan.repository.ReplanOptionRepository;
 import com.openplan.backend.weeklyplan.repository.WeeklyPlanRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -42,16 +49,18 @@ public class ReplanService {
     private final ReplanOptionRepository replanOptionRepository;
     private final PlanSnapshotAssembler assembler;
     private final PlanReplanPort replanPort;
+    private final WeeklyPlanTotalsRecalculator recalculator;
     private final UserClock clock;
 
     public ReplanService(WeeklyPlanRepository weeklyPlanRepository, PlanBlockRepository planBlockRepository,
                          ReplanOptionRepository replanOptionRepository, PlanSnapshotAssembler assembler,
-                         PlanReplanPort replanPort, UserClock clock) {
+                         PlanReplanPort replanPort, WeeklyPlanTotalsRecalculator recalculator, UserClock clock) {
         this.weeklyPlanRepository = weeklyPlanRepository;
         this.planBlockRepository = planBlockRepository;
         this.replanOptionRepository = replanOptionRepository;
         this.assembler = assembler;
         this.replanPort = replanPort;
+        this.recalculator = recalculator;
         this.clock = clock;
     }
 
@@ -96,6 +105,60 @@ public class ReplanService {
         return replanOptionRepository.findByWeeklyPlanIdOrderByCreatedAtAsc(planId).stream()
                 .map(this::toResponse)
                 .toList();
+    }
+
+    /**
+     * 대안 선택+초안 반영 (applyReplanOption / PLAN-29). 저장된 {@code proposed_blocks}대로 현재 TASK 블록을
+     * taskId 매칭해 목표 시각으로 이동하고, 이 대안을 선택 표시(is_selected·selected_at)한다.
+     *
+     * <p><b>초안 반영이며 확정이 아니다</b>(P2) — status는 DRAFT로 두되, 확정이었다면 편집 재개로 DRAFT 복귀.
+     * 반영 후 최신 {@link WeeklyPlanView} 반환. 대안 부재·타인 → 404.
+     */
+    @Transactional
+    public WeeklyPlanView apply(UUID userId, UUID optionId) {
+        ReplanOption option = replanOptionRepository.findByIdAndUserId(optionId, userId)
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404 (대안 부재·타인)
+        UUID planId = option.getWeeklyPlanId();
+        WeeklyPlan plan = weeklyPlanRepository.findById(planId)
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004));
+
+        // 현재 TASK 블록을 taskId별 큐로 — 같은 태스크 블록이 여럿이면 제안 순서대로 하나씩 소비.
+        Map<UUID, Deque<PlanBlock>> blocksByTask = new HashMap<>();
+        for (PlanBlock b : planBlockRepository.findByWeeklyPlanId(planId)) {
+            if (b.getBlockType() == PlanBlockType.TASK && b.getTaskId() != null) {
+                blocksByTask.computeIfAbsent(b.getTaskId(), t -> new ArrayDeque<>()).add(b);
+            }
+        }
+
+        plan.reopenToDraftIfConfirmed(); // 편집(초안 반영) — 확정이면 DRAFT 복귀
+
+        // 제안 위치대로 이동 — 매칭되는 현재 블록이 있으면 그 시각으로 reschedule.
+        for (ReplanOption.StoredBlock sb : option.getProposedBlocks()) {
+            Deque<PlanBlock> queue = blocksByTask.get(sb.taskId());
+            if (queue == null || queue.isEmpty()) {
+                continue; // 제안에 있으나 현재 블록이 없는 태스크(미배치 등) → 건너뜀
+            }
+            PlanBlock block = queue.poll();
+            planBlockRepository.reschedule(block.getId(), sb.startAt(), sb.endAt(), planId);
+        }
+
+        // 선택 표시 — 같은 계획의 다른 대안은 해제하고 이 대안만 선택.
+        for (ReplanOption sibling : replanOptionRepository.findByWeeklyPlanIdOrderByCreatedAtAsc(planId)) {
+            if (sibling.getId().equals(optionId)) {
+                sibling.markSelected(clock.now());
+            } else if (sibling.isSelected()) {
+                sibling.unselect();
+            }
+        }
+
+        planBlockRepository.flush(); // 이동·상태 반영 후 재계산이 새 상태를 봄
+        recalculator.recalculate(List.of(planId));
+
+        WeeklyPlan latest = weeklyPlanRepository.findById(planId)
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004));
+        List<PlanBlockResponse> blocks = planBlockRepository.findViewsByWeeklyPlanId(planId)
+                .stream().map(PlanBlockResponse::fromView).toList();
+        return WeeklyPlanView.of(WeeklyPlanResponse.from(latest, blocks.size()), blocks);
     }
 
     // ─────────────────────────────────────────── 매핑·문구
