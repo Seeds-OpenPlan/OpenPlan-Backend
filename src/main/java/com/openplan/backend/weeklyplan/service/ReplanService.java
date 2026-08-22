@@ -85,6 +85,19 @@ public class ReplanService {
         return new GenerateReplanResponse(baseline(blocks), options);
     }
 
+    /**
+     * 대안 재조회 (listReplanOptions / PLAN-29 비교 화면 새로고침). 저장된 대안 목록(생성 순)을 반환한다 —
+     * 기준선(KEEP_CURRENT)은 저장되지 않으므로 목록에 없다(정본 응답 = ReplanOption 배열). 404(부재·타인). 읽기 tx.
+     */
+    @Transactional(readOnly = true)
+    public List<ReplanOptionResponse> list(UUID userId, UUID planId) {
+        weeklyPlanRepository.findByIdAndUserId(planId, userId)
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404
+        return replanOptionRepository.findByWeeklyPlanIdOrderByCreatedAtAsc(planId).stream()
+                .map(this::toResponse)
+                .toList();
+    }
+
     // ─────────────────────────────────────────── 매핑·문구
 
     /** 기준선(KEEP_CURRENT) — 저장 안 함(id=null). 현재 TASK 블록을 그대로 제안으로 싣는다. */
@@ -100,6 +113,16 @@ public class ReplanService {
     private ReplanOptionResponse toResponse(ReplanOption entity, List<ProposedPlacement> placements) {
         List<ReplanOptionResponse.ProposedBlock> proposed = placements.stream()
                 .map(p -> new ReplanOptionResponse.ProposedBlock("TASK", p.taskId(), p.startAt(), p.endAt()))
+                .toList();
+        return new ReplanOptionResponse(entity.getId(), entity.getStrategyType().name(),
+                entity.getChangeSummary(), entity.getRecommendationReason(), entity.getScore(),
+                proposed, entity.isSelected());
+    }
+
+    /** 저장된 엔티티 → 응답 (재조회 GET). JSONB proposed_blocks(StoredBlock)를 응답 블록으로 복원. */
+    private ReplanOptionResponse toResponse(ReplanOption entity) {
+        List<ReplanOptionResponse.ProposedBlock> proposed = entity.getProposedBlocks().stream()
+                .map(b -> new ReplanOptionResponse.ProposedBlock("TASK", b.taskId(), b.startAt(), b.endAt()))
                 .toList();
         return new ReplanOptionResponse(entity.getId(), entity.getStrategyType().name(),
                 entity.getChangeSummary(), entity.getRecommendationReason(), entity.getScore(),

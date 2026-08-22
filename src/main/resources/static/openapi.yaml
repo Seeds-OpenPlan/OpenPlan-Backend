@@ -1891,9 +1891,8 @@ paths:
                         items: { $ref: "#/components/schemas/ReplanOption" }
     get:
       tags: [weekly-plans]
-      x-implementation-status: not-implemented
       operationId: listReplanOptions
-      summary: "[미구현] 대안 재조회 (비교 화면 새로고침)"
+      summary: "대안 재조회 (비교 화면 새로고침)"
       x-lane: BE-2
       x-user-stories: [PLAN-29]
       parameters: [{ $ref: "#/components/parameters/PlanId" }]

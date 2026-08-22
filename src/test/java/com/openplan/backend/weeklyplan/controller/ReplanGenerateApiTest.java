@@ -130,6 +130,51 @@ class ReplanGenerateApiTest {
                 .andExpect(jsonPath("$.error.code").value("E-COM-004"));
     }
 
+    // ---------- GET 재조회 ----------
+
+    @Test
+    @DisplayName("GET 재조회 → 저장된 대안 3개(JSONB 역직렬화) · 기준선 없음")
+    void listReturnsStoredOptions() throws Exception {
+        UUID plan = insertWeeklyPlan(MAIN, WEEK);
+        UUID t1 = insertTask(project, "태스크1", 1, 60);
+        UUID t2 = insertTask(project, "태스크2", 2, 60);
+        insertTaskBlock(plan, t1, at(9, 0), at(10, 0));
+        insertTaskBlock(plan, t2, at(9, 30), at(10, 30));
+        // 먼저 생성해 저장
+        mockMvc.perform(post(PATH(plan)).header("X-Dev-User", MAIN.toString())).andExpect(status().isCreated());
+
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .get(PATH(plan)).header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(3)) // 배열(baseline 래퍼 없음)
+                .andExpect(jsonPath("$.data[0].strategyType").value("MINIMAL_CHANGE"))
+                .andExpect(jsonPath("$.data[0].replanOptionId").exists())
+                // JSONB proposed_blocks가 제대로 역직렬화됐는지 — 시각까지 복원
+                .andExpect(jsonPath("$.data[0].proposedBlocks[0].blockType").value("TASK"))
+                .andExpect(jsonPath("$.data[0].proposedBlocks[0].startAt").exists())
+                .andExpect(jsonPath("$.data[0].proposedBlocks[1].startAt").value("2026-08-03T01:00:00Z"));
+    }
+
+    @Test
+    @DisplayName("GET — 생성 전이면 빈 목록")
+    void listEmptyBeforeGenerate() throws Exception {
+        UUID plan = insertWeeklyPlan(MAIN, WEEK);
+
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .get(PATH(plan)).header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(0));
+    }
+
+    @Test
+    @DisplayName("GET — 없는/타인 계획 → 404")
+    void listPlanNotFound() throws Exception {
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .get(PATH(UUID.randomUUID())).header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("E-COM-004"));
+    }
+
     // ---------- fixtures ----------
 
     private String PATH(UUID planId) {
