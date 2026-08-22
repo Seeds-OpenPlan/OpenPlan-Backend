@@ -100,4 +100,10 @@ public class ReplanOption {
         this.selected = true;
         this.selectedAt = now;
     }
+
+    /** 선택 해제 — 같은 계획에서 다른 대안이 선택될 때 기존 선택을 내린다(선택은 계획당 하나). */
+    public void unselect() {
+        this.selected = false;
+        this.selectedAt = null;
+    }
 }
