@@ -1869,9 +1869,8 @@ paths:
   /weekly-plans/{planId}/replan-options:
     post:
       tags: [weekly-plans]
-      x-implementation-status: not-implemented
       operationId: generateReplanOptions
-      summary: "[미구현] 재계획 대안 생성 (SS-07~09 — 3전략 + 기준선, NFR-029 5초, SS-13 구간 우선 반영)"
+      summary: "재계획 대안 생성 (SS-07~09 — 3전략 + 기준선, NFR-029 5초, SS-13 구간 우선 반영)"
       x-lane: BE-2
       x-user-stories: [PLAN-29, RB-PLAN-03, RB-PLAN-04, RB-PLAN-05, RB-STAT-04]
       parameters: [{ $ref: "#/components/parameters/PlanId" }]
