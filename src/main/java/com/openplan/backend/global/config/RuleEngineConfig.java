@@ -1,6 +1,8 @@
 package com.openplan.backend.global.config;
 
+import com.openplan.backend.rule.engine.FirstFitPlacementEngine;
 import com.openplan.backend.rule.engine.PlanValidationEngine;
+import com.openplan.backend.rule.port.PlanPlacementPort;
 import com.openplan.backend.rule.port.PlanValidationPort;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -20,5 +22,10 @@ public class RuleEngineConfig {
     @Bean
     public PlanValidationPort planValidationPort() {
         return new PlanValidationEngine();
+    }
+
+    @Bean
+    public PlanPlacementPort planPlacementPort() {
+        return new FirstFitPlacementEngine();
     }
 }
