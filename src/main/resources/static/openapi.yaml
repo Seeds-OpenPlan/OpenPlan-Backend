@@ -1717,9 +1717,8 @@ paths:
   /weekly-plans/{planId}/auto-placements:
     post:
       tags: [weekly-plans]
-      x-implementation-status: not-implemented
       operationId: proposeAutoPlacement
-      summary: "[미구현] 자동 배치 제안 (SS-05 — first-fit, 저장 아님 · C-2 · NFR-029 5초)"
+      summary: "자동 배치 제안 (SS-05 — first-fit, 저장 아님 · C-2 · NFR-029 5초)"
       x-lane: BE-2
       x-user-stories: [RB-PLAN-01]
       parameters: [{ $ref: "#/components/parameters/PlanId" }]
