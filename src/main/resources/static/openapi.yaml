@@ -1910,9 +1910,8 @@ paths:
   /replan-options/{optionId}/application:
     post:
       tags: [replan-options]
-      x-implementation-status: not-implemented
       operationId: applyReplanOption
-      summary: "[미구현] 대안 선택+초안 반영 (is_selected/selected_at 기록 — SC-07 대체, SS-14 입력. 초안 반영이며 확정 아님 — P2)"
+      summary: "대안 선택+초안 반영 (is_selected/selected_at 기록 — SC-07 대체, SS-14 입력. 초안 반영이며 확정 아님 — P2)"
       x-lane: BE-2
       x-user-stories: [PLAN-29, RB-FIX-01]
       parameters: [{ name: optionId, in: path, required: true, schema: { type: string, format: uuid } }]
