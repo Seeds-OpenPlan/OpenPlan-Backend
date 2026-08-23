@@ -8,8 +8,9 @@
 #   curl -fsSL <이 파일 raw URL> -o bootstrap.sh && bash bootstrap.sh
 #   또는 저장소를 먼저 클론했다면: bash deploy/bootstrap.sh
 #
-# 🔴 이 스크립트는 아직 실제 EC2에서 실행된 적이 없다. 1차 배포가 검증이다.
-#    실패하면 어느 단계에서 멈췄는지(아래 log 출력) 그대로 알려줄 것.
+# 이 스크립트는 2026-08-17 EC2 1차 배포에서 실행·검증됐다. 그때 드러난 결함 5건
+# (브랜치 미교체 · MAIL_* 미검사 · MAIL_FROM 오판 · buildx 미갱신 · web/ 삭제)은
+# 아래에 각각 주석과 함께 반영돼 있다.
 #
 # 🔴 .env 는 이 스크립트가 만들지 않는다. 비밀값이 들어가므로 사람이 직접 채운다.
 
@@ -17,14 +18,10 @@ set -euo pipefail
 
 BE_REPO="${BE_REPO:-https://github.com/Seeds-OpenPlan/OpenPlan-Backend.git}"
 FE_REPO="${FE_REPO:-https://github.com/Seeds-OpenPlan/OpenPlan-Frontend.git}"
-# 🔴 배포 파일(docker-compose.prod.yml·이 스크립트)이 아직 main 에 머지되지 않았다.
-#    머지 전까지는 이 브랜치를 받아야 한다. 머지된 뒤 BE_BRANCH=main 으로 바꾼다.
-#
-# 🔴 deploy/auth-integration = main(#24 포함) + #22 + #23 + 배포 파일.
-#    main 만으로 배포하면 인증이 스텁이라 로그인이 존재하지 않는다(2026-08-17 실측:
-#    POST /auth/sessions 404 · GET /auth/session 401). #22·#23 이 머지되면 이 브랜치는
-#    버리고 BE_BRANCH=main 으로 되돌린다 — 통합용 임시 브랜치지 유지 대상이 아니다.
-BE_BRANCH="${BE_BRANCH:-deploy/auth-integration}"
+# 인증 실구현(#22·#23, 08-18)과 배포 파일(#31, 08-23)이 모두 main 에 있다. 통합용이던
+# deploy/auth-integration 은 역할이 끝났다 — 그 브랜치는 4e34731(08-17)에서 멈춰 있어
+# 기본값으로 두면 재배포해도 두 주 묵은 코드가 다시 올라간다(서버가 안 바뀌는 원인).
+BE_BRANCH="${BE_BRANCH:-main}"
 FE_BRANCH="${FE_BRANCH:-main}"
 APP_DIR="${APP_DIR:-$HOME/openplan}"
 FE_DIR="$HOME/openplan-fe"
@@ -117,18 +114,23 @@ sync_repo "$FE_DIR"  "$FE_REPO" "$FE_BRANCH"
 # ── 4. .env 확인 ─────────────────────────────────────────────────────────────
 log "4/6 .env 확인"
 if [ ! -f "$APP_DIR/.env" ]; then
-  cp "$APP_DIR/.env.prod.example" "$APP_DIR/.env"
+  cp "$APP_DIR/.env.example" "$APP_DIR/.env"
   cat <<'MSG'
 
   🔴 .env 를 만들었습니다. 값이 비어 있어 지금 기동하면 실패합니다.
 
      nano ~/openplan/.env
 
-  최소한 이 넷은 채워야 뜹니다:
+  아래 여섯을 채워야 뜹니다(4단계 사전검사가 같은 목록을 봅니다):
      DB_HOST         RDS 엔드포인트
      DB_PASSWORD     RDS 마스터 비밀번호
      JWT_SECRET      openssl rand -base64 48
      APP_BASE_URL / API_BASE_URL   http://<이 서버 공인 IP>
+     MAIL_USERNAME   Gmail 주소
+     MAIL_PASSWORD   Gmail 앱 비밀번호 16자 (계정 비밀번호 아님)
+
+  MAIL_* 이 없으면 가입 메일이 안 나가고, 이메일 미인증 계정은 로그인이
+  403 으로 막혀 "떴지만 아무도 못 쓰는" 서버가 됩니다.
 
   채운 뒤 이 스크립트를 다시 실행하십시오.
 
