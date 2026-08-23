@@ -7,6 +7,7 @@ import com.openplan.backend.fixedschedule.domain.FixedSchedule;
 import com.openplan.backend.fixedschedule.domain.FixedScheduleSource;
 import com.openplan.backend.global.error.OpenPlanException;
 import com.openplan.backend.global.time.UserClock;
+import com.openplan.backend.common.Weekday;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -46,6 +47,13 @@ class ExternalEventToFixedScheduleTest {
         @Override
         public ZoneId zoneOf(UUID userId) {
             return SEOUL;
+        }
+
+        // #37 이 UserClock 에 추가한 메서드 — 이 스텁은 그 이전에 쓰였다. 외부 캘린더는
+        // 주 시작 요일을 쓰지 않으므로 기본값(MON)으로 둔다.
+        @Override
+        public Weekday weekStartDayOf(UUID userId) {
+            return Weekday.MON;
         }
     };
 
