@@ -23,8 +23,13 @@ FE_REPO="${FE_REPO:-https://github.com/Seeds-OpenPlan/OpenPlan-Frontend.git}"
 # 기본값으로 두면 재배포해도 두 주 묵은 코드가 다시 올라간다(서버가 안 바뀌는 원인).
 BE_BRANCH="${BE_BRANCH:-main}"
 FE_BRANCH="${FE_BRANCH:-main}"
+# AI 서비스는 별도 저장소다(파이썬). docker-compose.prod.yml 이 ../openplan-ai 를 빌드 컨텍스트로
+# 참조하므로 APP_DIR 의 형제 자리에 받아야 한다 — 경로가 어긋나면 compose 가 빈 곳을 굽는다.
+AI_REPO="${AI_REPO:-https://github.com/Seeds-OpenPlan/OpenPlan-AI.git}"
+AI_BRANCH="${AI_BRANCH:-main}"
 APP_DIR="${APP_DIR:-$HOME/openplan}"
 FE_DIR="$HOME/openplan-fe"
+AI_DIR="$HOME/openplan-ai"
 
 log() { printf '\n\033[1;34m== %s\033[0m\n' "$*"; }
 
@@ -100,8 +105,17 @@ log "3/6 저장소 클론/갱신"
 #    이뤄졌으므로, 브랜치를 갈아타는 재배포가 반드시 필요하다. fetch → switch 로
 #    BE_BRANCH 를 매번 실제로 따르게 한다(얕은 클론이라 FETCH_HEAD 를 시작점으로 쓴다).
 #    .env 는 추적 대상이 아니라 브랜치를 갈아타도 그대로 남는다.
+#
+# 🔴 로컬 수정이 있으면 switch 가 거부하고 배포가 그 자리에서 멈춘다(2026-08-23 실측 — 08-17 에
+#    서버에서 손으로 때운 FE 파일 하나 때문에 재배포가 중단됐다). 그렇다고 --force 로 밀면
+#    살아 있는 핫픽스가 조용히 사라진다. 그래서 지우지 않고 stash 로 옮긴 뒤 진행한다 —
+#    사라지지 않고, 멈추지도 않는다. `git -C <dir> stash list` 로 확인할 수 있다.
 sync_repo() {  # $1=디렉터리 $2=저장소 $3=브랜치
   if [ -d "$1/.git" ]; then
+    if [ -n "$(git -C "$1" status --porcelain)" ]; then
+      echo "  ⚠️  $1 에 로컬 수정이 있어 stash 로 옮긴다 (git -C $1 stash list 로 확인)"
+      git -C "$1" stash push -u -m "bootstrap $(date -u +%Y-%m-%dT%H:%M:%SZ) 자동 보관"
+    fi
     git -C "$1" fetch --depth 1 origin "$3"
     git -C "$1" switch -C "$3" FETCH_HEAD
   else
@@ -110,6 +124,14 @@ sync_repo() {  # $1=디렉터리 $2=저장소 $3=브랜치
 }
 sync_repo "$APP_DIR" "$BE_REPO" "$BE_BRANCH"
 sync_repo "$FE_DIR"  "$FE_REPO" "$FE_BRANCH"
+# 🔴 AI 만 실패를 허용한다. set -euo pipefail 아래에서 이 줄이 그냥 실패하면 FE 빌드도
+#    backend 기동도 못 간다 — AI 저장소 장애 하나로 서비스 전체 배포가 막힌다. AI 는
+#    없어도 서비스가 도는(규칙 폴백) 부품이므로, 실패를 기록하고 넘어간다.
+AI_READY=1
+sync_repo "$AI_DIR" "$AI_REPO" "$AI_BRANCH" || {
+  echo "  ⚠️  AI 저장소 동기화 실패 — AI 없이 계속한다(Spring 이 규칙 first-fit 으로 폴백)"
+  AI_READY=0
+}
 
 # ── 4. .env 확인 ─────────────────────────────────────────────────────────────
 log "4/6 .env 확인"
@@ -225,7 +247,25 @@ sudo cp -r dist/. "$APP_DIR/web"/
 # ── 6. 기동 ──────────────────────────────────────────────────────────────────
 log "6/6 컨테이너 빌드·기동"
 cd "$APP_DIR"
-$DOCKER compose -f docker-compose.prod.yml up -d --build
+
+# 🔴 `up -d --build` 를 통째로 걸면 안 된다. 한 서비스의 빌드가 실패하면 up 이 통째로
+#    실패해 **아무 컨테이너도 뜨지 않는다**(backend·nginx 포함). depends_on 의
+#    required:false 는 헬스체크 대기만 우회할 뿐 빌드 실패는 막지 못한다.
+#    AI 는 없어도 서비스가 도는 부품이므로 따로 빌드하고, 실패하면 빼고 올린다.
+if [ "$AI_READY" = 1 ]; then
+  if ! $DOCKER compose -f docker-compose.prod.yml build openplan-ai; then
+    log "⚠️ AI 이미지 빌드 실패 — AI 없이 계속한다(Spring 이 규칙 first-fit 으로 폴백)"
+    AI_READY=0
+  fi
+fi
+
+if [ "$AI_READY" = 1 ]; then
+  $DOCKER compose -f docker-compose.prod.yml up -d --build
+else
+  # --no-deps 로 AI 의존을 명시적으로 끊는다. 이 경로에서도 화면과 API 는 정상이고,
+  # AI 초안만 규칙 first-fit 으로 대체된다.
+  $DOCKER compose -f docker-compose.prod.yml up -d --build --no-deps backend nginx
+fi
 
 log "상태"
 $DOCKER compose -f docker-compose.prod.yml ps
