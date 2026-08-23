@@ -62,7 +62,10 @@ $DOCKER run --rm \
   -d "$DOMAIN" -d "$WWW" \
   --email "$EMAIL" --agree-tos --no-eff-email --non-interactive
 
-if [ ! -f "certbot/conf/live/$DOMAIN/fullchain.pem" ]; then
+# 🔴 sudo 로 봐야 한다. certbot 컨테이너가 root 로 쓰기 때문에 live/ 와 archive/ 가
+#    0700 root 소유다 — 일반 사용자의 [ -f ] 는 파일이 있어도 false 를 돌려준다.
+#    2026-08-23 실측: 발급은 성공했는데 이 검사가 실패로 판정해 전환이 멈췄다.
+if ! sudo test -f "certbot/conf/live/$DOMAIN/fullchain.pem"; then
   echo "🔴 발급에 실패했습니다. 위 로그를 보십시오 — 대개 DNS 미전파이거나 80 이 막힌 경우입니다." >&2
   exit 1
 fi
