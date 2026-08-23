@@ -7,3 +7,9 @@ Dockerfile text eol=lf
 *.sh text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf
+# systemd 유닛과 설정 견본도 리눅스 서버로 나간다. `*.conf` 규칙은 `.conf.example` 을
+# 잡지 못하고, 유닛 파일에는 규칙 자체가 없었다 — CRLF 로 나가면 cd.conf 를 source 할 때
+# BE_BRANCH 끝에 `\r` 이 붙어 `git ls-remote` 가 브랜치를 못 찾고 배포가 통째로 멈춘다.
+*.conf.example text eol=lf
+*.service text eol=lf
+*.timer text eol=lf
