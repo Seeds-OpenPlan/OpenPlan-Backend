@@ -51,7 +51,7 @@ class UserControllerTest {
     @BeforeEach
     void setUp() {
         service = mock(UserProfileService.class);
-        mockMvc = MockMvcBuilders.standaloneSetup(new UserController(service))
+        mockMvc = MockMvcBuilders.standaloneSetup(new UserController(service, mock(com.openplan.backend.user.service.AccountDeactivationService.class)))
                 .setControllerAdvice(new GlobalExceptionHandler(new ErrorMessages()))
                 .setCustomArgumentResolvers(fixedCurrentUserResolver())
                 .build();
