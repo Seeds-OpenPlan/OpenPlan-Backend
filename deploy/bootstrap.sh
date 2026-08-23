@@ -115,7 +115,8 @@ sync_repo "$FE_DIR"  "$FE_REPO" "$FE_BRANCH"
 log "4/6 .env 확인"
 
 # 시드와 사전검사가 같은 목록을 본다 — 둘이 갈라지면 "안내는 여섯인데 검사는 넷" 이 된다.
-REQUIRED_KEYS=(DB_HOST DB_PASSWORD JWT_SECRET APP_BASE_URL MAIL_USERNAME MAIL_PASSWORD)
+REQUIRED_KEYS=(DB_HOST DB_PASSWORD JWT_SECRET APP_BASE_URL API_BASE_URL
+               GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET MAIL_USERNAME MAIL_PASSWORD)
 
 if [ ! -f "$APP_DIR/.env" ]; then
   # 🔴 .env.example 을 그대로 쓰면 안 된다. 거기엔 로컬 개발 기본값이 채워져 있어
@@ -134,16 +135,26 @@ if [ ! -f "$APP_DIR/.env" ]; then
 
      nano ~/openplan/.env
 
-  아래 여섯을 채워야 뜹니다(4단계 사전검사가 같은 목록을 봅니다):
+  아래 아홉을 채워야 뜹니다(4단계 사전검사가 같은 목록을 봅니다):
      DB_HOST         RDS 엔드포인트
      DB_PASSWORD     RDS 마스터 비밀번호
      JWT_SECRET      openssl rand -base64 48
-     APP_BASE_URL / API_BASE_URL   http://<이 서버 공인 IP>
+     APP_BASE_URL    브라우저가 여는 프론트 주소   https://<도메인>
+     API_BASE_URL    이 서버 주소                  https://<도메인>
+     GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET   구글 클라우드 콘솔 발급값
      MAIL_USERNAME   Gmail 주소
      MAIL_PASSWORD   Gmail 앱 비밀번호 16자 (계정 비밀번호 아님)
 
   MAIL_* 이 없으면 가입 메일이 안 나가고, 이메일 미인증 계정은 로그인이
   403 으로 막혀 "떴지만 아무도 못 쓰는" 서버가 됩니다.
+
+  GOOGLE_* 이 없으면 소셜 로그인 버튼이 눌리기는 하는데 항상
+  /login?error=E-AUTH-010 으로 되돌아옵니다 — 서버는 멀쩡히 뜹니다.
+
+  🔴 API_BASE_URL 에 구글 콘솔 등록값과 한 글자라도 다른 값을 넣으면 콜백이
+     redirect_uri_mismatch 로 막힙니다. 구글은 HTTPS 만 받고 raw IP 는 등록조차
+     안 되므로, 도메인 없이는 http://<공인 IP> 를 넣어도 소셜 로그인이 안 섭니다.
+     카카오·네이버 키는 필수가 아닙니다(포기 순서에 있는 값이라 배포를 막지 않습니다).
 
   🔴 .env.example 의 예시값을 그대로 두면 미입력으로 봅니다. 특히 JWT_SECRET 은
      저장소에 박힌 값이라 그대로 쓰면 토큰을 누구나 위조할 수 있습니다.
@@ -163,6 +174,17 @@ fi
 #    MAIL_PASSWORD 는 구글 계정 비밀번호가 아니라 앱 비밀번호(16자)다.
 #    MAIL_FROM 은 넣지 않는다 — MailConfig.resolveFrom 이 비어 있으면 SMTP 계정으로
 #    대체하므로 선택값이다. 여기에 넣으면 안 채워도 되는 값 때문에 배포가 막힌다.
+#
+# 🔴 GOOGLE_* · API_BASE_URL 이 목록에 든 이유(2026-08-23 실측): 배포 서버의
+#    /auth/oauth/{google,naver,kakao} 가 셋 다 302 /login?error=E-AUTH-010 이었다.
+#    OAuthProperties.configured() 는 client-id/secret 이 비면 그 제공자를 막는데,
+#    .env.example 의 GOOGLE_CLIENT_ID= 가 빈 값이라 "비어 있는가" 검사를 그대로
+#    통과했다. 서버는 정상 기동하고 소셜 로그인만 죽어 있다 — MAIL_* 과 같은 종류의
+#    "떴지만 못 쓰는" 상태다.
+#    API_BASE_URL 은 redirect_uri 가 붙는 자리인데 목록에 없어 example 의
+#    http://localhost:8080 이 살아남았다. 키를 채워도 콜백이 localhost 로 나간다.
+#    🔴 카카오·네이버 키는 넣지 않는다 — 구글 최우선·둘은 포기 순서(6주차 문서
+#    "인증 범위 결정")라, 필수로 걸면 놓기로 한 것 때문에 배포가 막힌다.
 #
 # 🔴 "비어 있는가" 만으로는 부족하다. .env.example 의 값을 그대로 둔 것도 미입력으로 본다 —
 #    블록리스트를 쓰지 않고 example 과 대조하므로, 앞으로 예시 기본값이 늘어도 저절로 잡힌다.
