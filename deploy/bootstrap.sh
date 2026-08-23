@@ -128,8 +128,21 @@ sync_repo "$AI_DIR"  "$AI_REPO" "$AI_BRANCH"
 
 # ── 4. .env 확인 ─────────────────────────────────────────────────────────────
 log "4/6 .env 확인"
+
+# 시드와 사전검사가 같은 목록을 본다 — 둘이 갈라지면 "안내는 여섯인데 검사는 넷" 이 된다.
+REQUIRED_KEYS=(DB_HOST DB_PASSWORD JWT_SECRET APP_BASE_URL MAIL_USERNAME MAIL_PASSWORD)
+
 if [ ! -f "$APP_DIR/.env" ]; then
+  # 🔴 .env.example 을 그대로 쓰면 안 된다. 거기엔 로컬 개발 기본값이 채워져 있어
+  #    (DB_HOST=localhost · JWT_SECRET=replace-with-your-local-jwt-secret)
+  #    아래 사전검사가 "비어 있는가" 만 보는 한 전부 통과한다. 특히 JWT_SECRET 은
+  #    34바이트라 HS256 하한(32)을 넘겨 **서버가 정상 기동한다** — 공개 저장소에 박힌
+  #    고정 시크릿으로 운영 토큰을 서명하는 상태가 조용히 생긴다. 기동 실패보다 나쁘다.
+  #    그래서 필수값은 **비운 채로** 시드한다. 비어 있으면 사전검사가 반드시 잡는다.
   cp "$APP_DIR/.env.example" "$APP_DIR/.env"
+  for k in "${REQUIRED_KEYS[@]}"; do
+    sed -i "s|^${k}=.*|${k}=|" "$APP_DIR/.env"
+  done
   cat <<'MSG'
 
   🔴 .env 를 만들었습니다. 값이 비어 있어 지금 기동하면 실패합니다.
@@ -147,6 +160,9 @@ if [ ! -f "$APP_DIR/.env" ]; then
   MAIL_* 이 없으면 가입 메일이 안 나가고, 이메일 미인증 계정은 로그인이
   403 으로 막혀 "떴지만 아무도 못 쓰는" 서버가 됩니다.
 
+  🔴 .env.example 의 예시값을 그대로 두면 미입력으로 봅니다. 특히 JWT_SECRET 은
+     저장소에 박힌 값이라 그대로 쓰면 토큰을 누구나 위조할 수 있습니다.
+
   채운 뒤 이 스크립트를 다시 실행하십시오.
 
 MSG
@@ -162,10 +178,15 @@ fi
 #    MAIL_PASSWORD 는 구글 계정 비밀번호가 아니라 앱 비밀번호(16자)다.
 #    MAIL_FROM 은 넣지 않는다 — MailConfig.resolveFrom 이 비어 있으면 SMTP 계정으로
 #    대체하므로 선택값이다. 여기에 넣으면 안 채워도 되는 값 때문에 배포가 막힌다.
+#
+# 🔴 "비어 있는가" 만으로는 부족하다. .env.example 의 값을 그대로 둔 것도 미입력으로 본다 —
+#    블록리스트를 쓰지 않고 example 과 대조하므로, 앞으로 예시 기본값이 늘어도 저절로 잡힌다.
 missing=()
-for k in DB_HOST DB_PASSWORD JWT_SECRET APP_BASE_URL MAIL_USERNAME MAIL_PASSWORD; do
+for k in "${REQUIRED_KEYS[@]}"; do
   v="$(grep -E "^${k}=" "$APP_DIR/.env" | cut -d= -f2- || true)"
-  if [ -z "$v" ] || [[ "$v" == *"<EC2_PUBLIC_IP>"* ]]; then
+  example="$(grep -E "^${k}=" "$APP_DIR/.env.example" | cut -d= -f2- || true)"
+  if [ -z "$v" ] || [[ "$v" == *"<EC2_PUBLIC_IP>"* ]] \
+     || { [ -n "$example" ] && [ "$v" = "$example" ]; }; then
     missing+=("$k")
   fi
 done
