@@ -50,6 +50,8 @@ public class AiPlacementAdapter implements PlanPlacementPort {
         } catch (AiPlanDraftClient.AiUnavailableException ex) {
             // 계약 §4 실패 표: 502·503·504·타임아웃 모두 "규칙 폴백". 사용자에게는 아무 일도 없었던 것처럼 보인다.
             log.warn("AI 초안 실패 — 규칙 first-fit 으로 대체한다: {}", ex.getMessage());
+            // 스택은 debug 에만 — 폴백은 정상 경로라 매번 스택을 찍으면 운영 로그가 묻힌다.
+            log.debug("AI 초안 실패 상세", ex);
             return ruleFallback.propose(snapshot, taskIds);
         }
     }

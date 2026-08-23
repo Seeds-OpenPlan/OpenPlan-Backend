@@ -18,7 +18,9 @@ import org.springframework.http.converter.json.MappingJackson2HttpMessageConvert
 import org.springframework.web.client.RestClient;
 
 import java.io.IOException;
+import java.net.http.HttpClient;
 import java.time.DayOfWeek;
+import java.time.Duration;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 
@@ -79,7 +81,17 @@ public class AiConfig {
      */
     @Bean
     RestClient aiRestClient(AiProperties properties, ObjectMapper aiObjectMapper) {
-        JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory();
+        // 🔴 HTTP/1.1 로 못박는다. JDK HttpClient 는 기본이 HTTP/2 라, 평문 http 에서는 먼저
+        //    h2c 업그레이드를 시도한다(Connection: Upgrade). uvicorn(h11)은 그걸 지원하지 않아
+        //    거부하는데, 그 과정에서 **본문이 사라진다** — FastAPI 는 body 가 없다고 보고
+        //    422 {"loc":["body"],"msg":"Field required"} 를 돌려준다.
+        //    2026-08-23 실측: 같은 요청을 curl 로 보내면 200, JDK 기본 설정으로 보내면 422.
+        //    컨테이너 로그에 "Unsupported upgrade request" 가 함께 찍히는 것이 판별식이다.
+        HttpClient httpClient = HttpClient.newBuilder()
+                .version(HttpClient.Version.HTTP_1_1)
+                .connectTimeout(Duration.ofSeconds(5))
+                .build();
+        JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(httpClient);
         factory.setReadTimeout(properties.timeout());
         return RestClient.builder()
                 .baseUrl(properties.baseUrl())

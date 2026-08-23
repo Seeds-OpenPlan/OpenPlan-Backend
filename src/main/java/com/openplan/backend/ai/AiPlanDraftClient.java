@@ -82,7 +82,10 @@ public class AiPlanDraftClient {
         } catch (RuntimeException ex) {
             // 연결 거부·타임아웃·5xx·422 가 모두 여기로 온다. 호출자에게는 구분이 필요 없다 —
             // 계약 §4 의 실패 표가 502·503·504 에 대해 지시하는 일이 전부 "규칙 폴백"으로 같다.
-            throw new AiUnavailableException("AI 초안 호출 실패", ex);
+            // 🔴 원인을 메시지에 담는다. 담지 않으면 폴백 로그가 "실패했다" 만 남아 무엇이
+            //    틀렸는지 알 수 없다 — 연결 거부인지 422 인지 구분이 안 되면 고칠 수가 없다.
+            throw new AiUnavailableException(
+                    "AI 초안 호출 실패: " + ex.getClass().getSimpleName() + " — " + ex.getMessage(), ex);
         }
     }
 
