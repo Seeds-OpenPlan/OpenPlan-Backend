@@ -75,6 +75,16 @@ op:
       password-reset-ttl: PT1H     # 계정 탈취로 직결되므로 인증 링크보다 짧게
       # 재발송 최소 간격 — ui-spec §AUTH "60초 쿨다운 카운트다운"이 정본.
       resend-cooldown: PT60S
+  # AI 계획 초안 서비스 (계약 "05. Spring ↔ AI 서비스 REST 계약").
+  # 🔴 base-url 이 비어 있으면 AI 접합(AiConfig)이 통째로 안 올라가고 규칙 first-fit 이 그대로
+  #    PlanPlacementPort 를 맡는다 — AI 를 안 켠 로컬·CI 가 이것 때문에 멈추지 않는다(D-32).
+  # 🔴 배포는 내부망 주소다. nginx 에 라우트를 만들지 않는다 — 브라우저가 AI 를 직접 부르는 경로는
+  #    두지 않는다는 것이 계약 §2 다.
+  ai:
+    base-url: ${AI_BASE_URL:}
+    # 초과하면 규칙 폴백. 계약 §7 #2 제안값 — 규칙 예산(NFR-029 5초)보다 긴 것은 의도된 것이다.
+    timeout: PT20S
+
   # 앱 주소 — 메일 링크와 OAuth 리다이렉트가 같은 값을 보게 하는 자리(AppProperties).
   # 🔴 W5 배포 시 둘 다 실도메인으로 교체(cookie-secure: true 와 같은 배포 체크리스트 항목).
   app:
