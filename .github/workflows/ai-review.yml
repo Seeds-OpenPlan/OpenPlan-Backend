@@ -58,9 +58,15 @@ jobs:
           # 🔴 --allowedTools 를 쓰면 여기 없는 도구는 "권한을 물어보는" 상태가 되는데
           #    CI 에는 답할 사람이 없어 그대로 막힌다. 그래서 읽기 도구도 함께 적는다
           #    (2026-08-21 실측: 안 적었더니 권한 거부 12건으로 23턴을 헛돌았다).
+          # 🔴 --max-turns 는 넉넉해야 한다. 모자라면 error_max_turns 로 끊기는데,
+          #    그때는 요약도 인라인 코멘트도 안 남아 **비용만 쓰고 산출물이 0** 이 된다.
+          #    상한 25 는 파일 1개짜리 스모크 PR(10턴) 기준이었고, 실제 PR 에서는
+          #    프롬프트가 시키는 준비(가이드·diff·openapi 2,300줄·마이그레이션 대조)만으로
+          #    다 쓴다 — 2026-08-23 실측: 40줄짜리 PR #38 이 22턴, 40파일짜리 PR 4건은
+          #    전부 25턴에서 잘려 $4.26 를 쓰고 코멘트 0건이었다.
           claude_args: |
             --model claude-sonnet-5
-            --max-turns 25
+            --max-turns 80
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Read,Grep,Glob,Bash"
           # 지적을 한 코멘트로 모은다.
           use_sticky_comment: true
