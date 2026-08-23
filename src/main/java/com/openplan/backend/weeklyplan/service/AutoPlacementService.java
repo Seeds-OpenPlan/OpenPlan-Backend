@@ -71,7 +71,10 @@ public class AutoPlacementService {
 
         List<PlacementProposalResponse.ProposedBlock> proposed = result.placements().stream()
                 .map(this::toProposedBlock).toList();
-        return new PlacementProposalResponse(proposed, result.unplacedTaskIds(), REASON);
+        // 제안기가 문구를 실어 보냈으면 그것을 쓴다(AI 경로 — 매번 근거가 다르다). 규칙 경로는 비워 오므로
+        // 고정 문구로 대체한다. 여기서 갈리지 않으면 AI 가 만든 초안에 first-fit 설명이 붙는다.
+        String reason = result.hasReason() ? result.reason() : REASON;
+        return new PlacementProposalResponse(proposed, result.unplacedTaskIds(), reason);
     }
 
     /**
