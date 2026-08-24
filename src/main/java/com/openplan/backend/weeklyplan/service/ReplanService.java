@@ -131,6 +131,9 @@ public class ReplanService {
         }
 
         plan.reopenToDraftIfConfirmed(); // 편집(초안 반영) — 확정이면 DRAFT 복귀
+        // 🔴 reschedule 이 @Modifying(clearAutomatically=true)라 컨텍스트를 비운다 —
+        //    위 DRAFT 복귀(dirty)를 여기서 flush 하지 않으면 첫 reschedule 의 clear 로 버려진다.
+        weeklyPlanRepository.flush();
 
         // 제안 위치대로 이동 — 매칭되는 현재 블록이 있으면 그 시각으로 reschedule.
         for (ReplanOption.StoredBlock sb : option.getProposedBlocks()) {
