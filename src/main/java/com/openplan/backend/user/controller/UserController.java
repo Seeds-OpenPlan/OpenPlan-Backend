@@ -2,10 +2,12 @@ package com.openplan.backend.user.controller;
 
 import com.openplan.backend.global.response.ApiResponse;
 import com.openplan.backend.global.security.CurrentUser;
+import com.openplan.backend.user.dto.ChangePasswordRequest;
 import com.openplan.backend.user.dto.UpdateProfileRequest;
 import com.openplan.backend.user.dto.DeactivationResponse;
 import com.openplan.backend.user.dto.UserProfileResponse;
 import com.openplan.backend.user.service.AccountDeactivationService;
+import com.openplan.backend.user.service.PasswordChangeService;
 import com.openplan.backend.user.service.UserProfileService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -22,9 +24,9 @@ import java.util.UUID;
 /**
  * 내 정보·프로필 컨트롤러(ST-B1-07 · ACCT-01 · ONB-02).
  *
- * <p>경로는 접두 없이 매핑하고 프레임워크가 {@code /api/v1}을 부여한다(AuthStubController와 동일 관례).
+ * <p>경로는 접두 없이 매핑하고 프레임워크가 {@code /api/v1}을 부여한다(AuthController와 동일 관례).
  * 인증 주체는 {@code @CurrentUser}로만 받는다(D-16 — 스텁/JWT 무관). DELETE /users/me(비활성화, ACCT-04)와
- * PATCH /users/me/password(ACCT-02)는 각각 ST-B1-06·05 소관으로 이 컨트롤러에 포함하지 않는다.
+ * PATCH /users/me/password(ACCT-02)도 같은 주체 스코프이므로 여기서 함께 다룬다.
  */
 @RestController
 @RequestMapping("/users/me")
@@ -33,11 +35,14 @@ public class UserController {
 
     private final UserProfileService userProfileService;
     private final AccountDeactivationService deactivationService;
+    private final PasswordChangeService passwordChangeService;
 
     public UserController(UserProfileService userProfileService,
-                          AccountDeactivationService deactivationService) {
+                          AccountDeactivationService deactivationService,
+                          PasswordChangeService passwordChangeService) {
         this.userProfileService = userProfileService;
         this.deactivationService = deactivationService;
+        this.passwordChangeService = passwordChangeService;
     }
 
     @GetMapping
@@ -60,5 +65,15 @@ public class UserController {
     public ApiResponse<UserProfileResponse> updateProfile(@CurrentUser UUID userId,
                                                           @Valid @RequestBody UpdateProfileRequest request) {
         return ApiResponse.ok(userProfileService.updateProfile(userId, request));
+    }
+
+    @PatchMapping("/password")
+    @Operation(summary = "비밀번호 변경 (ACCT-02)",
+            description = "현재 비밀번호로 본인을 재확인한 뒤 교체하고, 열려 있던 세션을 전부 끊는다. "
+                    + "현재 비밀번호가 다르거나 비밀번호가 없는 계정(소셜 가입)은 E-USER-001.")
+    public ApiResponse<Void> changePassword(@CurrentUser UUID userId,
+                                            @Valid @RequestBody ChangePasswordRequest request) {
+        passwordChangeService.changePassword(userId, request);
+        return ApiResponse.ok(null);
     }
 }

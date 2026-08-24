@@ -158,7 +158,6 @@ paths:
     post:
       tags: [auth]
       operationId: reactivateAccount
-      x-auth-phase: WEEK4-STUB   # D-16 — 4주차 전 501 E-AUTH-011
       summary: 계정 재활성화 (30일 내 — SC-09)
       x-lane: BE-1
       x-user-stories: [ACCT-05]
@@ -356,9 +355,8 @@ paths:
   /users/me/password:
     patch:
       tags: [users]
-      x-implementation-status: not-implemented
       operationId: changePassword
-      summary: "[미구현] 비밀번호 변경"
+      summary: 비밀번호 변경 (현재 비밀번호 확인 후 교체 · 전 세션 폐기)
       x-lane: BE-1
       x-user-stories: [ACCT-02]
       requestBody:
@@ -520,9 +518,8 @@ paths:
   /users/me/preference-suggestions:
     get:
       tags: [users]
-      x-implementation-status: not-implemented
       operationId: getPreferenceSuggestions
-      summary: "[미구현] 규칙 기반 기본값 제안 (SS-14 — 제안만, 적용은 사용자 PUT — C-2)"
+      summary: "규칙 기반 기본값 제안 (SS-14 — 제안만, 적용은 사용자 PUT — C-2)"
       x-lane: BE-1
       x-user-stories: [RB-FIX-01]
       responses:
@@ -540,9 +537,8 @@ paths:
   /settings:
     get:
       tags: [settings]
-      x-implementation-status: not-implemented
       operationId: getSettingsHome
-      summary: "[미구현] 설정 홈 조립 응답 (D-12 레버 5)"
+      summary: "설정 홈 조립 응답 (D-12 레버 5)"
       x-lane: BE-1
       x-user-stories: [FIX-01, FIX-10, FIX-13, NOTI-01]
       responses:
