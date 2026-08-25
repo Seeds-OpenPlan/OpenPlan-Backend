@@ -119,8 +119,17 @@ public class AuthService {
      * <p><b>이미 ACTIVE 면 그대로 로그인시킨다.</b> 되살리라는 요청의 목적은 "쓸 수 있는 상태" 이고
      * 이미 그 상태다. 오류로 답하면 재시도·창 두 개 같은 정상 상황이 실패로 보인다({@code deactivate}
      * 의 멱등성과 같은 방향).
+     *
+     * <p><b>되살린 것은 예외가 나도 남긴다({@code noRollbackFor}).</b> 이메일 미인증이면 403 으로
+     * 돌려보내지만 <b>계정은 이미 복구창에서 건져낸 상태</b>다. 기본 롤백 규칙대로면 그 복구가
+     * 함께 지워져 계정이 {@code DEACTIVATED} · {@code scheduledDeletionAt} 그대로 남고, 사용자가
+     * 메일을 인증하는 동안 삭제 배치(NFR-007)가 먼저 돌면 <b>되살리려던 계정이 그대로 삭제된다.</b>
+     *
+     * <p>억제 범위를 이 메서드로 한정해도 안전하다 — {@code authenticate} 는 읽기 전용이고,
+     * E-AUTH-001 · 002 · 009 는 전부 {@code user.reactivate()} <b>앞에서</b> 던진다. 즉 이 메서드에서
+     * 쓰기는 그 한 줄뿐이고, 그 뒤에 나오는 예외는 "되살리기는 끝났으나 로그인은 못 시킨다" 뿐이다.
      */
-    @Transactional
+    @Transactional(noRollbackFor = OpenPlanException.class)
     public LoginResult reactivate(ReactivationRequest request) {
         User user = authenticate(request.email(), request.password());
         Instant now = clock.now();

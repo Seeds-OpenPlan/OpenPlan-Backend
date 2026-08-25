@@ -23,6 +23,7 @@ import org.mockito.quality.Strictness;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -139,6 +140,34 @@ class AuthServiceReactivateTest {
 
         // 상태는 이미 되살아났다 — 남은 관문은 인증뿐이고, 되돌리면 재요청이 복구창을 다시 소모한다.
         assertThat(user.getStatus()).isEqualTo(UserStatus.ACTIVE);
+    }
+
+    /**
+     * 위 {@code rejectsUnverifiedEmail} 이 보는 것은 <b>메모리상의 엔티티</b>다. 협력자를 전량 목킹해
+     * 트랜잭션이 없으므로, 실제 서비스에서 되살린 것이 롤백돼도 저 단언은 그대로 통과한다 —
+     * 실제로 그런 결함이 있었다(AI 리뷰, 2026-08-25).
+     *
+     * <p>제대로 세우려면 DB 를 띄운 통합 테스트라야 하는데, <b>Docker 가 죽어 있고 이 저장소에는
+     * 테스트 CI 가 없다</b>(워크플로는 {@code ai-review.yml} 뿐). 그래서 지금 세울 수 있는 것은
+     * "롤백 규칙이 그 자리에 있는가" 까지다 — 행위 증명은 아니지만, <b>누가 이 애노테이션을 지우면
+     * 반드시 빨개진다.</b> 결함이 되살아나는 유일한 경로가 그것이다.
+     *
+     * <p>🔴 DB 가 서면 이 테스트를 <b>실제 왕복으로 교체할 것</b> — 되살린 뒤 403 을 받고,
+     * 새 트랜잭션에서 다시 읽어 {@code ACTIVE} · {@code scheduledDeletionAt == null} 을 확인한다.
+     */
+    @Test
+    @DisplayName("재활성화는 예외가 나도 되살린 것을 남긴다 — noRollbackFor 가 지워지면 실패한다")
+    void reactivateDoesNotRollBackTheRescue() throws NoSuchMethodException {
+        Transactional tx = AuthService.class
+                .getMethod("reactivate", ReactivationRequest.class)
+                .getAnnotation(Transactional.class);
+
+        assertThat(tx)
+                .as("reactivate 는 트랜잭션 경계를 가져야 한다")
+                .isNotNull();
+        assertThat(tx.noRollbackFor())
+                .as("미인증 403 이 되살리기를 함께 지우면, 메일을 인증하는 동안 삭제 배치가 계정을 가져간다")
+                .contains(OpenPlanException.class);
     }
 
     @Test
