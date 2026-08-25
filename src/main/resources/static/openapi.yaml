@@ -1423,9 +1423,8 @@ paths:
   /tasks/{taskId}/wbs-range:
     put:
       tags: [tasks]
-      x-implementation-status: not-implemented
       operationId: saveWbsRange
-      summary: "[미구현] WBS 기간 설정/조정 (업서트 — PROJ-13/14)"
+      summary: "WBS 기간 설정/조정 (업서트 — PROJ-13/14)"
       x-lane: BE-2
       x-user-stories: [PROJ-13, PROJ-14]
       parameters: [{ $ref: "#/components/parameters/TaskId" }]
@@ -1452,9 +1451,8 @@ paths:
   /tasks/{taskId}/execution-logs:
     post:
       tags: [tasks]
-      x-implementation-status: not-implemented
       operationId: recordExecution
-      summary: "[미구현] 실제 시간 기록 (5분 단위 — PLAN-15, 통계 즉시 반영)"
+      summary: "실제 시간 기록 (5분 단위 — PLAN-15). 수행 통계가 이 이력을 온더플라이 집계한다. 종료된 프로젝트의 태스크도 기록 가능(이미 일어난 일의 기록)"
       x-lane: BE-2
       x-user-stories: [PLAN-15, DASH-05]
       parameters: [{ $ref: "#/components/parameters/TaskId" }]
@@ -1481,6 +1479,7 @@ paths:
                 type: object
                 properties:
                   data: { $ref: "#/components/schemas/ExecutionLog" }
+        "404": { $ref: "#/components/responses/NotFound" }
         "422": { $ref: "#/components/responses/UnprocessableEntity" }
   /task-categories:
     get:
@@ -1619,9 +1618,8 @@ paths:
   /weekly-plans:
     get:
       tags: [weekly-plans]
-      x-implementation-status: not-implemented
       operationId: getWeeklyPlanView
-      summary: "[미구현] 주간 화면 조립 응답 (계획+블록+고정일정+가용시간+미배치수+검증요약 — NFR-011/024)"
+      summary: "주간 화면 조립 응답 (현재 계획+블록 — 고정일정·가용시간·검증요약은 후속 편입, NFR-011/024)"
       x-lane: BE-2
       x-user-stories: [PLAN-01, PLAN-02, PLAN-04, PLAN-05, PLAN-21]
       parameters:
@@ -1637,9 +1635,8 @@ paths:
                   data: { $ref: "#/components/schemas/WeeklyPlanView" }
     post:
       tags: [weekly-plans]
-      x-implementation-status: not-implemented
       operationId: getOrCreateWeeklyPlan
-      summary: "[미구현] 주차 초안 get-or-create (UQ user+weekStartDate — 재호출 시 기존 반환)"
+      summary: "주차 초안 get-or-create (UQ user+weekStartDate — 재호출 시 기존 반환)"
       x-lane: BE-2
       x-user-stories: [PLAN-02, PLAN-20]
       requestBody:
@@ -1657,9 +1654,8 @@ paths:
   /weekly-plans/{planId}/confirmation:
     post:
       tags: [weekly-plans]
-      x-implementation-status: not-implemented
       operationId: confirmWeeklyPlan
-      summary: "[미구현] 주간 계획 저장=확정 (서버가 검증 재실행 — 차단 존재 시 409, PLAN-28 규칙)"
+      summary: "주간 계획 저장=확정 (서버가 검증 재실행 — 차단 존재 시 409, PLAN-28 규칙)"
       x-lane: BE-2
       x-user-stories: [PLAN-03, PLAN-28]
       parameters: [{ $ref: "#/components/parameters/PlanId" }, { $ref: "#/components/parameters/IdempotencyKey" }]
@@ -1678,10 +1674,9 @@ paths:
   /weekly-plans/{planId}/validations:
     post:
       tags: [weekly-plans]
-      x-implementation-status: not-implemented
       operationId: validateWeeklyPlan
       summary: >
-        [미구현] 검증 실행 (SS-06/RB-PLAN-02). body 없음 = 현재 초안 판정 + validation_issues 영속.
+        검증 실행 (SS-06/RB-PLAN-02). body 없음 = 현재 초안 판정 + validation_issues 영속.
         body.virtualBlocks 제공 = dry-run(무영속) — PLAN-11 미리보기·FIX-07이 소비 (C-4).
       x-lane: BE-2
       x-user-stories: [RB-PLAN-02, PLAN-11, PLAN-21, PLAN-22]
@@ -1780,9 +1775,8 @@ paths:
   /weekly-plans/{planId}/blocks:
     post:
       tags: [weekly-plans]
-      x-implementation-status: not-implemented
       operationId: createPlanBlock
-      summary: "[미구현] 블록 생성 — blockType 분기 단일 정의 (D-10 통합). TASK=taskId 필수 / SCHEDULE=schedule 인라인 생성"
+      summary: "블록 생성 — blockType 분기 단일 정의 (D-10 통합). TASK=taskId 필수 / SCHEDULE=schedule 인라인 생성"
       x-lane: BE-2
       x-user-stories: [PLAN-06, PLAN-07, PLAN-08, TUT-05, TUT-06]
       parameters: [{ $ref: "#/components/parameters/PlanId" }]
@@ -2104,9 +2098,8 @@ paths:
   /dashboard:
     get:
       tags: [dashboard]
-      x-implementation-status: not-implemented
       operationId: getDashboard
-      summary: "[미구현] 대시보드 조립 응답 — 단일 GET (D-12 레버 5, NFR-011 2초)"
+      summary: "대시보드 조립 응답 — 단일 GET (D-12 레버 5, NFR-011 2초)"
       x-lane: BE-2
       x-user-stories: [DASH-01, DASH-02, DASH-03, DASH-04, DASH-05, DASH-06, DASH-07, RB-DASH-01, RB-DASH-02]
       parameters:
@@ -2123,9 +2116,8 @@ paths:
   /stats/summaries:
     get:
       tags: [stats]
-      x-implementation-status: not-implemented
       operationId: getStatsSummaries
-      summary: "[미구현] 주간/월간 요약 (SC-06 유지 4종)"
+      summary: "주간/월간 요약 (SC-06 유지 4종)"
       x-lane: BE-2
       x-user-stories: [STATS-SCREEN]
       parameters:
@@ -2143,9 +2135,8 @@ paths:
   /stats/deviations:
     get:
       tags: [stats]
-      x-implementation-status: not-implemented
       operationId: getDeviations
-      summary: "[미구현] 편차 분석 (SS-10 — 프로젝트/카테고리 그룹, P1 결정적)"
+      summary: "편차 분석 (SS-10 — 프로젝트/카테고리 그룹, P1 결정적)"
       x-lane: BE-2
       x-user-stories: [RB-STAT-01]
       parameters:
@@ -2164,9 +2155,8 @@ paths:
   /stats/time-patterns:
     get:
       tags: [stats]
-      x-implementation-status: not-implemented
       operationId: getTimePatterns
-      summary: "[미구현] 구간별 완료율 (SS-12 — DAWN/MORNING/AFTERNOON/NIGHT 고정 경계)"
+      summary: "구간별 완료율 (SS-12 — DAWN/MORNING/AFTERNOON/NIGHT 고정 경계)"
       x-lane: BE-2
       x-user-stories: [RB-STAT-03]
       parameters:
@@ -2677,7 +2667,7 @@ components:
           type: [object, "null"]
           description: RB-DASH-01/SS-01 — 최상위 1행동 (전순서 Q3, W3 확정)
           properties:
-            actionType: { type: string, enum: [RESOLVE_FIXED_CONFLICT, PLACE_UNASSIGNED, REPLACE_TODAY_INCOMPLETE, FIX_OUT_OF_WBS, RESOLVE_CAPACITY, HANDLE_DEADLINE] }
+            actionType: { type: string, enum: [RESOLVE_FIXED_CONFLICT, RESOLVE_OVERLAP, PLACE_UNASSIGNED, REPLACE_TODAY_INCOMPLETE, FIX_OUT_OF_WBS, RESOLVE_CAPACITY, HANDLE_DEADLINE] }
             reason: { type: string }
             routePath: { type: string }
         riskIssues:

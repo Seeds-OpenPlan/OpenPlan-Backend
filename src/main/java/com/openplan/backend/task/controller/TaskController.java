@@ -8,6 +8,8 @@ import com.openplan.backend.task.dto.TaskStatusToggleRequest;
 import com.openplan.backend.task.dto.TaskUpdateRequest;
 import com.openplan.backend.task.dto.UnassignedTaskQuery;
 import com.openplan.backend.task.dto.UnassignedTaskResponse;
+import com.openplan.backend.task.dto.WbsItemResponse;
+import com.openplan.backend.task.dto.WbsRangeRequest;
 import com.openplan.backend.task.service.TaskService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -19,6 +21,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -75,6 +78,19 @@ public class TaskController {
             @PathVariable UUID taskId,
             @Valid @RequestBody TaskStatusToggleRequest request) {
         return ApiResponse.ok(taskService.toggleCompletion(userId, taskId, request));
+    }
+
+    @PutMapping("/{taskId}/wbs-range")
+    @Operation(summary = "WBS 기간 설정/조정 — 업서트 (PROJ-13/14)",
+            description = "task 1:0..1 wbs_items 업서트(있으면 갱신, 없으면 생성). version 없음(wbs_items에 낙관락 "
+                    + "컬럼이 없고 정본 요청 바디에도 version이 없음 — last-write-wins). endDate<startDate → 422 "
+                    + "E-WBS-001. 평가 선행 후 CLOSED 프로젝트 태스크 → 422 E-PROJ-005(값 검증보다 먼저). 부재·타인 "
+                    + "taskId → 404(존재 은닉).")
+    public ApiResponse<WbsItemResponse> saveWbsRange(
+            @CurrentUser UUID userId,
+            @PathVariable UUID taskId,
+            @Valid @RequestBody WbsRangeRequest request) {
+        return ApiResponse.ok(taskService.saveWbsRange(userId, taskId, request));
     }
 
     @DeleteMapping("/{taskId}")

@@ -35,4 +35,7 @@ public interface PlanBlockRepository extends JpaRepository<PlanBlock, UUID> {
             ORDER BY pb.start_at ASC, pb.created_at ASC
             """, nativeQuery = true)
     List<PlanBlockView> findViewsByWeeklyPlanId(@Param("planId") UUID planId);
+
+    /** 검증 스냅샷 조립용(ST-B2-09) — 그 주 블록 엔티티. BlockView 매핑에 start/end·type·taskId만 필요. */
+    List<PlanBlock> findByWeeklyPlanId(UUID weeklyPlanId);
 }

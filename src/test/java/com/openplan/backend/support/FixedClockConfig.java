@@ -1,5 +1,6 @@
 package com.openplan.backend.support;
 
+import com.openplan.backend.common.Weekday;
 import com.openplan.backend.global.time.UserClock;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
@@ -7,6 +8,7 @@ import org.springframework.context.annotation.Primary;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.UUID;
 
 /**
@@ -21,6 +23,8 @@ public class FixedClockConfig {
 
     public static final LocalDate FIXED_TODAY = LocalDate.of(2026, 7, 15);
     public static final Instant FIXED_NOW = Instant.parse("2026-07-15T00:00:00Z");
+    public static final Weekday FIXED_WEEK_START_DAY = Weekday.MON;
+    public static final ZoneId FIXED_ZONE = ZoneId.of("Asia/Seoul");
 
     @Bean
     @Primary
@@ -34,6 +38,16 @@ public class FixedClockConfig {
             @Override
             public LocalDate todayOf(UUID userId) {
                 return FIXED_TODAY;
+            }
+
+            @Override
+            public ZoneId zoneOf(UUID userId) {
+                return FIXED_ZONE;
+            }
+
+            @Override
+            public Weekday weekStartDayOf(UUID userId) {
+                return FIXED_WEEK_START_DAY;
             }
         };
     }

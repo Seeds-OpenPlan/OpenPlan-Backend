@@ -5,6 +5,7 @@ import com.openplan.backend.global.error.ErrorMessages;
 import com.openplan.backend.global.error.OpenPlanException;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
@@ -72,6 +73,20 @@ public class TaskValidator {
         }
         if (priority < 1 || priority > 3) {
             throw invalid("priority", "range");
+        }
+    }
+
+    /**
+     * WBS 기간 규칙(E-WBS-001 / {@code ck_wbs_range} 사전 검증 — 500 대신 422로 라우팅). null 값은
+     * 이 메서드 호출 전 {@code WbsRangeRequest}의 {@code @NotNull}(400)로 이미 걸러진다 — 여기선
+     * 두 값이 다 있을 때의 관계(순서)만 판정한다. code 자체가 이미 도메인 특정이라(E-COM-009가 아님)
+     * {@code fields[].message}는 별도 카탈로그 키 없이 상위 {@code error.message}(E-WBS-001)로 충분하다
+     * — E-PROJ-005/E-PROJ-003과 동일 관례(field만 동봉).
+     */
+    public void validateWbsRange(LocalDate startDate, LocalDate endDate) {
+        if (endDate.isBefore(startDate)) {
+            throw new OpenPlanException(ErrorCode.E_WBS_001,
+                    Map.of("fields", List.of(Map.of("field", "endDate"))));
         }
     }
 

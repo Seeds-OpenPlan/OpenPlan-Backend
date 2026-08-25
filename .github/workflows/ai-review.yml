@@ -1,0 +1,184 @@
+# AI 코드 리뷰 — PR 이 열리거나 푸시되면 Claude 가 리뷰를 코멘트로 달고, 판정을 체크로 낸다.
+#
+# 왜 필요한가: 리뷰어가 3인뿐이고 열린 PR 마다 지정이 비어 있어 적체가 반복됐다.
+# 한 번은 스택 PR 이 리뷰 0건으로 머지되기도 했다(#23) — base 가 피처 브랜치면
+# main 보호 규칙이 안 걸려 초록 체크가 승인처럼 보였다.
+#
+# 🔴 2026-08-25 운영 규칙 변경 (사용자 확정):
+#    모든 PR 은 AI 리뷰를 거친다. Blocking 이 있으면 고치고 다시 리뷰받는다.
+#    **Blocking 이 없으면 사람 승인 없이 머지한다.**
+#    그래서 이 워크플로는 더 이상 "코멘트만 다는" 것이 아니다 — **머지 게이트다.**
+#    Blocking 이 1건이라도 있으면 잡이 실패해 보호 규칙이 머지를 막는다.
+#
+# 🔴 초록 체크를 판정으로 읽지 말 것 — 그래서 이렇게 만들었다.
+#    이전 버전은 Blocking 2건짜리 PR 에서도 잡이 성공했다(#33, 2026-08-23).
+#    "잡이 돌았다"와 "지적이 없다"는 다른 사실이다. 아래 판정 스텝이 그 둘을 가른다.
+#    리뷰가 아무 산출물도 안 남긴 경우(#44 — 11분 돌고 코멘트 0건)도 **실패로 친다.**
+#    판정이 없는 것은 통과가 아니다.
+
+name: AI 코드 리뷰
+
+on:
+  pull_request:
+    # PR 당 최대 5회 (사용자 확정, 2026-08-25). 이전에는 1회였다.
+    # synchronize 를 넣어 "고치고 다시 리뷰" 가 자동으로 돌게 한다.
+    # 🔴 한도는 팀원의 대화형 Claude Code 사용과 같은 지갑이다 — 그래서 무제한이 아니라 5회다.
+    #    예산 계산은 아래 예산 스텝이 한다.
+    types: [opened, ready_for_review, synchronize]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "다시 리뷰할 PR 번호"
+        required: true
+
+concurrency:
+  group: ai-review-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: true
+
+env:
+  PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+  # PR 당 자동 실행 예산. workflow_dispatch 는 여기 안 걸린다(리드의 명시적 재실행).
+  RUN_BUDGET: 5
+
+jobs:
+  review:
+    # 초안(draft)은 건너뛴다 — 준비되면 ready_for_review 로 다시 걸린다.
+    if: github.event.pull_request.draft == false || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+
+    steps:
+      # ── 1. 예산 ────────────────────────────────────────────────────────────
+      # 같은 헤드 브랜치에서 끝난 실행 수를 센다. 취소된 실행은 빼는데, 연속 푸시 때
+      # cancel-in-progress 로 죽은 것까지 예산을 먹으면 5회가 두세 번에 소진되기 때문이다.
+      # ⚠️ 브랜치 기준이라 한 브랜치를 여러 PR 이 돌려 쓰면 예산을 공유한다.
+      - name: 예산 확인 (PR 당 5회)
+        id: budget
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          USED=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/ai-review.yml/runs?branch=${HEAD_BRANCH}&per_page=100" \
+            --jq '[.workflow_runs[] | select(.status == "completed" and .conclusion != "cancelled")] | length')
+          echo "이 브랜치에서 끝난 리뷰: ${USED}회 / 예산 ${RUN_BUDGET}회"
+          if [ "${USED}" -ge "${RUN_BUDGET}" ]; then
+            echo "exhausted=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exhausted=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── 2. 리뷰 ────────────────────────────────────────────────────────────
+      # 얕은 클론이면 diff 기준이 안 잡힌다. 전체를 받아야 계약 정본·ADR 도 읽을 수 있다.
+      - uses: actions/checkout@v4
+        if: steps.budget.outputs.exhausted != 'true'
+        with:
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@v1
+        if: steps.budget.outputs.exhausted != 'true'
+        with:
+          # Max 구독 토큰으로 인증한다 — 종량 과금 대신 구독 한도를 쓴다.
+          # 🔴 이 한도는 팀원의 대화형 Claude Code 사용과 **같은 지갑**이다
+          #    (5시간 롤링 + 주간 창 공유). 그래서 위 트리거를 PR 당 5회로 묶었다.
+          # 🔴 토큰 수명 1년 · `claude setup-token` 을 실행한 사람의 구독에 묶인다.
+          #    만료되면 인증 실패로 CI 가 빨개진다 — 2027-08 쯤 갱신할 것.
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # 🔴 코멘트를 올리는 MCP 서버는 --allowedTools 에 그 도구가 적혀 있을 때만
+          #    시작한다. 안 적으면 서버가 아예 안 떠서 아무것도 못 올린다.
+          # 🔴 --allowedTools 를 쓰면 여기 없는 도구는 "권한을 물어보는" 상태가 되는데
+          #    CI 에는 답할 사람이 없어 그대로 막힌다. 그래서 읽기 도구도 함께 적는다
+          #    (2026-08-21 실측: 안 적었더니 권한 거부 12건으로 23턴을 헛돌았다).
+          # 🔴 --max-turns 는 넉넉해야 한다. 모자라면 error_max_turns 로 끊기는데,
+          #    그때는 요약도 인라인 코멘트도 안 남아 **비용만 쓰고 산출물이 0** 이 된다.
+          #    상한 25 는 파일 1개짜리 스모크 PR(10턴) 기준이었고, 실제 PR 에서는
+          #    프롬프트가 시키는 준비(가이드·diff·openapi 2,300줄·마이그레이션 대조)만으로
+          #    다 쓴다 — 2026-08-23 실측: 40줄짜리 PR #38 이 22턴, 40파일짜리 PR 4건은
+          #    전부 25턴에서 잘려 $4.26 를 쓰고 코멘트 0건이었다.
+          claude_args: |
+            --model claude-sonnet-5
+            --max-turns 80
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Read,Grep,Glob,Bash"
+          # 지적을 한 코멘트로 모은다.
+          use_sticky_comment: true
+          prompt: |
+            PR #${{ github.event.pull_request.number || inputs.pr_number }} 를 리뷰한다.
+
+            먼저 `.github/review-guide.md` 를 읽고 **그 지침대로** 리뷰한다.
+            등급 체계(Blocking / Should-fix / Nit)와 중점 항목이 거기에 있다.
+
+            변경 범위는 `gh pr diff ${{ github.event.pull_request.number || inputs.pr_number }}` 로 본다.
+            diff 만 보지 말고, 계약 정본 `src/main/resources/static/openapi.yaml` 과
+            `src/main/resources/db/migration/` 의 마이그레이션을 **직접 열어 대조**한다.
+            이 저장소에서 나온 결함은 대부분 코드가 아니라 계약과의 어긋남이었다.
+
+            지적은 **해당 줄에 인라인 코멘트**로 달고, 마지막에 **결론 요약**을 남긴다.
+            지적이 하나도 없으면 요약만 남긴다 — 아무것도 안 남기면 안 된다.
+
+            🔴 **이 리뷰는 머지 게이트다.** Blocking 을 적으면 CI 가 빨개져 머지가 막히고,
+            0건이면 사람 승인 없이 머지된다. 등급을 정확히 매기는 것이 이 작업의 핵심이다.
+            확신이 없으면 Blocking 이 아니라 Should-fix 로 내린다.
+
+            🔴 **요약 코멘트의 맨 마지막 줄에 아래 형식의 한 줄을 반드시 그대로 남긴다.**
+            자동 판정이 이 줄만 읽는다. 빠지면 리뷰가 실패한 것으로 처리된다.
+
+                <!-- REVIEW-VERDICT blocking=N -->
+
+            N 은 Blocking 건수다(0 이면 `blocking=0`). 다른 문자를 덧붙이지 않는다.
+
+            지켜야 할 것:
+            - **승인(Approve)하지 않는다. 머지하지 않는다.** 코멘트만 단다.
+            - 파일을 고치거나 커밋하지 않는다. 읽고 지적만 한다.
+            - 저장소의 테스트 스위트는 실행하지 않는다 — 별도 CI 가 맡는다.
+              다만 지적을 입증하려 **짧은 코드 조각을 돌려보는 것은 허용**한다.
+            - **Nit 은 적지 않는다**(마감까지 끈다). Blocking 과 Should-fix 만 보고한다.
+            - **총 10건 상한.** 넘으면 심각한 순으로 자르고 몇 건을 잘랐는지 밝힌다.
+            - 재현 조건을 구체적으로 쓸 수 없으면 **적지 않는다.**
+            - 지적할 것이 없으면 "Blocking 0건"이라고 분명히 쓴다. 억지로 만들지 않는다.
+
+      # ── 3. 판정 ────────────────────────────────────────────────────────────
+      # 항상 돈다. 예산이 소진돼 리뷰를 건너뛴 회차에서도 결과를 내야 하기 때문이다.
+      - name: 판정 — Blocking 이 있으면 머지를 막는다
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ "${{ steps.budget.outputs.exhausted }}" = "true" ]; then
+            echo "::error::리뷰 예산 ${RUN_BUDGET}회를 다 썼습니다."
+            echo "판정을 새로 받으려면 리드가 workflow_dispatch 로 PR #${PR_NUMBER} 를 지정해 다시 돌리십시오."
+            echo "(예산은 자동 실행에만 걸립니다 — 수동 재실행은 세지 않습니다.)"
+            exit 1
+          fi
+
+          # 스티키 코멘트는 갱신되므로 한 개다. 그래도 전체를 훑고 마지막 것을 쓴다.
+          VERDICT=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
+            --jq '.[].body' \
+            | grep -o 'REVIEW-VERDICT blocking=[0-9][0-9]*' \
+            | tail -1 || true)
+
+          if [ -z "${VERDICT}" ]; then
+            echo "::error::리뷰 판정을 찾지 못했습니다 — 코멘트에 REVIEW-VERDICT 줄이 없습니다."
+            echo "리뷰가 도중에 끊겼거나(턴 상한·인증 실패) 코멘트를 못 올린 것입니다."
+            echo "판정이 없는 것은 통과가 아닙니다. 실행 로그를 확인하고 다시 돌리십시오."
+            exit 1
+          fi
+
+          COUNT="${VERDICT##*=}"
+          echo "AI 리뷰 판정: Blocking ${COUNT}건"
+
+          if [ "${COUNT}" -gt 0 ]; then
+            echo "::error::Blocking ${COUNT}건 — 고치고 다시 푸시하십시오. 리뷰가 자동으로 다시 돕니다."
+            exit 1
+          fi
+
+          echo "Blocking 0건 — 승인 없이 머지할 수 있습니다."
