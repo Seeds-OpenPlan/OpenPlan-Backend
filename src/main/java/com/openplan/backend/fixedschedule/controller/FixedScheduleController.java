@@ -1,11 +1,14 @@
 package com.openplan.backend.fixedschedule.controller;
 
 import com.openplan.backend.fixedschedule.domain.FixedScheduleStatus;
+import com.openplan.backend.fixedschedule.dto.ConflictPreviewRequest;
 import com.openplan.backend.fixedschedule.dto.FixedScheduleCreateRequest;
 import com.openplan.backend.fixedschedule.dto.FixedScheduleResponse;
 import com.openplan.backend.fixedschedule.dto.FixedScheduleUpdateRequest;
+import com.openplan.backend.fixedschedule.dto.WeekConflictResponse;
 import com.openplan.backend.fixedschedule.dto.WeekExceptionCreateRequest;
 import com.openplan.backend.fixedschedule.dto.WeekExceptionResponse;
+import com.openplan.backend.fixedschedule.service.FixedScheduleConflictPreviewService;
 import com.openplan.backend.fixedschedule.service.FixedScheduleService;
 import com.openplan.backend.global.response.ApiResponse;
 import com.openplan.backend.global.security.CurrentUser;
@@ -40,9 +43,12 @@ import java.util.UUID;
 public class FixedScheduleController {
 
     private final FixedScheduleService fixedScheduleService;
+    private final FixedScheduleConflictPreviewService conflictPreviewService;
 
-    public FixedScheduleController(FixedScheduleService fixedScheduleService) {
+    public FixedScheduleController(FixedScheduleService fixedScheduleService,
+                                   FixedScheduleConflictPreviewService conflictPreviewService) {
         this.fixedScheduleService = fixedScheduleService;
+        this.conflictPreviewService = conflictPreviewService;
     }
 
     @PostMapping
@@ -85,6 +91,18 @@ public class FixedScheduleController {
             @PathVariable UUID fixedScheduleId) {
         fixedScheduleService.delete(userId, fixedScheduleId);
         return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/conflict-previews")
+    @Operation(summary = "생성·편집 전 충돌 미리보기 (FIX-07·08)",
+            description = "후보 고정 일정을 있는 셈 치고 저장된 주간 계획 전량에 V2를 돌린다(무영속 — 아무것도 저장 안 함). "
+                    + "충돌이 있는 주만 주차 오름차순으로 반환하고, 후보가 일으킨 V2만 담는다(기존 문제는 제외). "
+                    + "candidate.fixedScheduleId 지정 시 편집 — 그 기존 일정은 판정에서 빼고(자기 자신 제외), "
+                    + "그 일정에 걸린 주차 예외(PLAN-33)가 있는 주는 건너뛴다. 부재·타인 fixedScheduleId → 404, 값 오류 → 422.")
+    public ApiResponse<List<WeekConflictResponse>> previewConflicts(
+            @CurrentUser UUID userId,
+            @RequestBody ConflictPreviewRequest request) {
+        return ApiResponse.ok(conflictPreviewService.preview(userId, request));
     }
 
     @PostMapping("/{fixedScheduleId}/week-exceptions")
