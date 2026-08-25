@@ -34,6 +34,10 @@ public class ProjectDuplicationService {
     /** 프리뷰 안내(P4 — 사실 서술). 복제본 태스크가 미배치로 생성됨을 미리 알린다(정본 note). */
     private static final String NOTE = "주간 계획에 배치된 항목은 복제되지 않습니다 — 복제본의 태스크는 전량 미배치로 생성됩니다.";
 
+    /** 기본 복제본 이름 접미사 — projects.name VARCHAR(100) 안에 들어가도록 원본명을 자를 때 기준. */
+    private static final String COPY_SUFFIX = " (복제)";
+    private static final int NAME_MAX = 100;
+
     private static final Logger log = LoggerFactory.getLogger(ProjectDuplicationService.class);
 
     private final ProjectRepository projectRepository;
@@ -114,10 +118,19 @@ public class ProjectDuplicationService {
         return ProjectResponse.from(copy);
     }
 
-    /** newName 미지정(null·공백) → "원본명 (복제)". 지정 시 생성과 동일 규칙으로 검증(422). */
+    /**
+     * newName 미지정(null·공백) → "원본명 (복제)". 지정 시 생성과 동일 규칙으로 검증(422).
+     *
+     * <p>기본명은 접미사를 붙이므로 원본 이름이 이미 길면 {@code projects.name VARCHAR(100)}을 넘긴다
+     * (95자 원본 → 101자). 원본 이름은 사용자가 이 요청에서 손댈 수 없는 값이라 422로 막으면 복제 자체가
+     * 불가능해지므로, 접미사가 들어갈 만큼 원본명을 잘라 붙인다.
+     */
     private String resolveNewName(DuplicateProjectRequest request, String sourceName) {
         if (request == null || request.newName() == null || request.newName().isBlank()) {
-            return sourceName + " (복제)";
+            String base = sourceName.length() + COPY_SUFFIX.length() > NAME_MAX
+                    ? sourceName.substring(0, NAME_MAX - COPY_SUFFIX.length())
+                    : sourceName;
+            return base + COPY_SUFFIX;
         }
         return validator.validateName(request.newName());
     }
