@@ -103,10 +103,18 @@ public class ExternalCalendarService {
         this.userClock = userClock;
     }
 
-    /** 캘린더 연동 인가 시작 (ONB-07 · FIX-14) — 제공자 인가 페이지 주소를 돌려준다. */
+    /**
+     * 캘린더 연동 인가 시작 (ONB-07 · FIX-14) — 제공자 인가 페이지 주소를 돌려준다.
+     *
+     * <p><b>{@code providerRegistry.supports}가 아니라 {@code usesOAuth}로 거른다.</b> 레지스트리는
+     * "캘린더를 읽을 수 있는가"(어댑터 등록 여부)를 보는데, 애플은 읽기 어댑터가 있어도 CalDAV Basic
+     * 이라 인가 코드 자체가 없다(openapi의 {@code provider} enum도 {@code [GOOGLE]}뿐). 레지스트리로
+     * 거르면 애플이 여기를 통과해 {@link ExternalCalendarProvider#oauthProvider()}의
+     * {@code IllegalStateException}까지 내려가 계약된 422 대신 처리되지 않은 500이 났다.
+     */
     public String authorizationUrl(String provider, String redirectUri) {
         ExternalCalendarProvider type = parseProvider(provider);
-        if (!providerRegistry.supports(type)) {
+        if (!type.usesOAuth()) {
             throw new OpenPlanException(ErrorCode.E_COM_009, Map.of("provider", type.name()));
         }
         return authorization.authorizationUrl(type, redirectUri);

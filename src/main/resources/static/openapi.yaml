@@ -650,7 +650,7 @@ paths:
                 properties:
                   data: { $ref: "#/components/schemas/ExternalConnection" }
         "409": { description: E-EXT-004 이미 연결된 계정, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
-        "422": { description: "E-EXT-002 제공자가 자격증명을 거부 (네이버 — ID·애플리케이션 비밀번호 오류). 사용자가 고칠 수 있는 입력 오류라 502 와 구분한다", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "422": { description: "E-EXT-002 제공자가 자격증명을 거부 (애플 — ID·앱 암호 오류). 사용자가 고칠 수 있는 입력 오류라 502 와 구분한다", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
         "502": { description: E-EXT-001 제공자 오류, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
   /external-calendar-connections/{connectionId}:
     patch:
