@@ -2,6 +2,10 @@
 .env
 .env.*
 !.env.example
+!.env.prod.example
+
+# 배포 산출물 — 서버에서 FE를 빌드해 여기에 놓는다(저장소에 넣지 않는다)
+/web/
 
 # Gradle
 .gradle/

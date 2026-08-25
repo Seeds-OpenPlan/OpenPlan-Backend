@@ -43,4 +43,24 @@ public interface WeeklyPlanRepository extends JpaRepository<WeeklyPlan, UUID> {
                AND w.status = com.openplan.backend.weeklyplan.domain.WeeklyPlanStatus.DRAFT
             """)
     int confirmIfDraft(@Param("planId") UUID planId, @Param("now") Instant now);
+
+    /**
+     * 주차 계획 get-or-create의 원자적 생성 (PLAN-20 주차 이동) — {@code INSERT ... ON CONFLICT DO NOTHING}.
+     *
+     * <p><b>동시 요청 경합을 예외 없이 흡수한다.</b> {@code saveAndFlush} + {@code catch(DataIntegrityViolationException)}는
+     * 위반이 트랜잭션을 rollback-only로 마킹해, 잡고 재조회해도 커밋 시 {@code UnexpectedRollbackException}(500)이 난다
+     * (오민아 리뷰 · 주차예외 슬라이스에서 확인된 함정). ON CONFLICT는 위반 자체를 만들지 않아 그 창을 원천 차단한다.
+     * 신규 계획이라 total=0·status=DRAFT(DB DEFAULT). 호출자는 뒤이어 재조회로 승자 행을 얻는다.
+     *
+     * @return 삽입 1 / 이미 존재 0 (호출자는 값과 무관하게 재조회)
+     */
+    @Modifying
+    @Query(value = """
+            INSERT INTO weekly_plans (weekly_plan_id, user_id, week_start_date, week_end_date, created_at)
+            VALUES (:id, :userId, :weekStartDate, :weekEndDate, :now)
+            ON CONFLICT (user_id, week_start_date) DO NOTHING
+            """, nativeQuery = true)
+    int insertIfAbsent(@Param("id") UUID id, @Param("userId") UUID userId,
+                       @Param("weekStartDate") LocalDate weekStartDate,
+                       @Param("weekEndDate") LocalDate weekEndDate, @Param("now") Instant now);
 }

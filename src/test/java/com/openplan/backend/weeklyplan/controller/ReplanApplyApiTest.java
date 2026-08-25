@@ -129,6 +129,35 @@ class ReplanApplyApiTest {
     }
 
     @Test
+    @DisplayName("확정(CONFIRMED) 계획에 적용 → DRAFT 복귀 · confirmed_at 해제 (clearAutomatically 회귀)")
+    void applyReopensConfirmedPlanToDraft() throws Exception {
+        UUID plan = insertWeeklyPlan(MAIN, WEEK);
+        UUID t1 = insertTask(project, "태스크1", 1, 60);
+        UUID t2 = insertTask(project, "태스크2", 2, 60);
+        insertTaskBlock(plan, t1, at(9, 0), at(10, 0));
+        insertTaskBlock(plan, t2, at(9, 30), at(10, 30)); // 겹침 → reschedule 발생(=clear 발생)
+
+        String genJson = mockMvc.perform(post(gen(plan)).header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        String optionId = JsonPath.read(genJson, "$.data.options[0].replanOptionId");
+
+        // 대안 생성 후 계획을 확정 상태로 강제 전환(편집 재개 검증용)
+        jdbc.update("UPDATE weekly_plans SET status = 'CONFIRMED', confirmed_at = ? WHERE weekly_plan_id = ?",
+                OffsetDateTime.ofInstant(BASE, ZoneOffset.UTC), plan);
+
+        mockMvc.perform(post(apply(optionId)).header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.plan.status").value("DRAFT")); // 복귀돼야 함
+
+        // reschedule의 clearAutomatically가 DRAFT 복귀를 버리지 않았는지 DB로 재확인
+        assertThat(jdbc.queryForObject("SELECT status FROM weekly_plans WHERE weekly_plan_id = ?",
+                String.class, plan)).isEqualTo("DRAFT");
+        assertThat(jdbc.queryForObject("SELECT confirmed_at FROM weekly_plans WHERE weekly_plan_id = ?",
+                Object.class, plan)).isNull();
+    }
+
+    @Test
     @DisplayName("없는/타인 대안 → 404")
     void applyNotFound() throws Exception {
         mockMvc.perform(post(apply(UUID.randomUUID().toString())).header("X-Dev-User", MAIN.toString()))
