@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -20,6 +21,9 @@ public interface WbsItemRepository extends JpaRepository<WbsItem, UUID> {
 
     /** 프로젝트의 WBS 항목 수 (복제 프리뷰 — PROJ-11). */
     long countByProjectId(UUID projectId);
+
+    /** 프로젝트의 WBS 전량 (복제 실행 — PROJ-12). 복제본 태스크에 재연결하기 위해 task_id별로 읽는다. */
+    List<WbsItem> findByProjectId(UUID projectId);
 
     /**
      * WBS 기간 업서트 (PUT — 있으면 갱신, 없으면 생성). {@code INSERT ... ON CONFLICT (task_id)
