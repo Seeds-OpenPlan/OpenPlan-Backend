@@ -114,7 +114,14 @@ sync_repo() {  # $1=디렉터리 $2=저장소 $3=브랜치
   if [ -d "$1/.git" ]; then
     if [ -n "$(git -C "$1" status --porcelain)" ]; then
       echo "  ⚠️  $1 에 로컬 수정이 있어 stash 로 옮긴다 (git -C $1 stash list 로 확인)"
-      git -C "$1" stash push -u -m "bootstrap $(date -u +%Y-%m-%dT%H:%M:%SZ) 자동 보관"
+      # 🔴 보관 실패가 배포를 죽이면 안 된다(D-76). 2026-08-24 실측: 08-23 HTTPS 전환으로
+      #    생긴 root 소유 certbot/conf/ 를 `stash push -u` 가 지우지 못해 exit 1 을 냈고,
+      #    set -euo pipefail 아래에서 **배포가 3단계에서 통째로 즉사**했다. 그날 이후 모든
+      #    재배포가 조용히 실패했는데, 컨테이너는 멀쩡히 떠 있어 화면으로는 안 보였다.
+      #    보관은 곁다리다 — 실패해도 알리고 계속한다. 판정은 아래 fetch/switch 가 한다.
+      if ! git -C "$1" stash push -u -m "bootstrap $(date -u +%Y-%m-%dT%H:%M:%SZ) 자동 보관"; then
+        echo "  ⚠️  $1 보관 실패 — 배포는 계속한다. 남은 로컬 수정은 아래 switch 가 판정한다" >&2
+      fi
     fi
     git -C "$1" fetch --depth 1 origin "$3"
     git -C "$1" switch -C "$3" FETCH_HEAD
