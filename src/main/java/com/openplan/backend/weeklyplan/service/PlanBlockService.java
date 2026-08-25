@@ -224,12 +224,21 @@ public class PlanBlockService {
         return PlanBlockResponse.fromView(view);
     }
 
-    /** 대상 주 계획 get-or-create (PLAN-20). 있으면 기존, 없으면 생성(주 total 재계산이 뒤따르므로 total=0으로 시작). */
+    /**
+     * 대상 주 계획 get-or-create (PLAN-20). 있으면 기존, 없으면 생성(주 total 재계산이 뒤따르므로 total=0으로 시작).
+     *
+     * <p><b>동시 요청 경합 방어</b>: 같은 사용자의 블록 여럿을 같은 신규 주로 병렬 이동하면 둘 다 "없음"을 볼 수 있다.
+     * {@code INSERT ... ON CONFLICT DO NOTHING}(예외 없음)으로 만들고 재조회해 승자 행으로 수렴한다 — {@code saveAndFlush}
+     * +catch는 위반이 tx를 rollback-only로 만들어 커밋 시 500이 되므로 쓰지 않는다(주차예외 슬라이스에서 확인된 함정).
+     */
     private WeeklyPlan getOrCreateWeekPlan(UUID userId, LocalDate weekStartDate) {
         return weeklyPlanRepository.findByUserIdAndWeekStartDate(userId, weekStartDate)
                 .orElseGet(() -> {
-                    WeeklyPlan plan = new WeeklyPlan(userId, weekStartDate, weekStartDate.plusDays(6), clock.now());
-                    return weeklyPlanRepository.saveAndFlush(plan);
+                    weeklyPlanRepository.insertIfAbsent(
+                            UUID.randomUUID(), userId, weekStartDate, weekStartDate.plusDays(6), clock.now());
+                    return weeklyPlanRepository.findByUserIdAndWeekStartDate(userId, weekStartDate)
+                            .orElseThrow(() -> new IllegalStateException(
+                                    "insertIfAbsent 직후 주간계획 재조회 실패 — user=" + userId + " week=" + weekStartDate));
                 });
     }
 
