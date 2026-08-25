@@ -1194,21 +1194,29 @@ paths:
   /projects/{projectId}/duplications:
     post:
       tags: [projects]
-      x-implementation-status: not-implemented
       operationId: duplicateProject
-      summary: "[미구현] 복제 실행 (Idempotency-Key 수용 — 이중 클릭 방지)"
+      summary: "복제 실행 (Idempotency-Key 수용 — 이중 클릭 방지)"
       x-lane: BE-2
       x-user-stories: [PROJ-12]
       parameters:
         - { $ref: "#/components/parameters/ProjectId" }
         - { $ref: "#/components/parameters/IdempotencyKey" }
       requestBody:
+        required: false
+        description: "본문 전체 생략 가능 — 생략(또는 {})하면 복제본 이름은 '원본명 (복제)'가 된다."
         content:
           application/json:
             schema:
               type: object
+              # 기본 예시는 빈 객체 — Swagger UI가 newName 을 "string" 으로 자동 채워 보내
+              # 복제본이 'string' 으로 생성되는 함정을 막는다.
+              example: {}
               properties:
-                newName: { type: string, description: "미지정 시 '원본명 (복제)'" }
+                newName:
+                  type: string
+                  maxLength: 100
+                  description: "미지정·공백이면 '원본명 (복제)'(접미사 포함 100자 초과 시 원본명을 잘라 맞춤). 지정 시 생성과 동일 규칙(trim·1~100자, 위반 422)."
+                  example: "마케팅 2026"
       responses:
         "201":
           description: 복제본 생성 — 원본 무변경, 태스크 전량 UNASSIGNED
