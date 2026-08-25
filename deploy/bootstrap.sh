@@ -124,10 +124,11 @@ if [ ! -f "$APP_DIR/.env" ]; then
 
      nano ~/openplan/.env
 
-  최소한 이 넷은 채워야 뜹니다:
+  최소한 이 다섯은 채워야 뜹니다:
      DB_HOST         RDS 엔드포인트
      DB_PASSWORD     RDS 마스터 비밀번호
      JWT_SECRET      openssl rand -base64 48
+     EXT_TOKEN_KEY   openssl rand -base64 32   (외부 캘린더 토큰 암호화)
      APP_BASE_URL / API_BASE_URL   http://<이 서버 공인 IP>
 
   채운 뒤 이 스크립트를 다시 실행하십시오.
@@ -145,8 +146,14 @@ fi
 #    MAIL_PASSWORD 는 구글 계정 비밀번호가 아니라 앱 비밀번호(16자)다.
 #    MAIL_FROM 은 넣지 않는다 — MailConfig.resolveFrom 이 비어 있으면 SMTP 계정으로
 #    대체하므로 선택값이다. 여기에 넣으면 안 채워도 되는 값 때문에 배포가 막힌다.
+#
+# 🔴 EXT_TOKEN_KEY 가 목록에 든 이유(ST-B1-11): ExternalTokenCipher 는 키가 비어 있어도
+#    기동을 통과시킨다(의도된 설계 — 외부 캘린더를 안 쓰는 배포까지 막지 않기 위함).
+#    그래서 이 값이 없으면 서버는 멀쩡히 뜬 뒤 POST /external-calendar-connections 마다
+#    조용히 E-COM-005 500 을 낸다. MAIL_* 에서 이미 한 번 겪은 "떴지만 못 쓰는" 상태다.
+#    openssl rand -base64 32 로 만든다.
 missing=()
-for k in DB_HOST DB_PASSWORD JWT_SECRET APP_BASE_URL MAIL_USERNAME MAIL_PASSWORD; do
+for k in DB_HOST DB_PASSWORD JWT_SECRET APP_BASE_URL MAIL_USERNAME MAIL_PASSWORD EXT_TOKEN_KEY; do
   v="$(grep -E "^${k}=" "$APP_DIR/.env" | cut -d= -f2- || true)"
   if [ -z "$v" ] || [[ "$v" == *"<EC2_PUBLIC_IP>"* ]]; then
     missing+=("$k")

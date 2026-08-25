@@ -404,14 +404,30 @@ public class ExternalCalendarService {
                     stored.resync(providerEvent.title(), providerEvent.startAt(), providerEvent.endAt(),
                             providerEvent.sourceCalendar(), now);
                 } else {
-                    created.add(ExternalCalendarEvent.candidate(connection.getId(),
+                    // 방금 만든 것도 existing 에 넣는다 — 두 캘린더가 같은 원본 일정을 돌려주면
+                    // (초대받은 일정이 개인·팀 캘린더에 함께 보이는 흔한 경우) 같은 호출 안에서
+                    // 같은 external_event_id 를 두 번 insert 해 UQ 를 스스로 위반한다.
+                    ExternalCalendarEvent candidate = ExternalCalendarEvent.candidate(connection.getId(),
                             providerEvent.externalEventId(), providerEvent.title(),
                             providerEvent.startAt(), providerEvent.endAt(),
-                            providerEvent.sourceCalendar(), now));
+                            providerEvent.sourceCalendar(), now);
+                    created.add(candidate);
+                    existing.put(providerEvent.externalEventId(), candidate);
                 }
             }
         }
-        eventRepository.saveAll(created);
+        if (created.isEmpty()) {
+            return;
+        }
+        try {
+            eventRepository.saveAll(created);
+        } catch (DataIntegrityViolationException e) {
+            // 같은 connection 에 동기화가 겹치면(탭 두 개·중복 새로고침) 양쪽이 같은 일정을
+            // "신규" 로 보고 각자 insert 한다. 먼저 넣은 쪽이 이미 옳은 행을 만들었으므로
+            // 진 쪽은 근거 불명의 500 을 내는 대신 조용히 물러난다 — 다음 조회에서 그 행이 보인다.
+            log.info("외부 캘린더 동기화 경합 — 이미 저장된 일정이 있어 신규 저장을 건너뛴다. connectionId={}",
+                    connection.getId());
+        }
     }
 
     /** 부재와 타인 소유를 같은 404 로 돌린다 — 존재 여부를 알려주지 않는다(NFR-030). */

@@ -10,6 +10,7 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -169,22 +170,29 @@ public final class RecurrenceExpander {
      */
     private static List<ZonedDateTime> weekly(ZonedDateTime origin, int interval, String byDay, String weekStart,
                                               Integer count, Instant until, Instant to) {
-        Set<DayOfWeek> days = new LinkedHashSet<>();
+        Set<DayOfWeek> parsedDays = new LinkedHashSet<>();
         if (byDay != null && !byDay.isBlank()) {
             for (String token : byDay.split(",")) {
                 DayOfWeek day = dayOfWeek(token);
                 if (day != null) {
-                    days.add(day);
+                    parsedDays.add(day);
                 }
             }
         }
-        if (days.isEmpty()) {
-            days.add(origin.getDayOfWeek());
+        if (parsedDays.isEmpty()) {
+            parsedDays.add(origin.getDayOfWeek());
         }
 
-        DayOfWeek wkst = weekStart == null ? DayOfWeek.MONDAY : dayOfWeek(weekStart);
-        ZonedDateTime anchor = origin.with(TemporalAdjusters.previousOrSame(
-                wkst == null ? DayOfWeek.MONDAY : wkst));
+        DayOfWeek parsedWkst = weekStart == null ? null : dayOfWeek(weekStart);
+        DayOfWeek wkst = parsedWkst == null ? DayOfWeek.MONDAY : parsedWkst;
+        ZonedDateTime anchor = origin.with(TemporalAdjusters.previousOrSame(wkst));
+
+        // BYDAY 토큰 순서는 시간 순서가 아니다 — BYDAY=FR,MO 는 금요일을 먼저 준다.
+        // 아래 루프는 경계를 넘으면 그 주가 아니라 전체를 끊으므로, 주 안에서 시간 오름차순으로
+        // 세워 두지 않으면 아직 안 본 더 이른 요일이 예외도 로그도 없이 유실된다.
+        // COUNT 도 발생 순서대로 세야 하므로 같은 정렬이 필요하다.
+        List<DayOfWeek> days = new ArrayList<>(parsedDays);
+        days.sort(Comparator.comparingInt(day -> Math.floorMod(day.getValue() - wkst.getValue(), 7)));
 
         List<ZonedDateTime> out = new ArrayList<>();
         int produced = 0;

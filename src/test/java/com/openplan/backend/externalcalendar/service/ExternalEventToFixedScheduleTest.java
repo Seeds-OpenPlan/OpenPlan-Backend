@@ -144,6 +144,31 @@ class ExternalEventToFixedScheduleTest {
         assertThat(fs.getEndTime()).isEqualTo(LocalTime.of(23, 55));
     }
 
+    @Test
+    @DisplayName("정각 자정에 끝나는 일정은 자정을 넘은 것이 아니다 — 구글은 24:00 을 다음날 00:00 으로 준다")
+    void treatsExactMidnightEndAsEndOfDay() {
+        // 2026-08-20 23:00 ~ 24:00 KST. 구글 표현으로는 종료가 다음날 00:00:00 이다.
+        ExternalCalendarEvent event = event("2026-08-20T14:00:00Z", "2026-08-20T15:00:00Z", "하루마감");
+
+        FixedSchedule fs = converter.convert(USER, event, null);
+
+        assertThat(fs.getStartTime()).isEqualTo(LocalTime.of(23, 0));
+        assertThat(fs.getEndTime()).isEqualTo(LocalTime.of(23, 55));
+    }
+
+    @Test
+    @DisplayName("하루의 마지막 5분 안에 든 일정도 유효한 칸이 된다 — 격자 탓에 빈 구간이 되면 안 된다")
+    void keepsLastFiveMinuteSlotUsable() {
+        // 2026-08-20 23:57 ~ 23:59 KST. 시작은 23:55 로 내려가고 종료는 24:00 으로 올라가
+        // 둘 다 23:55 가 되면 "시작이 종료보다 늦거나 같습니다" 422 가 원인과 무관하게 났다.
+        ExternalCalendarEvent event = event("2026-08-20T14:57:00Z", "2026-08-20T14:59:00Z", "막판메모");
+
+        FixedSchedule fs = converter.convert(USER, event, null);
+
+        assertThat(fs.getStartTime()).isEqualTo(LocalTime.of(23, 50));
+        assertThat(fs.getEndTime()).isEqualTo(LocalTime.of(23, 55));
+    }
+
     private static ExternalCalendarEvent event(String startUtc, String endUtc, String title) {
         return ExternalCalendarEvent.candidate(CONNECTION, "ext-" + title, title,
                 Instant.parse(startUtc), Instant.parse(endUtc), "내 캘린더",
