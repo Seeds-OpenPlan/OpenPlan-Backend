@@ -8,6 +8,7 @@ import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -21,6 +22,12 @@ public interface WeeklyPlanRepository extends JpaRepository<WeeklyPlan, UUID> {
 
     /** 소유자 스코프 단건(planId) — 블록 쓰기 공용(ST-B2-08). 부재·타인 → 404 E-COM-004. */
     Optional<WeeklyPlan> findByIdAndUserId(UUID id, UUID userId);
+
+    /**
+     * 저장된 주간 계획 전량 (FIX-07 충돌 미리보기 — 정본 "저장된 주간 계획 대상"). 주차 오름차순으로
+     * 응답 순서를 결정적으로 만든다. 과거 주를 빼지 않는다 — 정본이 범위를 좁히지 않았다.
+     */
+    List<WeeklyPlan> findByUserIdOrderByWeekStartDateAsc(UUID userId);
 
     /**
      * 확정 게이트 (ST-B2-09 / PLAN-03) — {@code DRAFT}일 때만 원자적으로 {@code CONFIRMED}로 전이한다.
