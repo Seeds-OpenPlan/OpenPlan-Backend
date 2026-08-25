@@ -253,6 +253,24 @@ public class TaskService {
     }
 
     /**
+     * WBS 뷰 (PROJ-13 / GET) — 프로젝트의 WBS 행 전량을 태스크 제목과 함께 반환한다.
+     *
+     * <p>WBS가 없는 태스크는 행 자체가 없으므로 결과에 포함되지 않는다(빈 바를 만들지 않는다 —
+     * "기간 미설정"은 태스크 목록이 표현할 영역). 목록({@link #list})과 동일하게 <b>자동종료 평가는 하지
+     * 않는다</b> — 조회 전용이고 CLOSED/PAUSED 프로젝트의 WBS도 그대로 볼 수 있어야 한다(PROJ-16 관례).
+     * 페이지네이션 없음(정본 응답이 평면 배열 — 한 프로젝트의 태스크 수가 페이징 대상 규모가 아니다).
+     * 부재·타인 projectId → 404(존재 은닉).
+     */
+    public List<WbsItemResponse> listWbs(UUID userId, UUID projectId) {
+        projectRepository.findByIdAndUserId(projectId, userId)
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404 (존재 은닉)
+
+        return wbsItemRepository.findViewsByProjectId(projectId).stream()
+                .map(row -> WbsItemResponse.of(row.item(), row.taskTitle()))
+                .toList();
+    }
+
+    /**
      * WBS 기간 설정/조정 (ST-B2-05 / PUT — 업서트). 검사 순서 404 → 422 CLOSED → 422 E-WBS-001은
      * update/toggleCompletion과 동일 관례(D-10이 값 검증보다 먼저). version 검사는 없다 —
      * wbs_items에 낙관락 컬럼이 없고 정본 요청 바디에도 version이 없다(WbsItem 클래스 상단 참고,
