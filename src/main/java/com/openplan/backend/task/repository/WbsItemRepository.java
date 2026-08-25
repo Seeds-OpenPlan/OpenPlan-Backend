@@ -26,6 +26,20 @@ public interface WbsItemRepository extends JpaRepository<WbsItem, UUID> {
     List<WbsItem> findByProjectId(UUID projectId);
 
     /**
+     * WBS 뷰 (PROJ-13 / GET) — 기간 바 렌더링용으로 태스크 제목을 조인해 함께 읽는다(N+1 회피).
+     * 정렬은 서버 고정(D-9): 시작일 오름차순 = 타임라인 위에서 아래로. 같은 시작일은 짧은 바가 먼저,
+     * 그마저 같으면 wbs_item_id로 완전 결정적이게 한다(페이지네이션 없는 전량 반환이라 tie도 안정 필요).
+     */
+    @Query("""
+            select new com.openplan.backend.task.repository.WbsItemRow(w, t.title)
+              from WbsItem w, Task t
+             where t.id = w.taskId
+               and w.projectId = :projectId
+             order by w.startDate asc, w.endDate asc, w.id asc
+            """)
+    List<WbsItemRow> findViewsByProjectId(@Param("projectId") UUID projectId);
+
+    /**
      * WBS 기간 업서트 (PUT — 있으면 갱신, 없으면 생성). {@code INSERT ... ON CONFLICT (task_id)
      * DO UPDATE} 단일 원자문으로 동시 요청의 UNIQUE 경합을 흡수한다.
      *
