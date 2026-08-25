@@ -1,6 +1,7 @@
 package com.openplan.backend.externalcalendar.service;
 
 import com.openplan.backend.auth.oauth.OAuthProperties;
+import com.openplan.backend.common.Weekday;
 import com.openplan.backend.externalcalendar.domain.ExternalCalendarProvider;
 import com.openplan.backend.global.config.AppProperties;
 import com.openplan.backend.global.error.OpenPlanException;
@@ -46,6 +47,11 @@ class ExternalCalendarAuthorizationTest {
         @Override
         public ZoneId zoneOf(UUID userId) {
             return ZoneId.of("Asia/Seoul");
+        }
+
+        @Override
+        public Weekday weekStartDayOf(UUID userId) {
+            return Weekday.MON;
         }
     };
 

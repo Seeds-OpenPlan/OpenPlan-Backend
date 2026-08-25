@@ -47,6 +47,11 @@ class ExternalEventToFixedScheduleTest {
         public ZoneId zoneOf(UUID userId) {
             return SEOUL;
         }
+
+        @Override
+        public Weekday weekStartDayOf(UUID userId) {
+            return Weekday.MON;
+        }
     };
 
     private final ExternalEventToFixedSchedule converter = new ExternalEventToFixedSchedule(clock);
