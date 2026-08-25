@@ -13,9 +13,10 @@ Environment=HOME=/home/ec2-user
 WorkingDirectory=/home/ec2-user/openplan
 ExecStart=/bin/bash /home/ec2-user/openplan/deploy/cd-watch.sh
 
-# 🔴 타임아웃을 넉넉히 준다. t3.medium 에서 npm ci + vite build + gradle build +
-#    AI 이미지까지 하면 10분을 넘길 수 있다. 여기서 끊기면 이미지가 반만 구워진 채
-#    컨테이너가 뜨는 최악의 상태가 된다.
+# 🔴 타임아웃을 넉넉히 준다. t3.medium 에서 npm ci + vite build + gradle build 를
+#    하면 10분을 넘길 수 있다. 여기서 끊기면 이미지가 반만 구워진 채
+#    컨테이너가 뜨는 최악의 상태가 된다. (AI 는 아직 이 배포에 포함되지 않는다 —
+#    bootstrap.sh·docker-compose.prod.yml 참고.)
 TimeoutStartSec=45min
 
 # 로그는 journal 로 간다: journalctl -u openplan-cd.service -n 100

@@ -40,8 +40,14 @@ fi
 
 : "${BE_BRANCH:?cd.conf 에 BE_BRANCH 가 없다}"
 : "${FE_BRANCH:?cd.conf 에 FE_BRANCH 가 없다}"
-: "${AI_BRANCH:?cd.conf 에 AI_BRANCH 가 없다}"
 CD_DRY_RUN="${CD_DRY_RUN:-0}"
+# 🔴 AI_BRANCH/AI_REPO 는 일부러 안 읽는다. bootstrap.sh 는 BE/FE 둘만 sync_repo 하고
+#    AI_* 를 전혀 참조하지 않으며, docker-compose.prod.yml 에도 ai 서비스가 없다 —
+#    즉 이 CD 는 아직 AI 를 배포하지 않는다. AI 저장소 SHA 를 여기서 추적하면
+#    AI 만 바뀌어도 재배포가 돌고 deploy-status.json 이 "배포됨"이라 찍지만
+#    실제로 배포된 적은 없다(AI PR 리뷰 Blocking). AI 를 실제로 배포하게 되면
+#    (feat/ai-service-deploy, #40) 그 PR 에서 bootstrap.sh·compose 와 함께
+#    이 파일의 AI_* 추적도 같이 넣는다 — 추적과 배포가 따로 놀지 않게.
 
 mkdir -p "$LOG_DIR"
 
@@ -75,11 +81,8 @@ remote_sha() {  # $1=저장소 $2=브랜치
 
 BE_SHA="$(remote_sha "$BE_REPO" "$BE_BRANCH")"
 FE_SHA="$(remote_sha "$FE_REPO" "$FE_BRANCH")"
-# AI 는 없어도 서비스가 도는 부품이다(규칙 폴백). 실패해도 배포를 막지 않는다 —
-# bootstrap.sh 가 같은 방침이라 여기서만 엄격하면 어긋난다.
-AI_SHA="$(remote_sha "$AI_REPO" "$AI_BRANCH" || printf 'unknown')"
 
-WANT="$BE_BRANCH@$BE_SHA $FE_BRANCH@$FE_SHA $AI_BRANCH@$AI_SHA"
+WANT="$BE_BRANCH@$BE_SHA $FE_BRANCH@$FE_SHA"
 HAVE="$(cat "$STATE" 2>/dev/null || printf '(최초)')"
 
 if [ "${FORCE:-0}" != 1 ] && [ "$WANT" = "$HAVE" ]; then
@@ -105,8 +108,8 @@ START=$(date +%s)
 #    #38 이 바로 그 파일을 건드리고 있어, 여기서 같이 고치면 충돌한다.
 #    CD 는 새 파일만으로 성립해야 한다.
 set +e
-BE_REPO="$BE_REPO" FE_REPO="$FE_REPO" AI_REPO="$AI_REPO" \
-BE_BRANCH="$BE_BRANCH" FE_BRANCH="$FE_BRANCH" AI_BRANCH="$AI_BRANCH" \
+BE_REPO="$BE_REPO" FE_REPO="$FE_REPO" \
+BE_BRANCH="$BE_BRANCH" FE_BRANCH="$FE_BRANCH" \
 APP_DIR="$APP_DIR" \
   bash "$APP_DIR/deploy/bootstrap.sh" >>"$RUN_LOG" 2>&1
 RC=$?
@@ -138,7 +141,6 @@ if ! $SUDO tee "$APP_DIR/web/deploy-status.json" >/dev/null <<JSON
   "durationSeconds": $ELAPSED,
   "backend":  { "branch": "$BE_BRANCH", "sha": "$BE_SHA" },
   "frontend": { "branch": "$FE_BRANCH", "sha": "$FE_SHA" },
-  "ai":       { "branch": "$AI_BRANCH", "sha": "$AI_SHA" },
   "log": "$(basename "$RUN_LOG")"
 }
 JSON

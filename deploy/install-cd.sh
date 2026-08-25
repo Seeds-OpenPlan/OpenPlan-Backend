@@ -23,7 +23,7 @@ log() { printf '\n\033[1;34m== %s\033[0m\n' "$*"; }
 log "1/4 cd.conf"
 if [ -f "$CONF" ]; then
   echo "  이미 있다 — 건드리지 않는다. 현재 값:"
-  grep -E '^(BE|FE|AI)_BRANCH=' "$CONF" | sed 's/^/    /'
+  grep -E '^(BE|FE)_BRANCH=' "$CONF" | sed 's/^/    /'
 else
   if [ -z "${BE_BRANCH:-}" ]; then
     cat >&2 <<'MSG'
@@ -45,9 +45,8 @@ MSG
   cp "$APP_DIR/deploy/cd.conf.example" "$CONF"
   sed -i "s|^BE_BRANCH=.*|BE_BRANCH=${BE_BRANCH}|" "$CONF"
   [ -n "${FE_BRANCH:-}" ] && sed -i "s|^FE_BRANCH=.*|FE_BRANCH=${FE_BRANCH}|" "$CONF"
-  [ -n "${AI_BRANCH:-}" ] && sed -i "s|^AI_BRANCH=.*|AI_BRANCH=${AI_BRANCH}|" "$CONF"
   echo "  만들었다:"
-  grep -E '^(BE|FE|AI)_BRANCH=' "$CONF" | sed 's/^/    /'
+  grep -E '^(BE|FE)_BRANCH=' "$CONF" | sed 's/^/    /'
 fi
 
 # ── 2. 현재 배포분을 기준선으로 ─────────────────────────────────────────────
@@ -63,8 +62,7 @@ else
   . "$CONF"
   be="$(git -C "$APP_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
   fe="$(git -C "$HOME/openplan-fe" rev-parse HEAD 2>/dev/null || echo unknown)"
-  ai="$(git -C "$HOME/openplan-ai" rev-parse HEAD 2>/dev/null || echo unknown)"
-  printf '%s@%s %s@%s %s@%s' "$BE_BRANCH" "$be" "$FE_BRANCH" "$fe" "$AI_BRANCH" "$ai" > "$STATE"
+  printf '%s@%s %s@%s' "$BE_BRANCH" "$be" "$FE_BRANCH" "$fe" > "$STATE"
   echo "  현재 배포분으로 잡았다: $(cat "$STATE")"
 fi
 
