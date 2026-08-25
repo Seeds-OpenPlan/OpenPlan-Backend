@@ -30,6 +30,7 @@ import com.openplan.backend.externalcalendar.repository.ExternalCalendarSelectio
 import com.openplan.backend.externalcalendar.repository.ExternalFixedScheduleRepository;
 import com.openplan.backend.fixedschedule.domain.FixedSchedule;
 import com.openplan.backend.fixedschedule.domain.FixedScheduleStatus;
+import com.openplan.backend.fixedschedule.dto.FixedScheduleResponse;
 import com.openplan.backend.global.error.ErrorCode;
 import com.openplan.backend.global.error.OpenPlanException;
 import com.openplan.backend.global.time.UserClock;
@@ -356,16 +357,16 @@ public class ExternalCalendarService {
         // 소유자 확인은 연결을 거쳐서 한다 — 후보 일정 자체에는 user_id 가 없다.
         requireConnection(userId, event.getConnectionId());
 
-        UUID fixedScheduleId = null;
+        FixedScheduleResponse fixedScheduleResponse = null;
         if (mode != ApplyMode.EXCLUDE) {
             FixedSchedule fixedSchedule = converter.convert(userId, event,
                     mode == ApplyMode.EDITED ? request.edited() : null);
             fixedScheduleRepository.save(fixedSchedule);
-            fixedScheduleId = fixedSchedule.getId();
+            fixedScheduleResponse = FixedScheduleResponse.from(fixedSchedule);
         }
         event.apply(mode);
 
-        return new ApplyEventResponse(event.getId(), event.getApplyStatus().name(), fixedScheduleId);
+        return new ApplyEventResponse(event.getApplyStatus().name(), fixedScheduleResponse);
     }
 
     /**

@@ -150,6 +150,27 @@ class GoogleCalendarProviderTest {
     }
 
     @Test
+    @DisplayName("캘린더 ID에 '#'이 있어도 인코딩돼 /events 경로·쿼리가 잘리지 않는다 — 구독 캘린더(예: 공휴일) 대응")
+    void 샵이_든_캘린더_ID를_인코딩한다() {
+        // 구글의 흔한 구독 캘린더(한국 공휴일 등)는 '#'을 포함한 ID를 쓴다. 인코딩 없이 그대로
+        // URI 문자열에 넣으면 '#' 뒤가 fragment 로 분류돼 /events 경로와 모든 쿼리가 요청에서
+        // 사라진다 — MockRestServiceServer 가 아래 정확한(인코딩된) URI 로만 응답하도록 고정해
+        // 그 회귀를 여기서 잡는다.
+        String calendarIdWithHash = "ko.south_korea#holiday@group.v.calendar.google.com";
+        server.expect(once(), requestTo(
+                        "https://www.googleapis.com/calendar/v3/calendars/ko.south_korea%23holiday@group.v.calendar.google.com/events"
+                                + "?timeMin=2026-08-17T00:00:00Z&timeMax=2026-08-31T00:00:00Z"
+                                + "&singleEvents=true&orderBy=startTime&maxResults=250"))
+                .andRespond(withSuccess(events(), MediaType.APPLICATION_JSON));
+
+        List<ProviderEvent> result = provider.listEvents(CREDENTIAL, calendarIdWithHash, "공휴일",
+                Instant.parse("2026-08-17T00:00:00Z"), Instant.parse("2026-08-31T00:00:00Z"));
+
+        assertThat(result).hasSize(1);
+        server.verify();
+    }
+
+    @Test
     @DisplayName("캘린더 목록 — id 와 summary 를 읽는다")
     void 캘린더_목록을_읽는다() {
         String body = """
