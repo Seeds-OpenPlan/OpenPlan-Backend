@@ -310,9 +310,8 @@ paths:
                   data: { $ref: "#/components/schemas/UserProfile" }
     delete:
       tags: [users]
-      x-implementation-status: not-implemented
       operationId: deactivateMe
-      summary: "[미구현] 계정 비활성화 (30일 복구창 — 이후 배치 삭제, NFR-007)"
+      summary: "계정 비활성화 (30일 복구창 — 이후 배치 삭제, NFR-007)"
       x-lane: BE-1
       x-user-stories: [ACCT-04, ACCT-06]
       responses:
@@ -485,9 +484,8 @@ paths:
   /users/me/preferences:
     get:
       tags: [users]
-      x-implementation-status: not-implemented
       operationId: getPreferences
-      summary: "[미구현] 사용자 기본 설정 조회"
+      summary: "사용자 기본 설정 조회"
       x-lane: BE-1
       x-user-stories: [FIX-10]
       responses:
@@ -501,9 +499,8 @@ paths:
                   data: { $ref: "#/components/schemas/Preferences" }
     put:
       tags: [users]
-      x-implementation-status: not-implemented
       operationId: savePreferences
-      summary: "[미구현] 기본 설정 저장 (예상 시간 기본값 5분 단위 · 재계획 대안 기본값)"
+      summary: "기본 설정 저장 (예상 시간 기본값 5분 단위 · 재계획 대안 기본값)"
       x-lane: BE-1
       x-user-stories: [FIX-11, FIX-12]
       requestBody:
@@ -520,6 +517,7 @@ paths:
                 type: object
                 properties:
                   data: { $ref: "#/components/schemas/Preferences" }
+        "422": { $ref: "#/components/responses/UnprocessableEntity" }
   /users/me/preference-suggestions:
     get:
       tags: [users]
@@ -827,9 +825,8 @@ paths:
   /users/me/notification-settings:
     get:
       tags: [users]
-      x-implementation-status: not-implemented
       operationId: getNotificationSettings
-      summary: "[미구현] 알림 설정 조회 (5유형)"
+      summary: "알림 설정 조회 (5유형)"
       x-lane: BE-1
       x-user-stories: [NOTI-01]
       responses:
@@ -845,9 +842,8 @@ paths:
                     items: { $ref: "#/components/schemas/NotificationSetting" }
     put:
       tags: [users]
-      x-implementation-status: not-implemented
       operationId: saveNotificationSettings
-      summary: "[미구현] 알림 설정 저장"
+      summary: "알림 설정 저장"
       x-lane: BE-1
       x-user-stories: [NOTI-01]
       requestBody:
@@ -866,9 +862,8 @@ paths:
   /notifications:
     get:
       tags: [notifications]
-      x-implementation-status: not-implemented
       operationId: listNotifications
-      summary: "[미구현] 알림 센터 (최신순 + 미읽음 수)"
+      summary: "알림 센터 (최신순 + 미읽음 수)"
       x-lane: BE-1
       x-user-stories: [NOTI-02, NOTI-04]
       parameters: [{ $ref: "#/components/parameters/Page" }, { $ref: "#/components/parameters/Size" }]
@@ -891,9 +886,8 @@ paths:
   /notifications/{notificationId}/read:
     patch:
       tags: [notifications]
-      x-implementation-status: not-implemented
       operationId: markNotificationRead
-      summary: "[미구현] 읽음 처리"
+      summary: "읽음 처리"
       x-lane: BE-1
       x-user-stories: [NOTI-03]
       parameters: [{ name: notificationId, in: path, required: true, schema: { type: string, format: uuid } }]
@@ -902,9 +896,8 @@ paths:
   /notifications/read-all:
     patch:
       tags: [notifications]
-      x-implementation-status: not-implemented
       operationId: markAllNotificationsRead
-      summary: "[미구현] 전체 읽음"
+      summary: "전체 읽음"
       x-lane: BE-1
       x-user-stories: [NOTI-03]
       responses:
@@ -1307,9 +1300,8 @@ paths:
   /projects/{projectId}/tasks/bulk:
     post:
       tags: [projects]
-      x-implementation-status: not-implemented
       operationId: createTasksBulk
-      summary: "[미구현] 일괄 생성 (구조화 초안 채택 — draftId 지정 시 is_adopted 마킹)"
+      summary: "일괄 생성 (구조화 초안 채택 — draftId 지정 시 is_adopted 마킹)"
       x-lane: BE-2
       x-user-stories: [RB-PROJ-01]
       parameters: [{ $ref: "#/components/parameters/ProjectId" }]
@@ -1341,6 +1333,7 @@ paths:
                   data:
                     type: array
                     items: { $ref: "#/components/schemas/Task" }
+        "422": { $ref: "#/components/responses/UnprocessableEntity" }
   /tasks:
     get:
       tags: [tasks]
@@ -1612,9 +1605,8 @@ paths:
   /projects/{projectId}/structuring-drafts:
     post:
       tags: [projects]
-      x-implementation-status: not-implemented
       operationId: generateStructuringDrafts
-      summary: "[미구현] 태스크 구조화 초안 생성 (SS-03 — 정적 규칙 사전, 초안만 · C-2)"
+      summary: "태스크 구조화 초안 생성 (SS-03 — 정적 규칙 사전, 초안만 · C-2)"
       x-lane: BE-2
       x-user-stories: [RB-PROJ-01]
       parameters: [{ $ref: "#/components/parameters/ProjectId" }]
@@ -2354,6 +2346,10 @@ components:
       properties:
         defaultEstimatedMinutes: { type: [integer, "null"], multipleOf: 5, minimum: 5 }
         defaultReplanStrategy: { type: [string, "null"], enum: [KEEP_CURRENT, MINIMAL_CHANGE, DEADLINE_FIRST, WORKLOAD_BALANCE, null] }
+        # 🔴 요일 창의 합계가 아니다. 합계는 availabilities 에서 계산되는 참고용 총량이고,
+        #    이것은 사용자가 직접 정하는 주간 목표다(오너 결정 2026-07-25). 프론트가 두 값을
+        #    이미 구분해 쓰고 있어(availabilityHelpers.rangeSumMinutes) 담을 자리를 여기 만들었다.
+        weeklyAvailableMinutes: { type: [integer, "null"], multipleOf: 5, minimum: 5, description: "주간 가용 시간 목표. null = 미설정 — 요일 창 합계와 별개 값" }
     PreferenceSuggestion:
       type: object
       description: SS-14 출력 — 제안값 + 규칙 근거 (C-3)

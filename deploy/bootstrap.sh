@@ -8,8 +8,9 @@
 #   curl -fsSL <이 파일 raw URL> -o bootstrap.sh && bash bootstrap.sh
 #   또는 저장소를 먼저 클론했다면: bash deploy/bootstrap.sh
 #
-# 🔴 이 스크립트는 아직 실제 EC2에서 실행된 적이 없다. 1차 배포가 검증이다.
-#    실패하면 어느 단계에서 멈췄는지(아래 log 출력) 그대로 알려줄 것.
+# 이 스크립트는 2026-08-17 EC2 1차 배포에서 실행·검증됐다. 그때 드러난 결함 5건
+# (브랜치 미교체 · MAIL_* 미검사 · MAIL_FROM 오판 · buildx 미갱신 · web/ 삭제)은
+# 아래에 각각 주석과 함께 반영돼 있다.
 #
 # 🔴 .env 는 이 스크립트가 만들지 않는다. 비밀값이 들어가므로 사람이 직접 채운다.
 
@@ -17,14 +18,10 @@ set -euo pipefail
 
 BE_REPO="${BE_REPO:-https://github.com/Seeds-OpenPlan/OpenPlan-Backend.git}"
 FE_REPO="${FE_REPO:-https://github.com/Seeds-OpenPlan/OpenPlan-Frontend.git}"
-# 🔴 배포 파일(docker-compose.prod.yml·이 스크립트)이 아직 main 에 머지되지 않았다.
-#    머지 전까지는 이 브랜치를 받아야 한다. 머지된 뒤 BE_BRANCH=main 으로 바꾼다.
-#
-# 🔴 deploy/auth-integration = main(#24 포함) + #22 + #23 + 배포 파일.
-#    main 만으로 배포하면 인증이 스텁이라 로그인이 존재하지 않는다(2026-08-17 실측:
-#    POST /auth/sessions 404 · GET /auth/session 401). #22·#23 이 머지되면 이 브랜치는
-#    버리고 BE_BRANCH=main 으로 되돌린다 — 통합용 임시 브랜치지 유지 대상이 아니다.
-BE_BRANCH="${BE_BRANCH:-deploy/auth-integration}"
+# 인증 실구현(#22·#23, 08-18)과 배포 파일(#31, 08-23)이 모두 main 에 있다. 통합용이던
+# deploy/auth-integration 은 역할이 끝났다 — 그 브랜치는 4e34731(08-17)에서 멈춰 있어
+# 기본값으로 두면 재배포해도 두 주 묵은 코드가 다시 올라간다(서버가 안 바뀌는 원인).
+BE_BRANCH="${BE_BRANCH:-main}"
 FE_BRANCH="${FE_BRANCH:-main}"
 APP_DIR="${APP_DIR:-$HOME/openplan}"
 FE_DIR="$HOME/openplan-fe"
@@ -116,20 +113,53 @@ sync_repo "$FE_DIR"  "$FE_REPO" "$FE_BRANCH"
 
 # ── 4. .env 확인 ─────────────────────────────────────────────────────────────
 log "4/6 .env 확인"
+
+# 시드와 사전검사가 같은 목록을 본다 — 둘이 갈라지면 "안내는 여섯인데 검사는 넷" 이 된다.
+REQUIRED_KEYS=(DB_HOST DB_PASSWORD JWT_SECRET APP_BASE_URL API_BASE_URL
+               GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET MAIL_USERNAME MAIL_PASSWORD
+               EXT_TOKEN_KEY)
+
 if [ ! -f "$APP_DIR/.env" ]; then
-  cp "$APP_DIR/.env.prod.example" "$APP_DIR/.env"
+  # 🔴 .env.example 을 그대로 쓰면 안 된다. 거기엔 로컬 개발 기본값이 채워져 있어
+  #    (DB_HOST=localhost · JWT_SECRET=replace-with-your-local-jwt-secret)
+  #    아래 사전검사가 "비어 있는가" 만 보는 한 전부 통과한다. 특히 JWT_SECRET 은
+  #    34바이트라 HS256 하한(32)을 넘겨 **서버가 정상 기동한다** — 공개 저장소에 박힌
+  #    고정 시크릿으로 운영 토큰을 서명하는 상태가 조용히 생긴다. 기동 실패보다 나쁘다.
+  #    그래서 필수값은 **비운 채로** 시드한다. 비어 있으면 사전검사가 반드시 잡는다.
+  cp "$APP_DIR/.env.example" "$APP_DIR/.env"
+  for k in "${REQUIRED_KEYS[@]}"; do
+    sed -i "s|^${k}=.*|${k}=|" "$APP_DIR/.env"
+  done
   cat <<'MSG'
 
   🔴 .env 를 만들었습니다. 값이 비어 있어 지금 기동하면 실패합니다.
 
      nano ~/openplan/.env
 
-  최소한 이 다섯은 채워야 뜹니다:
+  아래 열을 채워야 뜹니다(4단계 사전검사가 같은 목록을 봅니다):
      DB_HOST         RDS 엔드포인트
      DB_PASSWORD     RDS 마스터 비밀번호
      JWT_SECRET      openssl rand -base64 48
-     EXT_TOKEN_KEY   openssl rand -base64 32   (외부 캘린더 토큰 암호화)
-     APP_BASE_URL / API_BASE_URL   http://<이 서버 공인 IP>
+     APP_BASE_URL    브라우저가 여는 프론트 주소   https://<도메인>
+     API_BASE_URL    이 서버 주소                  https://<도메인>
+     GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET   구글 클라우드 콘솔 발급값
+     MAIL_USERNAME   Gmail 주소
+     MAIL_PASSWORD   Gmail 앱 비밀번호 16자 (계정 비밀번호 아님)
+     EXT_TOKEN_KEY   외부 캘린더 토큰 암호화 키   openssl rand -base64 32
+
+  MAIL_* 이 없으면 가입 메일이 안 나가고, 이메일 미인증 계정은 로그인이
+  403 으로 막혀 "떴지만 아무도 못 쓰는" 서버가 됩니다.
+
+  GOOGLE_* 이 없으면 소셜 로그인 버튼이 눌리기는 하는데 항상
+  /login?error=E-AUTH-010 으로 되돌아옵니다 — 서버는 멀쩡히 뜹니다.
+
+  🔴 API_BASE_URL 에 구글 콘솔 등록값과 한 글자라도 다른 값을 넣으면 콜백이
+     redirect_uri_mismatch 로 막힙니다. 구글은 HTTPS 만 받고 raw IP 는 등록조차
+     안 되므로, 도메인 없이는 http://<공인 IP> 를 넣어도 소셜 로그인이 안 섭니다.
+     카카오·네이버 키는 필수가 아닙니다(포기 순서에 있는 값이라 배포를 막지 않습니다).
+
+  🔴 .env.example 의 예시값을 그대로 두면 미입력으로 봅니다. 특히 JWT_SECRET 은
+     저장소에 박힌 값이라 그대로 쓰면 토큰을 누구나 위조할 수 있습니다.
 
   채운 뒤 이 스크립트를 다시 실행하십시오.
 
@@ -147,15 +177,31 @@ fi
 #    MAIL_FROM 은 넣지 않는다 — MailConfig.resolveFrom 이 비어 있으면 SMTP 계정으로
 #    대체하므로 선택값이다. 여기에 넣으면 안 채워도 되는 값 때문에 배포가 막힌다.
 #
+# 🔴 GOOGLE_* · API_BASE_URL 이 목록에 든 이유(2026-08-23 실측): 배포 서버의
+#    /auth/oauth/{google,naver,kakao} 가 셋 다 302 /login?error=E-AUTH-010 이었다.
+#    OAuthProperties.configured() 는 client-id/secret 이 비면 그 제공자를 막는데,
+#    .env.example 의 GOOGLE_CLIENT_ID= 가 빈 값이라 "비어 있는가" 검사를 그대로
+#    통과했다. 서버는 정상 기동하고 소셜 로그인만 죽어 있다 — MAIL_* 과 같은 종류의
+#    "떴지만 못 쓰는" 상태다.
+#    API_BASE_URL 은 redirect_uri 가 붙는 자리인데 목록에 없어 example 의
+#    http://localhost:8080 이 살아남았다. 키를 채워도 콜백이 localhost 로 나간다.
+#    🔴 카카오·네이버 키는 넣지 않는다 — 구글 최우선·둘은 포기 순서(6주차 문서
+#    "인증 범위 결정")라, 필수로 걸면 놓기로 한 것 때문에 배포가 막힌다.
+#
 # 🔴 EXT_TOKEN_KEY 가 목록에 든 이유(ST-B1-11): ExternalTokenCipher 는 키가 비어 있어도
 #    기동을 통과시킨다(의도된 설계 — 외부 캘린더를 안 쓰는 배포까지 막지 않기 위함).
 #    그래서 이 값이 없으면 서버는 멀쩡히 뜬 뒤 POST /external-calendar-connections 마다
-#    조용히 E-COM-005 500 을 낸다. MAIL_* 에서 이미 한 번 겪은 "떴지만 못 쓰는" 상태다.
+#    조용히 E-COM-005 500 을 낸다. MAIL_* · GOOGLE_* 과 같은 "떴지만 못 쓰는" 상태다.
 #    openssl rand -base64 32 로 만든다.
+#
+# 🔴 "비어 있는가" 만으로는 부족하다. .env.example 의 값을 그대로 둔 것도 미입력으로 본다 —
+#    블록리스트를 쓰지 않고 example 과 대조하므로, 앞으로 예시 기본값이 늘어도 저절로 잡힌다.
 missing=()
-for k in DB_HOST DB_PASSWORD JWT_SECRET APP_BASE_URL MAIL_USERNAME MAIL_PASSWORD EXT_TOKEN_KEY; do
+for k in "${REQUIRED_KEYS[@]}"; do
   v="$(grep -E "^${k}=" "$APP_DIR/.env" | cut -d= -f2- || true)"
-  if [ -z "$v" ] || [[ "$v" == *"<EC2_PUBLIC_IP>"* ]]; then
+  example="$(grep -E "^${k}=" "$APP_DIR/.env.example" | cut -d= -f2- || true)"
+  if [ -z "$v" ] || [[ "$v" == *"<EC2_PUBLIC_IP>"* ]] \
+     || { [ -n "$example" ] && [ "$v" = "$example" ]; }; then
     missing+=("$k")
   fi
 done

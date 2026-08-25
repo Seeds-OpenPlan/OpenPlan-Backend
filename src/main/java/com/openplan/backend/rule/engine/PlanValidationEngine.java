@@ -6,6 +6,7 @@ import com.openplan.backend.rule.model.FixedWindow;
 import com.openplan.backend.rule.model.PlanSnapshot;
 import com.openplan.backend.rule.model.RuleId;
 import com.openplan.backend.rule.model.Severity;
+import com.openplan.backend.rule.model.TaskFacts;
 import com.openplan.backend.rule.model.ValidationIssue;
 import com.openplan.backend.rule.model.ValidationReport;
 import com.openplan.backend.rule.port.PlanValidationPort;
@@ -14,6 +15,7 @@ import java.time.DayOfWeek;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -28,8 +30,7 @@ import java.util.Map;
  *              시각은 오직 {@code snapshot.referenceTime()}. (RuleEnginePurityTest 로 강제)
  * C-2: 저장소 핸들 없음 — 순수 함수, 자동 확정 불가.
  *
- * 구현 현황: V1(겹침·차단) · V2(고정 일정 충돌·차단) · V3(가용시간 초과·경고).
- *   V4·V5·V6 = 미구현. V7 = 임계값 승인 완료(D-19, ASSUMPTION-Q2 버퍼 10%)이나 구현은 W6 예정.
+ * 구현 현황: V1~V7 전량. 차단은 V1·V2, 나머지는 경고.
  */
 public final class PlanValidationEngine implements PlanValidationPort {
 
@@ -48,6 +49,16 @@ public final class PlanValidationEngine implements PlanValidationPort {
      * UUID 비교는 {@link java.util.UUID#compareTo} 자연 순서를 쓴다 — 대표 블록 선정(§3.3
      * "UUID 오름차순 첫 블록")과 반드시 같은 기준이어야 정렬·선정이 어긋나지 않는다.
      */
+    /**
+     * V7 버퍼 부족 임계값(%) — {@code ASSUMPTION-Q2}, 리드 승인 D-19.
+     *
+     * <p>정본 US가 값을 침묵해 신설한 가정이다. 요일 가용 시간의 10% 미만이 남으면 "여유 없음"으로 본다 —
+     * V3(초과)와 무경고 구간 사이를 메우는 최소 창작이다. <b>주입형이 아니라 상수인 이유</b>는 계약이
+     * 문구 정본을 코드 상수로 확정한 것과 같다(C-1: 엔진은 IO를 하지 않는다). 재결정 시 이 값을 바꾸고
+     * 골든을 갱신한다 — 의도된 마찰이다.
+     */
+    private static final int BUFFER_THRESHOLD_PCT = 10;
+
     private static final Comparator<ValidationIssue> ORDER =
             Comparator.comparingInt((ValidationIssue i) -> i.severity().ordinal())
                     .thenComparingInt(i -> i.ruleId().ordinal())
@@ -62,10 +73,10 @@ public final class PlanValidationEngine implements PlanValidationPort {
         issues.addAll(checkOverlap(snapshot));          // V1 (BLOCK)
         issues.addAll(checkFixedConflict(snapshot));    // V2 (BLOCK)
         issues.addAll(checkCapacityExceeded(snapshot)); // V3 (WARNING)
-
-        // 미구현 — rule-engine-contract §3.3:
-        //   V4_OUT_OF_AVAILABILITY(경고) · V5_OUT_OF_WBS(경고) · V6_AFTER_DUE_DATE(경고)
-        //   V7_BUFFER_SHORTAGE: 임계값 10% 승인 완료(D-19) — 구현은 W6.
+        issues.addAll(checkOutOfAvailability(snapshot));// V4 (WARNING)
+        issues.addAll(checkOutOfWbs(snapshot));         // V5 (WARNING)
+        issues.addAll(checkAfterDueDate(snapshot));     // V6 (WARNING)
+        issues.addAll(checkBufferShortage(snapshot));   // V7 (WARNING)
 
         issues.sort(ORDER);
         boolean savable = issues.stream().noneMatch(i -> i.severity() == Severity.BLOCK);
@@ -200,19 +211,8 @@ public final class PlanValidationEngine implements PlanValidationPort {
      * (계약 §3.3 V3: "요일 배치 총량(분) > 해당 요일 가용 총량")
      */
     private List<ValidationIssue> checkCapacityExceeded(PlanSnapshot s) {
-        Map<DayOfWeek, Long> placedMinutes = new EnumMap<>(DayOfWeek.class);
-        for (BlockView b : s.blocks()) {
-            DayOfWeek weekday = b.startAt().atZone(s.zone()).getDayOfWeek(); // zone 기준 요일
-            long minutes = Duration.between(b.startAt(), b.endAt()).toMinutes();
-            placedMinutes.merge(weekday, minutes, Long::sum);
-        }
-
-        Map<DayOfWeek, Long> capacityMinutes = new EnumMap<>(DayOfWeek.class);
-        for (AvailabilityWindow a : s.availabilities()) {
-            if (!a.active()) continue;
-            long minutes = Duration.between(a.startTime(), a.endTime()).toMinutes();
-            capacityMinutes.merge(a.weekday(), minutes, Long::sum);
-        }
+        Map<DayOfWeek, Long> placedMinutes = placedMinutesByWeekday(s);
+        Map<DayOfWeek, Long> capacityMinutes = capacityMinutesByWeekday(s);
 
         List<ValidationIssue> issues = new ArrayList<>();
         for (Map.Entry<DayOfWeek, Long> e : placedMinutes.entrySet()) {
@@ -225,5 +225,201 @@ public final class PlanValidationEngine implements PlanValidationPort {
             }
         }
         return issues;
+    }
+
+    /**
+     * V4 가용 시간 밖 배치 (경고) — 계약 §3.3: "블록 구간이 해당 요일 가용 창에 완전히 포함되지 않음".
+     *
+     * <p><b>완전 포함</b>이 기준이다 — 일부만 걸쳐도 위반이다. 부분 허용으로 두면 09:00~18:00 가용에
+     * 17:00~22:00 배치가 통과해, 사용자가 실제로 못 쓰는 시간에 계획이 서 있게 된다.
+     *
+     * <p><b>자정을 넘는 블록은 항상 위반이다.</b> 가용 창은 {@code startTime < endTime} 이라 자정을
+     * 넘지 못하므로(DB {@code ck_availability_range}) 그런 블록을 담을 창이 존재할 수 없다. 요일 귀속은
+     * V3 경계 e·V6 승계 — {@code startAt} 의 zone 요일에 전량 귀속하고 요일별로 쪼개지 않는다.
+     *
+     * <p>창이 여럿이면 <b>합집합</b>에 포함되는지를 본다. 창 하나하나와 비교하면 09:00~12:00 과
+     * 12:00~18:00 로 나뉜 요일에서 11:00~13:00 배치가 어느 창에도 완전히 안 들어가 위반이 되는데,
+     * 실제로는 가용 시간이 연속이라 쓸 수 있는 시간이다.
+     */
+    private List<ValidationIssue> checkOutOfAvailability(PlanSnapshot s) {
+        Map<DayOfWeek, List<LocalTime[]>> windows = activeWindowsByWeekday(s);
+        List<ValidationIssue> issues = new ArrayList<>();
+
+        for (BlockView b : s.blocks()) {
+            ZonedDateTime start = b.startAt().atZone(s.zone());
+            ZonedDateTime end = b.endAt().atZone(s.zone());
+            DayOfWeek weekday = start.getDayOfWeek();
+            List<LocalTime[]> dayWindows = windows.getOrDefault(weekday, List.of());
+
+            boolean crossesMidnight = !end.toLocalDate().equals(start.toLocalDate());
+            boolean covered = !crossesMidnight
+                    && isCoveredByUnion(start.toLocalTime(), end.toLocalTime(), dayWindows);
+            if (covered) {
+                continue;
+            }
+            issues.add(new ValidationIssue(
+                    RuleId.V4_OUT_OF_AVAILABILITY, Severity.WARNING,
+                    b.blockId(), null, b.taskId(), weekday,
+                    RuleMessages.v4OutOfAvailability(
+                            weekday, start.toLocalTime(), end.toLocalTime(), dayWindows)));
+        }
+        return issues;
+    }
+
+    /**
+     * V5 WBS 기간 밖 배치 (경고) — 계약 §3.3: "TASK 블록 배치일 ∉ [wbsStart, wbsEnd]".
+     *
+     * <p><b>WBS 미설정 태스크는 판정 제외</b>다(계약 명시). 미설정을 위반으로 읽으면 WBS를 아직 안 쓴
+     * 사용자의 모든 배치가 경고가 된다 — 기능을 안 쓰는 것이 잘못이 아니다.
+     * 시작·끝 중 하나만 있는 경우도 구간이 성립하지 않으므로 제외한다.
+     */
+    private List<ValidationIssue> checkOutOfWbs(PlanSnapshot s) {
+        List<ValidationIssue> issues = new ArrayList<>();
+        for (BlockView b : s.blocks()) {
+            TaskFacts facts = taskFactsOf(s, b);
+            if (facts == null || facts.wbsStart() == null || facts.wbsEnd() == null) {
+                continue;
+            }
+            ZonedDateTime start = b.startAt().atZone(s.zone());
+            LocalDate placedOn = start.toLocalDate();
+            if (!placedOn.isBefore(facts.wbsStart()) && !placedOn.isAfter(facts.wbsEnd())) {
+                continue;
+            }
+            issues.add(new ValidationIssue(
+                    RuleId.V5_OUT_OF_WBS, Severity.WARNING,
+                    b.blockId(), null, b.taskId(), start.getDayOfWeek(),
+                    RuleMessages.v5OutOfWbs(start.getDayOfWeek(), placedOn,
+                            facts.wbsStart(), facts.wbsEnd())));
+        }
+        return issues;
+    }
+
+    /**
+     * V6 마감일 이후 배치 (경고) — 계약 §3.3: "TASK 블록 배치일 > dueDate (null 제외)".
+     *
+     * <p>배치일 = zone 기준 {@code startAt} 의 날짜(계약 명시). 자정을 넘는 블록도 시작 날짜로 판단한다 —
+     * 끝 날짜로 보면 23:00 시작 블록이 마감 당일에도 위반이 되어, 마감일에 일하는 정상 배치가 경고를 받는다.
+     */
+    private List<ValidationIssue> checkAfterDueDate(PlanSnapshot s) {
+        List<ValidationIssue> issues = new ArrayList<>();
+        for (BlockView b : s.blocks()) {
+            TaskFacts facts = taskFactsOf(s, b);
+            if (facts == null || facts.dueDate() == null) {
+                continue;
+            }
+            ZonedDateTime start = b.startAt().atZone(s.zone());
+            LocalDate placedOn = start.toLocalDate();
+            if (!placedOn.isAfter(facts.dueDate())) {
+                continue;
+            }
+            issues.add(new ValidationIssue(
+                    RuleId.V6_AFTER_DUE_DATE, Severity.WARNING,
+                    b.blockId(), null, b.taskId(), start.getDayOfWeek(),
+                    RuleMessages.v6AfterDueDate(start.getDayOfWeek(), placedOn, facts.dueDate())));
+        }
+        return issues;
+    }
+
+    /**
+     * V7 버퍼 부족 (경고) — us-decisions-kr §2 Q2 확정 · 임계값 승인 D-19.
+     *
+     * <p>{@code buffer(d) = available(d) − planned(d)}, 발생 조건은
+     * {@code 0 ≤ buffer(d)} <b>이고</b> {@code buffer(d) × 100 < available(d) × BUFFER_THRESHOLD_PCT}.
+     * <b>정수 연산만</b> 쓴다(부동소수 금지, P1) — 비율을 나눗셈으로 구하면 반올림이 경계에서 갈린다.
+     *
+     * <p><b>V3와 상호 배타</b>인 것이 조건에서 저절로 따라온다: {@code planned > available} 이면
+     * {@code buffer < 0} 이라 첫 조건이 깨진다. 같은 요일에 "초과"와 "여유 부족"이 함께 나오면
+     * 사용자는 무엇을 해야 하는지 알 수 없다.
+     *
+     * <p>{@code available(d) = 0} 인 요일도 저절로 제외된다 — 배치가 있으면 {@code buffer < 0},
+     * 배치가 없으면 {@code 0 < 0} 이 거짓이다. 계약이 "V7 미발생(배치가 있으면 V4 영역)"이라 한 것과 일치한다.
+     */
+    private List<ValidationIssue> checkBufferShortage(PlanSnapshot s) {
+        Map<DayOfWeek, Long> placedMinutes = placedMinutesByWeekday(s);
+        Map<DayOfWeek, Long> capacityMinutes = capacityMinutesByWeekday(s);
+
+        List<ValidationIssue> issues = new ArrayList<>();
+        for (Map.Entry<DayOfWeek, Long> e : capacityMinutes.entrySet()) {
+            long available = e.getValue();
+            long planned = placedMinutes.getOrDefault(e.getKey(), 0L);
+            long buffer = available - planned;
+            if (buffer < 0 || buffer * 100 >= available * BUFFER_THRESHOLD_PCT) {
+                continue;
+            }
+            issues.add(new ValidationIssue(
+                    RuleId.V7_BUFFER_SHORTAGE, Severity.WARNING,
+                    null, null, null, e.getKey(),
+                    RuleMessages.v7BufferShortage(e.getKey(), available, planned)));
+        }
+        return issues;
+    }
+
+    /**
+     * 요일별 배치 총 분 — V3·V7 공용.
+     *
+     * <p>요일 귀속은 zone 기준 {@code startAt} 이며 자정을 넘어도 쪼개지 않는다(계약 §3.3 경계 e).
+     * V3와 V7이 각자 집계하면 <b>같은 요일에 서로 다른 총량을 보고</b> 상호 배타가 깨질 수 있다.
+     */
+    private static Map<DayOfWeek, Long> placedMinutesByWeekday(PlanSnapshot s) {
+        Map<DayOfWeek, Long> placed = new EnumMap<>(DayOfWeek.class);
+        for (BlockView b : s.blocks()) {
+            DayOfWeek weekday = b.startAt().atZone(s.zone()).getDayOfWeek();
+            placed.merge(weekday, Duration.between(b.startAt(), b.endAt()).toMinutes(), Long::sum);
+        }
+        return placed;
+    }
+
+    /** 요일별 활성 가용 총 분 — V3·V7 공용. 비활성 창은 세지 않는다. */
+    private static Map<DayOfWeek, Long> capacityMinutesByWeekday(PlanSnapshot s) {
+        Map<DayOfWeek, Long> capacity = new EnumMap<>(DayOfWeek.class);
+        for (AvailabilityWindow a : s.availabilities()) {
+            if (!a.active()) continue;
+            capacity.merge(a.weekday(), Duration.between(a.startTime(), a.endTime()).toMinutes(), Long::sum);
+        }
+        return capacity;
+    }
+
+    /** 블록이 가리키는 태스크의 사실. TASK 블록이 아니거나 사실이 없으면 null. */
+    private static TaskFacts taskFactsOf(PlanSnapshot s, BlockView b) {
+        return b.taskId() == null ? null : s.taskFacts().get(b.taskId());
+    }
+
+    /** 요일별 활성 가용 창 — <b>시작 시각 오름차순</b>. 정렬은 문구·합집합 판정 양쪽의 전제다(P1). */
+    private static Map<DayOfWeek, List<LocalTime[]>> activeWindowsByWeekday(PlanSnapshot s) {
+        Map<DayOfWeek, List<LocalTime[]>> byWeekday = new EnumMap<>(DayOfWeek.class);
+        for (AvailabilityWindow a : s.availabilities()) {
+            if (!a.active()) continue;
+            byWeekday.computeIfAbsent(a.weekday(), k -> new ArrayList<>())
+                    .add(new LocalTime[]{a.startTime(), a.endTime()});
+        }
+        for (List<LocalTime[]> windows : byWeekday.values()) {
+            windows.sort(Comparator.comparing(w -> w[0]));
+        }
+        return byWeekday;
+    }
+
+    /**
+     * {@code [start, end)} 가 창들의 <b>합집합</b>에 완전히 포함되는가.
+     *
+     * <p>창을 시작 시각 순으로 훑으며 커버된 지점을 앞으로 민다. 인접·중첩 창은 이어진 것으로 본다 —
+     * 09:00~12:00 과 12:00~18:00 사이에는 쓸 수 없는 시간이 없다.
+     */
+    private static boolean isCoveredByUnion(LocalTime start, LocalTime end, List<LocalTime[]> windows) {
+        if (!start.isBefore(end)) {
+            return false; // 길이 0 이하 — 정상 배치가 아니다.
+        }
+        LocalTime reached = start;
+        for (LocalTime[] w : windows) {
+            if (w[0].isAfter(reached)) {
+                break; // 빈틈이 생겼다.
+            }
+            if (w[1].isAfter(reached)) {
+                reached = w[1];
+            }
+            if (!reached.isBefore(end)) {
+                return true;
+            }
+        }
+        return false;
     }
 }
