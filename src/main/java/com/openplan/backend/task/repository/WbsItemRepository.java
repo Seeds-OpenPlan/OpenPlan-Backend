@@ -18,6 +18,9 @@ public interface WbsItemRepository extends JpaRepository<WbsItem, UUID> {
 
     Optional<WbsItem> findByTaskId(UUID taskId);
 
+    /** 프로젝트의 WBS 항목 수 (복제 프리뷰 — PROJ-11). */
+    long countByProjectId(UUID projectId);
+
     /**
      * WBS 기간 업서트 (PUT — 있으면 갱신, 없으면 생성). {@code INSERT ... ON CONFLICT (task_id)
      * DO UPDATE} 단일 원자문으로 동시 요청의 UNIQUE 경합을 흡수한다.
