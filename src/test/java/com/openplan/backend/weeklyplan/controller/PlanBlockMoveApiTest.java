@@ -155,6 +155,60 @@ class PlanBlockMoveApiTest {
                 .isEqualTo(existingTarget);
     }
 
+    @Test
+    @DisplayName("동시 주차 이동 — 같은 신규 주로 블록 2개 병렬 이동, 500 없이 계획 1행으로 수렴 (UNIQUE 경합 방어)")
+    void concurrentMoveToSameNewWeekConvergesWithout500() throws Exception {
+        UUID plan = insertWeeklyPlan(MAIN, WEEK, "DRAFT", null);
+        UUID task1 = insertTask(project, "태스크1", TaskStatus.UNASSIGNED);
+        UUID task2 = insertTask(project, "태스크2", TaskStatus.UNASSIGNED);
+        UUID block1 = placeTaskBlock(plan, task1, START, END);
+        UUID block2 = placeTaskBlock(plan, task2, START, END);
+        // NEXT_WEEK 계획은 아직 없음 → 두 요청이 각자 get-or-create 시도 = UNIQUE 경합 유발
+
+        String body = "{\"startAt\":\"2026-08-10T00:00:00Z\",\"endAt\":\"2026-08-10T01:00:00Z\","
+                + "\"targetWeekStartDate\":\"2026-08-10\"}";
+
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        java.util.concurrent.CountDownLatch ready = new java.util.concurrent.CountDownLatch(2);
+        java.util.concurrent.CountDownLatch go = new java.util.concurrent.CountDownLatch(1);
+        try {
+            // 두 스레드를 go 신호에 맞춰 같은 순간 출발시켜 경합 창을 넓힌다.
+            java.util.concurrent.Future<Integer> f1 = pool.submit(() -> moveStatus(block1, body, ready, go));
+            java.util.concurrent.Future<Integer> f2 = pool.submit(() -> moveStatus(block2, body, ready, go));
+            ready.await();
+            go.countDown();
+            int s1 = f1.get();
+            int s2 = f2.get();
+
+            // 어느 쪽도 500이 아니어야 한다(경합이 터졌다면 catch 로 기존 반환에 수렴).
+            assertThat(s1).isNotEqualTo(500);
+            assertThat(s2).isNotEqualTo(500);
+            assertThat(s1).isEqualTo(200);
+            assertThat(s2).isEqualTo(200);
+        } finally {
+            pool.shutdownNow();
+        }
+
+        // 대상 주 계획은 정확히 1행(중복 생성 없음)이고 블록 2개가 그쪽으로 이동.
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM weekly_plans WHERE user_id = ? AND week_start_date = ?",
+                Integer.class, MAIN, NEXT_WEEK)).isEqualTo(1);
+        UUID target = UUID.fromString(jdbc.queryForObject(
+                "SELECT weekly_plan_id FROM weekly_plans WHERE user_id = ? AND week_start_date = ?",
+                String.class, MAIN, NEXT_WEEK));
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM plan_blocks WHERE weekly_plan_id = ?",
+                Integer.class, target)).isEqualTo(2);
+    }
+
+    /** 두 스레드가 go 신호에 맞춰 동시에 PATCH-이동하고 HTTP 상태를 돌려준다. */
+    private int moveStatus(UUID blockId, String body, java.util.concurrent.CountDownLatch ready,
+                           java.util.concurrent.CountDownLatch go) throws Exception {
+        ready.countDown();
+        go.await();
+        return mockMvc.perform(patch("/api/v1/plan-blocks/" + blockId).header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andReturn().getResponse().getStatus();
+    }
+
     // ---------- 검증 ----------
 
     @Test
