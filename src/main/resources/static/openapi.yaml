@@ -517,6 +517,7 @@ paths:
                 type: object
                 properties:
                   data: { $ref: "#/components/schemas/Preferences" }
+        "422": { $ref: "#/components/responses/UnprocessableEntity" }
   /users/me/preference-suggestions:
     get:
       tags: [users]
@@ -1301,6 +1302,7 @@ paths:
                   data:
                     type: array
                     items: { $ref: "#/components/schemas/Task" }
+        "422": { $ref: "#/components/responses/UnprocessableEntity" }
   /tasks:
     get:
       tags: [tasks]

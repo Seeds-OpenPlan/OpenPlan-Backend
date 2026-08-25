@@ -54,10 +54,14 @@ public class PreferencesService {
     public PreferencesResponse save(UUID userId, PreferencesRequest req) {
         validate(req);
 
-        UserPreferences prefs = repository.findById(userId)
-                .orElseGet(() -> repository.save(new UserPreferences(userId, clock.now())));
-        prefs.replace(req.defaultEstimatedMinutes(), req.defaultReplanStrategy(),
+        // 원자적 업서트(경합 안전) 후 재조회 — 근거는 UserPreferencesRepository.upsert 참고.
+        // (이전엔 findById 후 없으면 save 하는 find-or-create였는데, 첫 저장이 동시에 두 번 들어오면
+        // 둘 다 INSERT를 시도해 하나가 PK 위반 500으로 떨어졌다 — 리뷰 Blocking, PR #41.)
+        repository.upsert(userId, req.defaultEstimatedMinutes(), req.defaultReplanStrategy(),
                 req.weeklyAvailableMinutes(), clock.now());
+        UserPreferences prefs = repository.findById(userId)
+                .orElseThrow(() -> new IllegalStateException(
+                        "upsert 직후 user_preferences 재조회 실패 — user_id=" + userId)); // 발생 시 버그(같은 tx 내 재조회)
 
         return PreferencesResponse.from(prefs);
     }
