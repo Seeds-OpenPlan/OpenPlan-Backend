@@ -1170,9 +1170,8 @@ paths:
   /projects/{projectId}/duplication-preview:
     get:
       tags: [projects]
-      x-implementation-status: not-implemented
       operationId: getDuplicationPreview
-      summary: "[미구현] 복제 항목 확인 (이름·설명·태스크·WBS 개요 — PROJ-11)"
+      summary: "복제 항목 확인 (이름·설명·태스크·WBS 개요 — PROJ-11)"
       x-lane: BE-2
       x-user-stories: [PROJ-10, PROJ-11]
       parameters: [{ $ref: "#/components/parameters/ProjectId" }]
