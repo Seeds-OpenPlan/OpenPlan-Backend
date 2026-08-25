@@ -1,0 +1,24 @@
+# OpenPlan — CD 감시자 (타이머가 부른다. 이 유닛 자체는 enable 하지 않는다)
+[Unit]
+Description=OpenPlan CD — 원격 브랜치가 바뀌면 재배포한다
+# 네트워크가 없으면 ls-remote 가 실패한다. 부팅 직후 헛도는 것을 막는다.
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ec2-user
+# bootstrap.sh 가 sudo 를 쓴다. AL2023 의 ec2-user 는 NOPASSWD 라 그대로 된다.
+Environment=HOME=/home/ec2-user
+WorkingDirectory=/home/ec2-user/openplan
+ExecStart=/bin/bash /home/ec2-user/openplan/deploy/cd-watch.sh
+
+# 🔴 타임아웃을 넉넉히 준다. t3.medium 에서 npm ci + vite build + gradle build 를
+#    하면 10분을 넘길 수 있다. 여기서 끊기면 이미지가 반만 구워진 채
+#    컨테이너가 뜨는 최악의 상태가 된다. (AI 는 아직 이 배포에 포함되지 않는다 —
+#    bootstrap.sh·docker-compose.prod.yml 참고.)
+TimeoutStartSec=45min
+
+# 로그는 journal 로 간다: journalctl -u openplan-cd.service -n 100
+StandardOutput=journal
+StandardError=journal

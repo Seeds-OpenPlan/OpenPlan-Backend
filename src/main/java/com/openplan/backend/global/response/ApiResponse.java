@@ -12,8 +12,12 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record ApiResponse<T>(T data, Meta meta) {
 
+    /**
+     * 봉투 meta. {@code unreadCount}는 알림 센터 전용(정본 openapi {@code listNotifications})이라
+     * 다른 응답에서는 null 이며, {@code NON_NULL}로 직렬화에서 빠진다 — 기존 응답의 모양은 변하지 않는다.
+     */
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record Meta(PageMeta page) {
+    public record Meta(PageMeta page, Integer unreadCount) {
     }
 
     public static <T> ApiResponse<T> ok(T data) {
@@ -21,6 +25,11 @@ public record ApiResponse<T>(T data, Meta meta) {
     }
 
     public static <T> ApiResponse<T> ok(T data, PageMeta page) {
-        return new ApiResponse<>(data, new Meta(page));
+        return new ApiResponse<>(data, new Meta(page, null));
+    }
+
+    /** 알림 센터 — 목록 + 페이지 + 미읽음 수(NOTI-02). */
+    public static <T> ApiResponse<T> ok(T data, PageMeta page, int unreadCount) {
+        return new ApiResponse<>(data, new Meta(page, unreadCount));
     }
 }

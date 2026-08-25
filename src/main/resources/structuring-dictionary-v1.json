@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "source": "us-decisions-kr.md §4.1 (ASSUMPTION-D1) — RB-PLAN-01(정본 56행) 정적 규칙 사전. 스키마: rule-engine-contract.md §4",
+  "entries": [
+    {
+      "key": "REPORT",
+      "keywords": ["보고서", "레포트", "리포트"],
+      "drafts": [
+        { "title": "자료 조사", "estimatedMinutes": 120, "priority": 2 },
+        { "title": "개요 작성", "estimatedMinutes": 60, "priority": 2 },
+        { "title": "본문 작성", "estimatedMinutes": 180, "priority": 1 },
+        { "title": "검토·제출", "estimatedMinutes": 60, "priority": 1 }
+      ]
+    },
+    {
+      "key": "EXAM",
+      "keywords": ["시험", "중간고사", "기말고사", "퀴즈"],
+      "drafts": [
+        { "title": "범위 정리", "estimatedMinutes": 60, "priority": 2 },
+        { "title": "개념 학습", "estimatedMinutes": 180, "priority": 1 },
+        { "title": "문제 풀이", "estimatedMinutes": 120, "priority": 1 },
+        { "title": "오답 정리", "estimatedMinutes": 60, "priority": 2 }
+      ]
+    },
+    {
+      "key": "PRESENTATION",
+      "keywords": ["발표", "프레젠테이션", "PT"],
+      "drafts": [
+        { "title": "자료 조사", "estimatedMinutes": 90, "priority": 2 },
+        { "title": "슬라이드 작성", "estimatedMinutes": 120, "priority": 1 },
+        { "title": "대본 작성", "estimatedMinutes": 60, "priority": 2 },
+        { "title": "리허설", "estimatedMinutes": 60, "priority": 1 }
+      ]
+    },
+    {
+      "key": "PAPER",
+      "keywords": ["논문", "학술"],
+      "drafts": [
+        { "title": "선행 연구 조사", "estimatedMinutes": 180, "priority": 1 },
+        { "title": "초록·개요 작성", "estimatedMinutes": 60, "priority": 2 },
+        { "title": "본문 작성", "estimatedMinutes": 240, "priority": 1 },
+        { "title": "인용·검토", "estimatedMinutes": 90, "priority": 2 }
+      ]
+    },
+    {
+      "key": "DEV",
+      "keywords": ["개발", "코딩", "프로그래밍", "앱", "웹"],
+      "drafts": [
+        { "title": "요구 정리", "estimatedMinutes": 60, "priority": 2 },
+        { "title": "설계", "estimatedMinutes": 90, "priority": 1 },
+        { "title": "구현", "estimatedMinutes": 240, "priority": 1 },
+        { "title": "테스트·정리", "estimatedMinutes": 90, "priority": 2 }
+      ]
+    },
+    {
+      "key": "STUDY",
+      "keywords": ["공부", "학습", "스터디", "강의"],
+      "drafts": [
+        { "title": "학습 범위 정리", "estimatedMinutes": 30, "priority": 2 },
+        { "title": "학습 수행", "estimatedMinutes": 120, "priority": 1 },
+        { "title": "복습·정리", "estimatedMinutes": 60, "priority": 2 }
+      ]
+    },
+    {
+      "key": "GENERIC",
+      "keywords": [],
+      "drafts": [
+        { "title": "준비", "estimatedMinutes": 60, "priority": 2 },
+        { "title": "수행", "estimatedMinutes": 120, "priority": 1 },
+        { "title": "마무리·검토", "estimatedMinutes": 60, "priority": 2 }
+      ]
+    }
+  ]
+}
