@@ -1563,15 +1563,18 @@ paths:
   /projects/{projectId}/wbs:
     get:
       tags: [projects]
-      x-implementation-status: not-implemented
       operationId: getProjectWbs
-      summary: "[미구현] WBS 뷰 (태스크별 기간 바)"
+      summary: "WBS 뷰 (태스크별 기간 바)"
       x-lane: BE-2
       x-user-stories: [PROJ-13]
       parameters: [{ $ref: "#/components/parameters/ProjectId" }]
       responses:
         "200":
-          description: OK
+          description: >-
+            OK — 정렬 start_date ASC, end_date ASC, wbs_item_id ASC 서버 고정(간트 바를 시작일 순으로 렌더링).
+            페이지네이션 없음(전량 반환). 기간 미설정 태스크는 wbs_items 행이 없어 미포함 —
+            "전체 태스크 + 기간 유무" 뷰가 필요하면 GET /projects/{projectId}/tasks 와 합성한다.
+            평가 불요 — CLOSED/PAUSED 프로젝트도 조회 가능. 부재·타인 projectId → 404 E-COM-004.
           content:
             application/json:
               schema:
