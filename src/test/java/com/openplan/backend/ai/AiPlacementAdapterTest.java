@@ -117,6 +117,22 @@ class AiPlacementAdapterTest {
     }
 
     @Test
+    @DisplayName("AI 응답 배열에 null 원소가 섞여도 NPE 없이 나머지 유효한 제안은 살아남는다")
+    void 배열_원소가_null이어도_500이_나지_않는다() {
+        // Jackson 은 JSON 배열의 null 원소를 그대로 역직렬화하므로, 리스트 안에 null 이 섞여 올 수 있다.
+        List<AiPlanDraftClient.DraftResponse.ProposedBlock> 원소null섞임 = new java.util.ArrayList<>();
+        원소null섞임.add(블록(T1, 시작, 종료));
+        원소null섞임.add(null);
+        var 응답 = new AiPlanDraftClient.DraftResponse(원소null섞임, List.of(), "근거", null);
+
+        PlacementResult r = new AiPlacementAdapter(대역(응답, null), new 규칙대역()).propose(snapshot, List.of(T1, T2));
+
+        // null 원소는 계약 밖 제안과 동일하게 조용히 버려지고, 나머지 유효한 T1 제안은 그대로 살아남는다.
+        assertThat(r.placements()).extracting(ProposedPlacement::taskId).containsExactly(T1);
+        assertThat(r.unplacedTaskIds()).containsExactly(T2);
+    }
+
+    @Test
     @DisplayName("배치할 태스크가 없으면 AI 를 부르지 않는다 — 빈 요청에 한도를 쓰지 않는다")
     void 빈_요청은_AI를_안_부른다() {
         규칙대역 규칙 = new 규칙대역();

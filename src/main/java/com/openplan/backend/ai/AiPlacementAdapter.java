@@ -62,9 +62,21 @@ public class AiPlacementAdapter implements PlanPlacementPort {
      * <p>AI 가 {@code tasksToPlace} 밖의 태스크를 배치해 보낼 수 있는데, 그대로 통과시키면 사용자가
      * 건드리지 않기로 한 블록이 옮겨진다. 대상 선정은 Spring 이 한다는 계약 §7 #3 을 응답 쪽에서도 지킨다.
      * {@code SCHEDULE} 타입도 버린다 — 자동 배치는 미배치 <b>태스크</b>만 대상이다.
+     *
+     * <p><b>배열 원소 자체가 {@code null} 인 경우도 같은 "계약 밖 제안" 으로 다룬다.</b> Jackson 은
+     * JSON 배열의 {@code null} 원소를 역직렬화 시점에 그대로 통과시키므로, AI 가 {@code [..., null, ...]}
+     * 를 보내면 그 원소가 스트림에 살아 들어온다. 이걸 걸러내지 않으면 아래 첫 필터에서 {@code b.taskId()}
+     * 가 NPE 를 내고, 이 메서드는 {@link #propose} 의 try 블록 안에서 호출되므로 그 NPE 는
+     * {@link AiPlanDraftClient.AiUnavailableException} 이 아니라서 폴백 catch 를 통과하지 못한 채 그대로
+     * 전파되어 500 이 된다 — 이 어댑터의 존재 이유("AI 가 죽어도 데모는 안 죽는다")가 정확히 이 지점에서
+     * 깨지는 셈이다. 예외로 승격시켜 통째로 규칙 폴백으로 넘기지 않고 여기서 조용히 걸러내는 이유는, 다른
+     * 계약 위반(요청 밖 태스크·SCHEDULE·시각 역전)과 마찬가지로 이 배열의 나머지 유효한 원소는 그대로
+     * 살리는 것이 사용자에게 더 낫기 때문이다 — 원소 하나가 깨졌다고 AI 가 맞게 제안한 나머지까지 버릴
+     * 이유는 없다.
      */
     private PlacementResult toResult(AiPlanDraftClient.DraftResponse draft, List<UUID> requested) {
         List<ProposedPlacement> placements = draft.proposedBlocks().stream()
+                .filter(Objects::nonNull)
                 .filter(b -> b.taskId() != null && requested.contains(b.taskId()))
                 .filter(b -> !"SCHEDULE".equals(b.type()))
                 .filter(b -> b.startAt() != null && b.endAt() != null && b.startAt().isBefore(b.endAt()))
@@ -74,7 +86,7 @@ public class AiPlacementAdapter implements PlanPlacementPort {
         int dropped = draft.proposedBlocks().size() - placements.size();
         if (dropped > 0) {
             // 조용히 버리지 않는다 — 계약 위반은 AI 쪽 수정 대상이라 흔적이 남아야 한다.
-            log.warn("AI 제안 {}건을 버렸다 — 요청 밖 태스크·SCHEDULE·시각 역전", dropped);
+            log.warn("AI 제안 {}건을 버렸다 — null 원소·요청 밖 태스크·SCHEDULE·시각 역전", dropped);
         }
 
         // 배치되지 않은 것 = 요청했는데 제안에 없는 것. AI 의 unplacedTaskIds 를 그대로 믿지 않고
