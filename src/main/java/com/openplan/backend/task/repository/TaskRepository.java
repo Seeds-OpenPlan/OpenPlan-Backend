@@ -28,6 +28,9 @@ public interface TaskRepository extends JpaRepository<Task, UUID> {
 
     Page<Task> findByProjectId(UUID projectId, Pageable pageable);
 
+    /** 프로젝트의 태스크 수 (복제 프리뷰 — PROJ-11). */
+    long countByProjectId(UUID projectId);
+
     Page<Task> findByProjectIdAndStatus(UUID projectId, TaskStatus status, Pageable pageable);
 
     /**
