@@ -24,10 +24,35 @@ public interface WeeklyPlanRepository extends JpaRepository<WeeklyPlan, UUID> {
     Optional<WeeklyPlan> findByIdAndUserId(UUID id, UUID userId);
 
     /**
-     * 저장된 주간 계획 전량 (FIX-07 충돌 미리보기 — 정본 "저장된 주간 계획 대상"). 주차 오름차순으로
-     * 응답 순서를 결정적으로 만든다. 과거 주를 빼지 않는다 — 정본이 범위를 좁히지 않았다.
+     * 저장된 주간 계획 (FIX-07 충돌 미리보기 — 정본 "저장된 주간 계획 대상"). 주차 오름차순으로
+     * 응답 순서를 결정적으로 만든다. <b>과거 주를 정책적으로 빼지 않는다</b> — 정본이 범위를 좁히지 않았다.
+     *
+     * <p>경계 인자는 <b>정책이 아니라 순수 비용 절감</b>이다. V2는 후보 유효기간
+     * ({@code effectiveFrom}/{@code To}) 밖 발생일을 스스로 0건 처리하므로, 그런 주는 읽어도 결과가
+     * 같다 — 그럼에도 주마다 블록·가용시간·고정일정·태스크 조회 + 엔진 1회가 든다. 애초에 이슈가
+     * 나올 수 없는 주를 쿼리 단계에서 뺀다.
+     *
+     * <p>경계 산식(한 주는 {@code [weekStartDate, weekStartDate+6]}을 덮는다):
+     * <ul>
+     *   <li>{@code fromBound = effectiveFrom - 6일} — 주 끝자락이 유효 시작일에 걸릴 수 있어 6일 뺀다</li>
+     *   <li>{@code toBound = effectiveTo} — 주 시작이 유효 종료일을 넘으면 그 주엔 발생일이 없다</li>
+     * </ul>
+     * 양쪽 다 <b>과대 근사</b>라 이슈가 날 수 있는 주는 절대 빠지지 않는다(정확 판정은 엔진 몫).
+     * 무기한 후보(둘 다 null)는 모든 주가 실제로 판정 대상이므로 필터가 걸리지 않는다 — 계약상 불가피한 비용이다.
+     *
+     * @param fromBound null이면 하한 없음
+     * @param toBound   null이면 상한 없음
      */
-    List<WeeklyPlan> findByUserIdOrderByWeekStartDateAsc(UUID userId);
+    @Query("""
+            select w from WeeklyPlan w
+             where w.userId = :userId
+               and (cast(:fromBound as date) is null or w.weekStartDate >= :fromBound)
+               and (cast(:toBound   as date) is null or w.weekStartDate <= :toBound)
+             order by w.weekStartDate asc
+            """)
+    List<WeeklyPlan> findForConflictPreview(@Param("userId") UUID userId,
+                                            @Param("fromBound") LocalDate fromBound,
+                                            @Param("toBound") LocalDate toBound);
 
     /**
      * 확정 게이트 (ST-B2-09 / PLAN-03) — {@code DRAFT}일 때만 원자적으로 {@code CONFIRMED}로 전이한다.

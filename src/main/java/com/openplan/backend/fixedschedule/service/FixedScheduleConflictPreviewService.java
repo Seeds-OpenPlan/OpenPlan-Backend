@@ -47,6 +47,9 @@ import java.util.UUID;
 @Service
 public class FixedScheduleConflictPreviewService {
 
+    /** 한 주가 덮는 날 수 - 1. 주는 [weekStartDate, weekStartDate+6]이라 하한을 6일 앞당겨야 안 샌다. */
+    private static final int WEEK_SPAN_DAYS = 6;
+
     private final FixedScheduleRepository fixedScheduleRepository;
     private final FixedScheduleWeekExceptionRepository weekExceptionRepository;
     private final WeeklyPlanRepository weeklyPlanRepository;
@@ -103,8 +106,12 @@ public class FixedScheduleConflictPreviewService {
                 ? Set.of()
                 : new HashSet<>(weekExceptionRepository.findWeekStartDatesByFixedScheduleId(editingId));
 
+        // 이슈가 나올 수 없는 주는 쿼리 단계에서 뺀다(정책 아님 — 근거는 findForConflictPreview 참고).
+        LocalDate fromBound = candidate.startDate() == null ? null : candidate.startDate().minusDays(WEEK_SPAN_DAYS);
+        LocalDate toBound = candidate.endDate();
+
         List<WeekConflictResponse> result = new ArrayList<>();
-        for (WeeklyPlan plan : weeklyPlanRepository.findByUserIdOrderByWeekStartDateAsc(userId)) {
+        for (WeeklyPlan plan : weeklyPlanRepository.findForConflictPreview(userId, fromBound, toBound)) {
             if (exceptedWeeks.contains(plan.getWeekStartDate())) {
                 continue;
             }
