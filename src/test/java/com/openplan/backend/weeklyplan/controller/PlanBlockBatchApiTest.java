@@ -218,6 +218,33 @@ class PlanBlockBatchApiTest {
     }
 
     @Test
+    @DisplayName("다른 주 블록을 경로 planId 로 조작 시도 → 404 · 그 블록은 무사 (계획 스코프 격리)")
+    void batchCannotTouchBlocksOfAnotherWeek() throws Exception {
+        UUID plan = insertWeeklyPlan(MAIN, WEEK);
+        UUID otherWeekPlan = insertWeeklyPlan(MAIN, WEEK.plusDays(7)); // 같은 사용자의 다른 주
+        UUID task = insertTask(project, "다른주태스크", TaskStatus.UNASSIGNED);
+        UUID foreignBlock = placeTaskBlock(otherWeekPlan, task,
+                "2026-08-10T00:00:00Z", "2026-08-10T01:00:00Z"); // 60분
+
+        for (String op : new String[]{
+                "{\"op\":\"DELETE\",\"planBlockId\":\"" + foreignBlock + "\"}",
+                "{\"op\":\"MOVE\",\"planBlockId\":\"" + foreignBlock + "\",\"block\":{\"blockType\":\"TASK\","
+                        + "\"startAt\":\"2026-08-10T02:00:00Z\",\"endAt\":\"2026-08-10T03:00:00Z\"}}"}) {
+            batch(MAIN, plan, "{\"operations\":[" + op + "]}")
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.error.code").value("E-COM-004"));
+        }
+
+        // 남의 주 블록은 그대로 — 삭제도 이동도 되지 않았다
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM plan_blocks WHERE plan_block_id = ?",
+                Integer.class, foreignBlock)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT weekly_plan_id FROM plan_blocks WHERE plan_block_id = ?",
+                String.class, foreignBlock)).isEqualTo(otherWeekPlan.toString());
+        assertThat(jdbc.queryForObject("SELECT total_planned_minutes FROM weekly_plans WHERE weekly_plan_id = ?",
+                Integer.class, otherWeekPlan)).isEqualTo(60); // 그 주 total 도 건드려지지 않았다
+    }
+
+    @Test
     @DisplayName("없는/타인 계획 → 404")
     void batchPlanNotFound() throws Exception {
         UUID task = insertTask(project, "태스크", TaskStatus.UNASSIGNED);

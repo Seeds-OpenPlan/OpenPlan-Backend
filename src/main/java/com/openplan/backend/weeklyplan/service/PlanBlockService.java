@@ -277,12 +277,14 @@ public class PlanBlockService {
                     if (op.block() == null) {
                         throw invalidField("block", "required");
                     }
+                    requireBlockInPlan(userId, op.planBlockId(), planId);
                     moveBlock(userId, op.planBlockId(), toMoveRequest(op.block()));
                 }
                 case "DELETE" -> {
                     if (op.planBlockId() == null) {
                         throw invalidField("planBlockId", "required");
                     }
+                    requireBlockInPlan(userId, op.planBlockId(), planId);
                     deleteBlock(userId, op.planBlockId());
                 }
                 default -> throw invalidField("op", "invalid"); // 미정의 op → 422
@@ -301,6 +303,27 @@ public class PlanBlockService {
         List<PlanBlockResponse> blocks = planBlockRepository.findViewsByWeeklyPlanId(planId)
                 .stream().map(PlanBlockResponse::fromView).toList();
         return WeeklyPlanView.of(WeeklyPlanResponse.from(latest, blocks.size()), blocks);
+    }
+
+    /**
+     * 배치 대상 블록이 <b>경로의 계획에 속하는지</b> 확인한다 (404 E-COM-004).
+     *
+     * <p>낱개 API({@code PATCH/DELETE /plan-blocks/{blockId}})는 블록 id 하나로 주소가 완결되므로
+     * 사용자 소유만 보면 된다. 그러나 배치는 {@code POST /weekly-plans/{planId}/block-batches} —
+     * <b>계획 하위 리소스</b>라, 소유만 확인하고 위임하면 같은 사용자의 <b>다른 주 블록</b>을 이 경로로
+     * 조작할 수 있다. FE가 이전에 보던 주의 {@code planBlockId}를 재전송하면 그 주 블록이 삭제되고
+     * 그 주 total이 재계산되는데, 응답 {@link WeeklyPlanView}는 {@code planId}의 블록만 싣기 때문에
+     * <b>화면에 흔적이 남지 않는다</b>.
+     *
+     * <p>다른 계획의 블록은 이 경로에서 주소 지정 대상이 아니므로 404로 답한다 — 배치가 "없는·타인 계획"에
+     * 쓰는 코드와 같고, 저장소의 존재 은닉 관례와도 같다(422로 답하면 남의 블록 존재를 알려주게 된다).
+     */
+    private void requireBlockInPlan(UUID userId, UUID blockId, UUID planId) {
+        PlanBlock block = planBlockRepository.findByIdAndUserId(blockId, userId)
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404 (부재·타인)
+        if (!planId.equals(block.getWeeklyPlanId())) {
+            throw new OpenPlanException(ErrorCode.E_COM_004); // 404 (이 계획의 블록이 아니다)
+        }
     }
 
     /** 배치 MOVE의 block(PlanBlockInput) → 이동 요청. 시각만 조정(정본상 주차 이동은 배치에 없음). */
