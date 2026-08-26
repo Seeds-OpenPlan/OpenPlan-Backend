@@ -23,7 +23,6 @@ import java.util.UUID;
 /**
  * 프로젝트 복제 API (PROJ-10·11·12) — {@code /projects/{projectId}} 하위. 복제 프리뷰·실행을 담당한다.
  * 프로젝트 CRUD({@link ProjectController})·태스크({@code ProjectTaskController})와 관심사를 분리한다.
- * (복제 실행 POST는 후속 슬라이스)
  */
 @RestController
 @RequestMapping("/projects/{projectId}")

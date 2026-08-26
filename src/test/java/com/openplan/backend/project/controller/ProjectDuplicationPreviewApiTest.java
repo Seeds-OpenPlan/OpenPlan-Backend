@@ -74,6 +74,31 @@ class ProjectDuplicationPreviewApiTest {
     }
 
     @Test
+    @DisplayName("과거 마감일 → note에 마감일 삭제 안내가 붙는다 (실행이 조용히 비우는 것을 미리 알림)")
+    void noteWarnsWhenDueDateWillDrop() throws Exception {
+        UUID project = insertProject(MAIN, "지난분기", "설명", "IN_PROGRESS",
+                LocalDate.of(2026, 7, 1)); // FIXED_TODAY(2026-07-15) 이전
+
+        mockMvc.perform(get(path(project)).header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.note").value(org.hamcrest.Matchers.containsString("마감일 없이")));
+    }
+
+    @Test
+    @DisplayName("미래·미지정 마감일 → note에 마감일 안내 없음 (사실 아닌 경고를 띄우지 않는다)")
+    void noteSilentWhenDueDateKept() throws Exception {
+        UUID future = insertProject(MAIN, "미래마감", null, "IN_PROGRESS", LocalDate.of(2099, 12, 31));
+        UUID none = insertProject(MAIN, "무기한", null, "IN_PROGRESS", null);
+
+        for (UUID p : new UUID[]{future, none}) {
+            mockMvc.perform(get(path(p)).header("X-Dev-User", MAIN.toString()))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.note").value(
+                            org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("마감일 없이"))));
+        }
+    }
+
+    @Test
     @DisplayName("태스크·WBS 없는 프로젝트 → 0 카운트")
     void previewEmptyProject() throws Exception {
         UUID project = insertProject(MAIN, "빈프로젝트", null, "IN_PROGRESS");
@@ -129,12 +154,17 @@ class ProjectDuplicationPreviewApiTest {
     }
 
     private UUID insertProject(UUID userId, String name, String description, String status) {
+        return insertProject(userId, name, description, status, null);
+    }
+
+    private UUID insertProject(UUID userId, String name, String description, String status,
+                               LocalDate dueDate) {
         UUID id = UUID.randomUUID();
         jdbc.update("""
                 INSERT INTO projects (project_id, user_id, name, description, due_date, status,
                                       priority, closed_at, version, created_at)
-                VALUES (?, ?, ?, ?, NULL, ?, NULL, ?, 0, ?)
-                """, id, userId, name, description, status,
+                VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 0, ?)
+                """, id, userId, name, description, dueDate, status,
                 "CLOSED".equals(status) ? OffsetDateTime.ofInstant(BASE, ZoneOffset.UTC) : null,
                 OffsetDateTime.ofInstant(BASE, ZoneOffset.UTC));
         return id;

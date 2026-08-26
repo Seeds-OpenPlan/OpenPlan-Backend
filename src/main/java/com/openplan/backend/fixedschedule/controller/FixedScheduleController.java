@@ -35,7 +35,6 @@ import java.util.UUID;
 /**
  * 고정 일정 API (FIX-04·05) — {@code /fixed-schedules}. {@code /api/v1}은 WebConfig가 부여.
  * 성공 봉투 {@link ApiResponse}, 오류는 OpenPlanException → GlobalExceptionHandler 단일 창구.
- * (편집·삭제·주차예외·충돌 미리보기는 후속 슬라이스)
  */
 @RestController
 @RequestMapping("/fixed-schedules")

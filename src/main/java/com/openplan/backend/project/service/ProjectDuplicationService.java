@@ -26,8 +26,9 @@ import java.util.UUID;
 /**
  * 프로젝트 복제 유스케이스 (PROJ-10·11·12). 복제 프리뷰(개요 확인)와 복제 실행을 한 관심사로 묶는다.
  *
- * <p>본 슬라이스는 <b>프리뷰(조회)</b>만. 복제 실행(POST /duplications)은 후속 — 이 프리뷰가 정한
- * "무엇을 복제하는가"(태스크·WBS, 주간 계획 항목 제외)를 그대로 따른다.
+ * <p>실행은 프리뷰가 정한 "무엇을 복제하는가"(태스크·WBS, 주간 계획 항목 제외)를 그대로 따른다 —
+ * 두 응답이 어긋나면 사용자는 확인 화면과 다른 결과를 받는다. 마감일 처리도 같은 이유로 프리뷰
+ * {@code note}에 미리 알린다({@link #NOTE_DUE_DATE_DROPPED}).
  */
 @Service
 public class ProjectDuplicationService {
@@ -35,9 +36,21 @@ public class ProjectDuplicationService {
     /** 프리뷰 안내(P4 — 사실 서술). 복제본 태스크가 미배치로 생성됨을 미리 알린다(정본 note). */
     private static final String NOTE = "주간 계획에 배치된 항목은 복제되지 않습니다 — 복제본의 태스크는 전량 미배치로 생성됩니다.";
 
+    /**
+     * 마감일이 이미 지난 프로젝트에만 덧붙는 안내. 실행이 조용히 마감일을 비우는데(§resolveDueDate)
+     * 확인 화면이 그 말을 안 하면, 사용자는 프리뷰를 보고 승인했는데 결과가 달라진다 —
+     * 같은 동작을 두 엔드포인트가 다르게 말하지 않도록 여기서 미리 알린다.
+     * 해당하지 않는 프로젝트에는 붙이지 않는다(사실이 아닌 경고를 띄우지 않는다).
+     */
+    private static final String NOTE_DUE_DATE_DROPPED =
+            " 마감일이 이미 지나 복제본은 마감일 없이(무기한) 생성됩니다.";
+
     /** 기본 복제본 이름 접미사 — projects.name VARCHAR(100) 안에 들어가도록 원본명을 자를 때 기준. */
     private static final String COPY_SUFFIX = " (복제)";
     private static final int NAME_MAX = 100;
+
+    /** 로그에 남길 클라이언트 헤더 최대 길이(정본상 uuid=36자 — 여유를 두고 자른다). */
+    private static final int LOG_HEADER_MAX = 64;
 
     private static final Logger log = LoggerFactory.getLogger(ProjectDuplicationService.class);
 
@@ -69,8 +82,13 @@ public class ProjectDuplicationService {
         long taskCount = taskRepository.countByProjectId(projectId);
         long wbsItemCount = wbsItemRepository.countByProjectId(projectId);
 
+        boolean dueDateWillDrop =
+                resolveDueDate(project.getDueDate(), clock.todayOf(userId)) == null
+                        && project.getDueDate() != null;
+        String note = dueDateWillDrop ? NOTE + NOTE_DUE_DATE_DROPPED : NOTE;
+
         return new DuplicationPreviewResponse(
-                project.getName(), project.getDescription(), taskCount, wbsItemCount, NOTE);
+                project.getName(), project.getDescription(), taskCount, wbsItemCount, note);
     }
 
     /**
@@ -116,8 +134,29 @@ public class ProjectDuplicationService {
         }
 
         log.info("project duplicated: sourceId={}, newId={}, userId={}, idempotencyKey={}",
-                projectId, copy.getId(), userId, idempotencyKey);
+                projectId, copy.getId(), userId, sanitizeForLog(idempotencyKey));
         return ProjectResponse.from(copy);
+    }
+
+    /**
+     * 로그로 나갈 클라이언트 헤더 정리. {@code Idempotency-Key}는 <b>외부 입력</b>이라 그대로 찍으면
+     * 신뢰 경계를 넘는다.
+     *
+     * <ul>
+     *   <li><b>CRLF 제거</b> — 기본 로그 패턴은 개행을 이스케이프하지 않으므로 값에 줄바꿈을 넣으면
+     *       위조된 로그 줄을 통째로 삽입할 수 있다(다른 사용자의 가짜 ERROR를 심는 등).</li>
+     *   <li><b>길이 절단</b> — 정본이 이 헤더를 uuid로 규정하지만 서버가 형식을 강제하지 않으므로,
+     *       거대한 값으로 로그를 부풀리는 것을 막는다.</li>
+     * </ul>
+     */
+    private static String sanitizeForLog(String headerValue) {
+        if (headerValue == null) {
+            return null;
+        }
+        String oneLine = headerValue.replaceAll("[\\r\\n]", "_");
+        return oneLine.length() <= LOG_HEADER_MAX
+                ? oneLine
+                : oneLine.substring(0, LOG_HEADER_MAX) + "…(truncated)";
     }
 
     /**
