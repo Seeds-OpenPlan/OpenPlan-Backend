@@ -147,6 +147,36 @@ class PlanBlockBatchApiTest {
     }
 
     @Test
+    @DisplayName("CREATE block 필수 필드 누락 → 422 (컨트롤러 @Valid가 없는 경로라 서비스가 막아야 한다)")
+    void batchCreateMissingRequiredFields() throws Exception {
+        UUID plan = insertWeeklyPlan(MAIN, WEEK);
+        UUID task = insertTask(project, "태스크", TaskStatus.UNASSIGNED);
+
+        // blockType·startAt·endAt은 PlanBlockCreateRequest에 @NotNull이지만, 배치 경로는
+        // Operation.block에 @Valid 캐스케이드가 없어 Bean Validation이 돌지 않는다.
+        record Missing(String field, String blockJson) {
+        }
+        Missing[] cases = {
+                new Missing("blockType", "{\"taskId\":\"" + task + "\","
+                        + "\"startAt\":\"2026-08-03T00:00:00Z\",\"endAt\":\"2026-08-03T01:00:00Z\"}"),
+                new Missing("startAt", "{\"blockType\":\"TASK\",\"taskId\":\"" + task + "\","
+                        + "\"endAt\":\"2026-08-03T01:00:00Z\"}"),
+                new Missing("endAt", "{\"blockType\":\"TASK\",\"taskId\":\"" + task + "\","
+                        + "\"startAt\":\"2026-08-03T00:00:00Z\"}"),
+        };
+
+        for (Missing c : cases) {
+            batch(MAIN, plan, "{\"operations\":[{\"op\":\"CREATE\",\"block\":" + c.blockJson() + "}]}")
+                    .andExpect(status().isUnprocessableEntity())
+                    .andExpect(jsonPath("$.error.code").value("E-COM-009"))
+                    .andExpect(jsonPath("$.error.details.fields[0].field").value(c.field()));
+        }
+
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM plan_blocks WHERE weekly_plan_id = ?",
+                Integer.class, plan)).isZero();
+    }
+
+    @Test
     @DisplayName("미정의 op → 422")
     void batchInvalidOp() throws Exception {
         UUID plan = insertWeeklyPlan(MAIN, WEEK);

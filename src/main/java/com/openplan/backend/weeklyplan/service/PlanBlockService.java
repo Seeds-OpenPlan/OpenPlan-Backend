@@ -78,6 +78,8 @@ public class PlanBlockService {
         WeeklyPlan plan = weeklyPlanRepository.findByIdAndUserId(planId, userId)
                 .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404 (계획 부재·타인)
 
+        requireBlockInput(req); // 422 — 배치 경로엔 컨트롤러 @Valid가 없다(아래 참고)
+
         PlanBlockType type = parseBlockType(req.blockType());
         if (!req.startAt().isBefore(req.endAt())) { // 422 (ck_plan_block_range 사전 검증)
             throw new OpenPlanException(ErrorCode.E_PLAN_002);
@@ -299,7 +301,37 @@ public class PlanBlockService {
         return move;
     }
 
-    /** blockType 문자열 → enum. 미정의값 → 422 E-COM-009. */
+    /**
+     * 블록 입력 필수 3필드 검증 (422 E-COM-009).
+     *
+     * <p><b>Bean Validation에 의존할 수 없는 자리다.</b> {@link PlanBlockCreateRequest}의 세 필드에는
+     * {@code @NotNull}이 있지만, 그것을 돌리는 것은 컨트롤러의 {@code @Valid @RequestBody}다.
+     * 배치({@code POST /block-batches})는 {@code BlockBatchRequest.Operation.block}으로 같은 타입을
+     * 감싸 받는데 거기엔 {@code @Valid} 캐스케이드가 없어 검증이 통째로 건너뛰어지고, 그대로
+     * {@link #createBlock}에 흘러들면 {@code parseBlockType}의 {@code raw.trim()}이나
+     * {@code req.startAt().isBefore(...)}에서 NPE가 나 500(E-COM-005)으로 샌다.
+     *
+     * <p><b>{@code Operation.block}에 {@code @Valid}를 붙이지 않은 이유</b>: 그러면 위반이
+     * {@code MethodArgumentNotValidException} → <b>E-COM-001(400)</b>이 되는데, 배치 컨트롤러가
+     * 문서화한 계약은 "op별 필수 필드 누락 → <b>422</b>"다. {@code op} 필드를 String으로 받아
+     * 서비스가 판정하는 기존 관례와도 같은 이유다 — 파싱 계층이 아니라 도메인 계층에서 422로 답한다.
+     *
+     * <p>단건 경로({@code POST /blocks})는 컨트롤러 {@code @Valid}가 먼저 걸려 400을 내므로 여기까지
+     * 오지 않는다. 두 경로의 상태코드가 다른 것은 각자 문서화된 계약을 따른 결과다.
+     */
+    private void requireBlockInput(PlanBlockCreateRequest req) {
+        if (req.blockType() == null) {
+            throw invalidField("blockType", "required");
+        }
+        if (req.startAt() == null) {
+            throw invalidField("startAt", "required");
+        }
+        if (req.endAt() == null) {
+            throw invalidField("endAt", "required");
+        }
+    }
+
+    /** blockType 문자열 → enum. 미정의값 → 422 E-COM-009. null은 호출 전 {@link #requireBlockInput}이 거른다. */
     private PlanBlockType parseBlockType(String raw) {
         try {
             return PlanBlockType.valueOf(raw.trim());
