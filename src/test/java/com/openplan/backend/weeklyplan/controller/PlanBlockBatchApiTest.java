@@ -91,6 +91,28 @@ class PlanBlockBatchApiTest {
     }
 
     @Test
+    @DisplayName("CREATE만 있는 배치 — 응답 total 이 DB 와 일치한다 (JDBC 재계산분이 1차 캐시에 가려지지 않게)")
+    void batchCreateResponseTotalMatchesDb() throws Exception {
+        UUID plan = insertWeeklyPlan(MAIN, WEEK);
+        UUID task = insertTask(project, "태스크", TaskStatus.UNASSIGNED);
+
+        // MOVE 를 섞지 않는 것이 요점 — reschedule 의 clearAutomatically 가 컨텍스트를 비워
+        // 결함을 우연히 가려주기 때문에, CREATE 만으로 응답을 확인해야 한다.
+        String body = """
+                {"operations":[
+                  {"op":"CREATE","block":{"blockType":"TASK","taskId":"%s",
+                     "startAt":"2026-08-03T00:00:00Z","endAt":"2026-08-03T03:00:00Z"}}
+                ]}""".formatted(task);
+
+        batch(MAIN, plan, body)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.plan.totalPlannedMinutes").value(180)); // 응답 본문으로 확인
+
+        assertThat(jdbc.queryForObject("SELECT total_planned_minutes FROM weekly_plans WHERE weekly_plan_id = ?",
+                Integer.class, plan)).isEqualTo(180);
+    }
+
+    @Test
     @DisplayName("CREATE·MOVE·DELETE 혼합 → 200 · 최종 상태 정확")
     void batchMixed() throws Exception {
         UUID plan = insertWeeklyPlan(MAIN, WEEK);

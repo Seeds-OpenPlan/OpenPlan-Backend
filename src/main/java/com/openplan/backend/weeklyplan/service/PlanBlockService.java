@@ -24,6 +24,7 @@ import com.openplan.backend.weeklyplan.dto.WeeklyPlanView;
 import com.openplan.backend.weeklyplan.repository.PlanBlockRepository;
 import com.openplan.backend.weeklyplan.repository.PlanBlockView;
 import com.openplan.backend.weeklyplan.repository.WeeklyPlanRepository;
+import jakarta.persistence.EntityManager;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -54,11 +55,13 @@ public class PlanBlockService {
     private final WeeklyPlanTotalsRecalculator recalculator;
     private final ErrorMessages errorMessages;
     private final UserClock clock;
+    private final EntityManager entityManager;
 
     public PlanBlockService(PlanBlockRepository planBlockRepository, WeeklyPlanRepository weeklyPlanRepository,
                             TaskRepository taskRepository, ScheduleRepository scheduleRepository,
                             ScheduleValidator scheduleValidator, WeeklyPlanTotalsRecalculator recalculator,
-                            ErrorMessages errorMessages, UserClock clock) {
+                            ErrorMessages errorMessages, UserClock clock,
+                            EntityManager entityManager) {
         this.planBlockRepository = planBlockRepository;
         this.weeklyPlanRepository = weeklyPlanRepository;
         this.taskRepository = taskRepository;
@@ -67,6 +70,7 @@ public class PlanBlockService {
         this.recalculator = recalculator;
         this.errorMessages = errorMessages;
         this.clock = clock;
+        this.entityManager = entityManager;
     }
 
     /**
@@ -285,9 +289,15 @@ public class PlanBlockService {
             }
         }
 
-        // 적용 후 최신 뷰 조립 — 재계산은 각 op가 이미 수행했으므로 계획 total은 갱신돼 있다.
+        // 적용 후 최신 뷰 조립 — 재계산은 각 op가 이미 수행했으므로 DB의 계획 total은 갱신돼 있다.
         WeeklyPlan latest = weeklyPlanRepository.findByIdAndUserId(planId, userId)
                 .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004));
+        entityManager.refresh(latest); // DB 값을 다시 읽는다 — 이유는 아래
+        //   recalculator는 JdbcTemplate로 weekly_plans.total_planned_minutes를 UPDATE한다(JPA 바깥).
+        //   plan은 이 메서드 진입부 404 검사에서 이미 영속성 컨텍스트에 올라가 있어, 위 재조회는 DB가 아니라
+        //   1차 캐시의 낡은 인스턴스를 돌려준다 — CREATE만 있는 배치에서 DB=180인데 응답 total=0으로 실측됨.
+        //   MOVE가 섞이면 reschedule의 clearAutomatically가 컨텍스트를 비워 우연히 가려진다(그래서 혼합
+        //   테스트는 통과했다). 우연에 기대지 않도록 여기서 명시적으로 새로 읽는다.
         List<PlanBlockResponse> blocks = planBlockRepository.findViewsByWeeklyPlanId(planId)
                 .stream().map(PlanBlockResponse::fromView).toList();
         return WeeklyPlanView.of(WeeklyPlanResponse.from(latest, blocks.size()), blocks);

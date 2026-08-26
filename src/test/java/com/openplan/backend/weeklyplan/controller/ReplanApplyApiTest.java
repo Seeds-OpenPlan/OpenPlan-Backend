@@ -87,7 +87,9 @@ class ReplanApplyApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.plan.weeklyPlanId").value(plan.toString()))
                 .andExpect(jsonPath("$.data.plan.status").value("DRAFT")) // 확정 아님
-                .andExpect(jsonPath("$.data.blocks.length()").value(2));
+                .andExpect(jsonPath("$.data.blocks.length()").value(2))
+                // JDBC 재계산분이 1차 캐시에 가려지지 않는지 — plan은 진입부에서 이미 컨텍스트에 올라가 있다
+                .andExpect(jsonPath("$.data.plan.totalPlannedMinutes").value(120)); // 60 + 60
 
         // 겹쳤던 block2가 KST 10:00(09:30에서 이동)으로 옮겨짐 (MINIMAL_CHANGE 결과).
         // timestamptz를 Instant로 받아 시각 비교(문자열 포맷은 세션 타임존 영향).

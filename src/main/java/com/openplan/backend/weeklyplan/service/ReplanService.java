@@ -23,6 +23,7 @@ import com.openplan.backend.weeklyplan.dto.WeeklyPlanView;
 import com.openplan.backend.weeklyplan.repository.PlanBlockRepository;
 import com.openplan.backend.weeklyplan.repository.ReplanOptionRepository;
 import com.openplan.backend.weeklyplan.repository.WeeklyPlanRepository;
+import jakarta.persistence.EntityManager;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -51,10 +52,12 @@ public class ReplanService {
     private final PlanReplanPort replanPort;
     private final WeeklyPlanTotalsRecalculator recalculator;
     private final UserClock clock;
+    private final EntityManager entityManager;
 
     public ReplanService(WeeklyPlanRepository weeklyPlanRepository, PlanBlockRepository planBlockRepository,
                          ReplanOptionRepository replanOptionRepository, PlanSnapshotAssembler assembler,
-                         PlanReplanPort replanPort, WeeklyPlanTotalsRecalculator recalculator, UserClock clock) {
+                         PlanReplanPort replanPort, WeeklyPlanTotalsRecalculator recalculator, UserClock clock,
+                         EntityManager entityManager) {
         this.weeklyPlanRepository = weeklyPlanRepository;
         this.planBlockRepository = planBlockRepository;
         this.replanOptionRepository = replanOptionRepository;
@@ -62,6 +65,7 @@ public class ReplanService {
         this.replanPort = replanPort;
         this.recalculator = recalculator;
         this.clock = clock;
+        this.entityManager = entityManager;
     }
 
     /**
@@ -159,6 +163,14 @@ public class ReplanService {
 
         WeeklyPlan latest = weeklyPlanRepository.findById(planId)
                 .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004));
+        // 방어적 재조회. recalculator는 JdbcTemplate로 total을 UPDATE하는데(JPA 바깥) plan은 진입부에서
+        // 이미 컨텍스트에 올라가 있어, 위 재조회가 1차 캐시의 낡은 인스턴스를 줄 수 있다.
+        // 지금은 위 루프의 reschedule(@Modifying(clearAutomatically=true))이 컨텍스트를 비워 우연히 맞는다 —
+        // 즉 "재배치가 한 건이라도 일어난다"는 조건에 정합성이 매달려 있다. 제안이 현재 블록과 하나도
+        // 매칭되지 않으면 clear가 일어나지 않는데, 그 경우엔 블록도 안 바뀌어 total이 그대로라 지금은 드러나지 않는다.
+        // 그 우연이 깨지면(reschedule의 clear 제거, 블록을 바꾸는 다른 경로 추가) 바로 결함이 되므로 명시적으로 읽는다.
+        // 같은 함정이 PlanBlockService.applyBatch에서는 실제로 터졌다(응답 total=0 실측).
+        entityManager.refresh(latest);
         List<PlanBlockResponse> blocks = planBlockRepository.findViewsByWeeklyPlanId(planId)
                 .stream().map(PlanBlockResponse::fromView).toList();
         return WeeklyPlanView.of(WeeklyPlanResponse.from(latest, blocks.size()), blocks);
