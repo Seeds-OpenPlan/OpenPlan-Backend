@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -89,10 +90,11 @@ public class ProjectDuplicationService {
 
         Instant now = clock.now();
         String newName = resolveNewName(request, source.getName());
+        LocalDate dueDate = resolveDueDate(source.getDueDate(), clock.todayOf(userId));
 
-        // 1) 프로젝트 복제 — 새 id, IN_PROGRESS, description 복사(마감일·우선순위는 원본 값 승계).
+        // 1) 프로젝트 복제 — 새 id, IN_PROGRESS, description·우선순위 승계(마감일은 아래 규칙).
         Project copy = new Project(userId, newName, source.getDescription(),
-                source.getDueDate(), source.getPriority(), now);
+                dueDate, source.getPriority(), now);
         projectRepository.save(copy);
 
         // 2) 태스크 복제 — 전량 UNASSIGNED. oldTaskId → newTaskId 매핑(WBS 재연결용).
@@ -119,6 +121,26 @@ public class ProjectDuplicationService {
     }
 
     /**
+     * 복제본 마감일 — 원본이 <b>이미 지난</b> 마감일이면 승계하지 않고 null(무기한)로 떨어뜨린다.
+     *
+     * <p>복제본은 항상 IN_PROGRESS로 태어나는데, 지난 마감일을 그대로 물려주면
+     * {@code IN_PROGRESS ∧ dueDate < today} — {@link ProjectAutoCloseEvaluator#closeOverdue}가
+     * 일괄 종료시키는 바로 그 형태가 된다. 목록·상세·수정·상태변경 어느 진입점이든 다음 호출에서
+     * 평가가 돌아 복제본이 CLOSED로 뒤집히므로, <b>201이 반환한 IN_PROGRESS가 거짓이 된다</b>.
+     *
+     * <p>생성(422 {@code dueDate.past})·재개(E-PROJ-004)가 둘 다 거부하는 상태라 복제만 만들어낼
+     * 이유가 없다. 그렇다고 422로 막으면 "지난 분기 프로젝트 재활용"이라는 복제의 주 용도가 통째로
+     * 불가능해진다 — 원본 마감일은 사용자가 이 요청에서 손댈 수 없는 값이다(이름 길이와 같은 판단).
+     * null은 생성이 이미 허용하는 유효 상태이므로 복제는 성사시키고 마감일만 비운다.
+     *
+     * <p>경계는 {@code isBefore(today)} — 오늘 마감은 승계한다({@code bulkCloseOverdue}의
+     * {@code dueDate < today}, {@code ProjectValidator.validateDueDate}와 같은 경계).
+     */
+    private static LocalDate resolveDueDate(LocalDate sourceDueDate, LocalDate today) {
+        return (sourceDueDate != null && sourceDueDate.isBefore(today)) ? null : sourceDueDate;
+    }
+
+    /**
      * newName 미지정(null·공백) → "원본명 (복제)". 지정 시 생성과 동일 규칙으로 검증(422).
      *
      * <p>기본명은 접미사를 붙이므로 원본 이름이 이미 길면 {@code projects.name VARCHAR(100)}을 넘긴다
@@ -127,11 +149,31 @@ public class ProjectDuplicationService {
      */
     private String resolveNewName(DuplicateProjectRequest request, String sourceName) {
         if (request == null || request.newName() == null || request.newName().isBlank()) {
-            String base = sourceName.length() + COPY_SUFFIX.length() > NAME_MAX
-                    ? sourceName.substring(0, NAME_MAX - COPY_SUFFIX.length())
-                    : sourceName;
-            return base + COPY_SUFFIX;
+            return truncateForSuffix(sourceName) + COPY_SUFFIX;
         }
         return validator.validateName(request.newName());
+    }
+
+    /**
+     * 접미사가 들어갈 자리를 남기고 원본명을 자른다. 짧으면 그대로 반환한다.
+     *
+     * <p><b>서로게이트 쌍을 쪼개지 않는다.</b> 이모지·보조평면 문자는 Java에서 {@code char} 두 칸을
+     * 차지하는데, 자르는 지점이 그 사이에 떨어지면 짝 잃은 상위 서로게이트가 남는다. 그 문자열은
+     * 더 이상 유효한 유니코드가 아니라서 pgjdbc가 {@code ?}로 바꿔 넣는다 — 예외도 없이 이름만
+     * 조용히 망가진다. 마지막 칸이 상위 서로게이트면 한 칸 더 당겨 쌍을 통째로 버린다.
+     *
+     * <p>길이 판정을 {@code String.length()}(UTF-16 코드유닛)로 하는 것은 안전한 쪽으로 보수적이다 —
+     * Postgres {@code VARCHAR(100)}은 코드포인트를 세므로 코드유닛 수가 항상 그 이상이다. 이모지가
+     * 있으면 필요보다 조금 일찍 자를 뿐 넘치지는 않는다.
+     */
+    private static String truncateForSuffix(String sourceName) {
+        int cut = NAME_MAX - COPY_SUFFIX.length();
+        if (sourceName.length() <= cut) {
+            return sourceName;
+        }
+        if (Character.isHighSurrogate(sourceName.charAt(cut - 1))) {
+            cut--; // 짝이 잘릴 자리 — 쌍 전체를 버린다
+        }
+        return sourceName.substring(0, cut);
     }
 }
