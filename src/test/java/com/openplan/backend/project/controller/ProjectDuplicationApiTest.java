@@ -25,6 +25,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -121,6 +122,23 @@ class ProjectDuplicationApiTest {
     }
 
     @Test
+    @DisplayName("자르는 지점이 이모지 한가운데여도 쪼개지 않는다 (짝 잃은 서로게이트 → DB에 '?' 로 박힘)")
+    void truncationDoesNotSplitSurrogatePair() throws Exception {
+        // 95번째 칸(cut 지점)이 이모지의 상위 서로게이트가 되도록 배치: 94자 + 이모지(2칸) = 96칸
+        String longName = "가".repeat(94) + "😀";
+        UUID source = insertProject(MAIN, longName, null, "IN_PROGRESS", null, null);
+
+        UUID copy = duplicate(source);
+
+        String copied = jdbc.queryForObject(
+                "SELECT name FROM projects WHERE project_id = ?", String.class, copy);
+        // 이모지는 통째로 버려진다 — 반쪽만 남기면 '?' 로 치환돼 이름이 조용히 망가진다
+        assertThat(copied).isEqualTo("가".repeat(94) + " (복제)");
+        assertThat(copied).doesNotContain("?");
+        assertThat(copied.chars().noneMatch(c -> Character.isSurrogate((char) c))).isTrue();
+    }
+
+    @Test
     @DisplayName("newName 100자 초과 → 422 E-COM-009 (생성과 동일 규칙)")
     void tooLongNewNameRejected() throws Exception {
         UUID source = insertProject(MAIN, "마케팅", null, "IN_PROGRESS", null, null);
@@ -133,6 +151,50 @@ class ProjectDuplicationApiTest {
                 .andExpect(jsonPath("$.error.code").value("E-COM-009"));
 
         assertThat(projectCountOf(MAIN)).isEqualTo(1); // 검증 실패 → 복제본 미생성(원본만)
+    }
+
+    @Test
+    @DisplayName("과거 마감일은 승계하지 않는다 → 복제본 dueDate=null (우선순위는 그대로 승계)")
+    void pastDueDateNotInherited() throws Exception {
+        UUID source = insertProject(MAIN, "지난분기", null, "IN_PROGRESS",
+                LocalDate.of(2026, 7, 1), 2); // FIXED_TODAY(2026-07-15) 이전
+
+        mockMvc.perform(post(path(source)).header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.status").value("IN_PROGRESS"))
+                .andExpect(jsonPath("$.data.dueDate").doesNotExist())
+                .andExpect(jsonPath("$.data.priority").value(2));
+    }
+
+    @Test
+    @DisplayName("201의 IN_PROGRESS가 거짓이 아니다 — 자동종료 평가 지점을 지나도 CLOSED로 뒤집히지 않는다")
+    void duplicateSurvivesAutoCloseEvaluation() throws Exception {
+        UUID source = insertProject(MAIN, "지난분기", null, "IN_PROGRESS",
+                LocalDate.of(2026, 7, 1), null);
+        UUID copy = duplicate(source);
+
+        // GET /projects = 자동 종료 지연 평가 지점(ADR-0006). 원본은 여기서 CLOSED 되는 게 정상이다.
+        mockMvc.perform(get("/api/v1/projects").header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isOk());
+
+        Map<String, Object> copyRow = jdbc.queryForMap(
+                "SELECT status, due_date FROM projects WHERE project_id = ?", copy);
+        assertThat(copyRow.get("status")).isEqualTo("IN_PROGRESS"); // 승계했으면 CLOSED로 뒤집혔다
+        assertThat(copyRow.get("due_date")).isNull();
+
+        assertThat(jdbc.queryForObject("SELECT status FROM projects WHERE project_id = ?",
+                String.class, source)).isEqualTo("CLOSED"); // 원본은 원래 규칙대로 종료
+    }
+
+    @Test
+    @DisplayName("오늘 마감일은 승계 — 경계는 dueDate < today (bulkCloseOverdue·validateDueDate와 동일)")
+    void todayDueDateInherited() throws Exception {
+        UUID source = insertProject(MAIN, "오늘마감", null, "IN_PROGRESS",
+                FixedClockConfig.FIXED_TODAY, null);
+
+        mockMvc.perform(post(path(source)).header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.dueDate").value("2026-07-15"));
     }
 
     @Test

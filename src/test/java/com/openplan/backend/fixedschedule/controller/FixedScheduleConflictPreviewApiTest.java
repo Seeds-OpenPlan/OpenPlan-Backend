@@ -158,6 +158,22 @@ class FixedScheduleConflictPreviewApiTest {
     }
 
     @Test
+    @DisplayName("경계 — 유효 시작일이 주의 마지막 날이어도 그 주를 놓치지 않는다 (주 범위 필터 off-by-week 방어)")
+    void effectiveFromOnLastDayOfWeekStillScanned() throws Exception {
+        UUID plan = insertWeeklyPlan(MAIN, WEEK_1); // 2026-07-27(월) ~ 2026-08-02(일)
+        // 그 주의 마지막 날인 일요일에 블록을 둔다
+        insertScheduleBlock(MAIN, plan,
+                Instant.parse("2026-08-02T02:00:00Z"), Instant.parse("2026-08-02T03:00:00Z"));
+
+        // 후보 유효기간이 그 일요일부터 시작 — 주 시작일(7/27)만 보고 자르면 이 주가 통째로 사라진다
+        mockMvc.perform(preview(MAIN, candidate("수업", "SUN", "11:00", "12:00", "2026-08-02", null, null)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1))
+                .andExpect(jsonPath("$.data[0].weekStartDate").value("2026-07-27"))
+                .andExpect(jsonPath("$.data[0].issues[0].ruleId").value("V2_FIXED_CONFLICT"));
+    }
+
+    @Test
     @DisplayName("후보와 무관한 기존 충돌은 미포함 (기존 고정 일정↔블록 V2는 '추가하면 생기는 충돌'이 아님)")
     void preexistingConflictExcluded() throws Exception {
         UUID plan = insertWeeklyPlan(MAIN, WEEK_1);
