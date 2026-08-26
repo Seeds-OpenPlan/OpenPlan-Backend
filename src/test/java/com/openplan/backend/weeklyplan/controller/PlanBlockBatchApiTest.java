@@ -176,14 +176,16 @@ class PlanBlockBatchApiTest {
 
         // blockType·startAt·endAt은 PlanBlockCreateRequest에 @NotNull이지만, 배치 경로는
         // Operation.block에 @Valid 캐스케이드가 없어 Bean Validation이 돌지 않는다.
-        record Missing(String field, String blockJson) {
+        record Missing(String field, String message, String blockJson) {
         }
+        // message까지 단언한다 — errors.properties에 키가 없으면 ErrorMessages가 "일시적인 오류..."로
+        // 조용히 폴백하고 ERROR 로그만 남기므로, field만 보면 누락을 못 잡는다.
         Missing[] cases = {
-                new Missing("blockType", "{\"taskId\":\"" + task + "\","
+                new Missing("blockType", "blockType은 필수입니다.", "{\"taskId\":\"" + task + "\","
                         + "\"startAt\":\"2026-08-03T00:00:00Z\",\"endAt\":\"2026-08-03T01:00:00Z\"}"),
-                new Missing("startAt", "{\"blockType\":\"TASK\",\"taskId\":\"" + task + "\","
+                new Missing("startAt", "시작 시각은 필수입니다.", "{\"blockType\":\"TASK\",\"taskId\":\"" + task + "\","
                         + "\"endAt\":\"2026-08-03T01:00:00Z\"}"),
-                new Missing("endAt", "{\"blockType\":\"TASK\",\"taskId\":\"" + task + "\","
+                new Missing("endAt", "종료 시각은 필수입니다.", "{\"blockType\":\"TASK\",\"taskId\":\"" + task + "\","
                         + "\"startAt\":\"2026-08-03T00:00:00Z\"}"),
         };
 
@@ -191,7 +193,8 @@ class PlanBlockBatchApiTest {
             batch(MAIN, plan, "{\"operations\":[{\"op\":\"CREATE\",\"block\":" + c.blockJson() + "}]}")
                     .andExpect(status().isUnprocessableEntity())
                     .andExpect(jsonPath("$.error.code").value("E-COM-009"))
-                    .andExpect(jsonPath("$.error.details.fields[0].field").value(c.field()));
+                    .andExpect(jsonPath("$.error.details.fields[0].field").value(c.field()))
+                    .andExpect(jsonPath("$.error.details.fields[0].message").value(c.message()));
         }
 
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM plan_blocks WHERE weekly_plan_id = ?",
@@ -205,7 +208,42 @@ class PlanBlockBatchApiTest {
 
         batch(MAIN, plan, "{\"operations\":[{\"op\":\"FOO\",\"planBlockId\":\"" + UUID.randomUUID() + "\"}]}")
                 .andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.error.details.fields[0].field").value("op"));
+                .andExpect(jsonPath("$.error.details.fields[0].field").value("op"))
+                .andExpect(jsonPath("$.error.details.fields[0].message")
+                        .value("op은 CREATE·MOVE·DELETE 중 하나여야 합니다.")); // 키 해석 확인(폴백 감지)
+    }
+
+    @Test
+    @DisplayName("op별 필수 필드 누락 → 422 · 사용자 표시 문구가 폴백이 아니어야 한다")
+    void batchOperationFieldMessages() throws Exception {
+        UUID plan = insertWeeklyPlan(MAIN, WEEK);
+
+        // MOVE: planBlockId 누락 → planBlockId.required / block 누락 → block.required
+        batch(MAIN, plan, "{\"operations\":[{\"op\":\"MOVE\"}]}")
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.details.fields[0].field").value("planBlockId"))
+                .andExpect(jsonPath("$.error.details.fields[0].message")
+                        .value("이 연산에는 planBlockId가 필요합니다."));
+
+        batch(MAIN, plan, "{\"operations\":[{\"op\":\"MOVE\",\"planBlockId\":\"" + UUID.randomUUID() + "\"}]}")
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.details.fields[0].field").value("block"))
+                .andExpect(jsonPath("$.error.details.fields[0].message")
+                        .value("이 연산에는 블록 정보(block)가 필요합니다."));
+
+        // CREATE: block 누락
+        batch(MAIN, plan, "{\"operations\":[{\"op\":\"CREATE\"}]}")
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.details.fields[0].field").value("block"))
+                .andExpect(jsonPath("$.error.details.fields[0].message")
+                        .value("이 연산에는 블록 정보(block)가 필요합니다."));
+
+        // DELETE: planBlockId 누락
+        batch(MAIN, plan, "{\"operations\":[{\"op\":\"DELETE\"}]}")
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.details.fields[0].field").value("planBlockId"))
+                .andExpect(jsonPath("$.error.details.fields[0].message")
+                        .value("이 연산에는 planBlockId가 필요합니다."));
     }
 
     @Test
