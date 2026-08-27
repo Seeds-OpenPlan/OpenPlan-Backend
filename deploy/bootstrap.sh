@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # OpenPlan — EC2(Amazon Linux 2023) 1차 배포 부트스트랩
 #
-# 하는 일: Docker·git·Node 설치 → 저장소 2개 클론 → FE 빌드 → BE 이미지 빌드 → 기동.
+# 하는 일: Docker·git·Node 설치 → 저장소 클론 → FE 빌드 → BE 이미지 빌드 → 기동
+#          → CD 설치·동기화 → 배포 스탬프 기록.
 #
 # 사용:
 #   ssh -i ~/.ssh/openplan-key.pem ec2-user@<EC2_PUBLIC_IP>
@@ -29,7 +30,7 @@ FE_DIR="$HOME/openplan-fe"
 log() { printf '\n\033[1;34m== %s\033[0m\n' "$*"; }
 
 # ── 1. 패키지 ────────────────────────────────────────────────────────────────
-log "1/6 패키지 설치 (docker · git)"
+log "1/8 패키지 설치 (docker · git)"
 # 🔴 nodejs 를 여기서 깔지 않는다. AL2023 저장소의 nodejs 는 18인데 프론트가
 #    package.json engines 로 ">=22.12.0 <23" 를 요구한다(Vite 8). 호스트에 22를
 #    따로 얹는 대신 5단계에서 node:22-alpine 컨테이너로 빌드한다 — 버전이 고정되고
@@ -42,7 +43,7 @@ sudo dnf -y install docker git
 # OOM Killer 가 컴파일 도중 프로세스를 죽이는데, 로그에는 원인이 명확히 안 남는다
 # ("Gradle build daemon disappeared unexpectedly" 정도). 스왑 2GB로 받친다.
 if ! swapon --show | grep -q .; then
-  log "1b/6 스왑 2GB 생성"
+  log "1b/8 스왑 2GB 생성"
   sudo dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
   sudo chmod 600 /swapfile
   sudo mkswap /swapfile >/dev/null
@@ -52,7 +53,7 @@ fi
 free -h | head -3
 
 # ── 2. Docker ────────────────────────────────────────────────────────────────
-log "2/6 Docker 기동 + 권한"
+log "2/8 Docker 기동 + 권한"
 sudo systemctl enable --now docker
 sudo usermod -aG docker "$USER"
 
@@ -94,7 +95,7 @@ fi
 DOCKER="sudo docker"
 
 # ── 3. 저장소 ────────────────────────────────────────────────────────────────
-log "3/6 저장소 클론/갱신"
+log "3/8 저장소 클론/갱신"
 # 🔴 `git pull --ff-only` 만 돌리면 이미 클론된 저장소는 "받아둔 그 브랜치"에 계속
 #    머문다 — BE_BRANCH 를 바꿔도 반영되지 않는다. 1차 배포가 feat/deploy-compose 로
 #    이뤄졌으므로, 브랜치를 갈아타는 재배포가 반드시 필요하다. fetch → switch 로
@@ -112,7 +113,7 @@ sync_repo "$APP_DIR" "$BE_REPO" "$BE_BRANCH"
 sync_repo "$FE_DIR"  "$FE_REPO" "$FE_BRANCH"
 
 # ── 4. .env 확인 ─────────────────────────────────────────────────────────────
-log "4/6 .env 확인"
+log "4/8 .env 확인"
 
 # 시드와 사전검사가 같은 목록을 본다 — 둘이 갈라지면 "안내는 여섯인데 검사는 넷" 이 된다.
 REQUIRED_KEYS=(DB_HOST DB_PASSWORD JWT_SECRET APP_BASE_URL API_BASE_URL
@@ -203,7 +204,7 @@ if [ ${#missing[@]} -gt 0 ]; then
 fi
 
 # ── 5. FE 빌드 ───────────────────────────────────────────────────────────────
-log "5/6 프론트 빌드 (node:22-alpine 컨테이너)"
+log "5/8 프론트 빌드 (node:22-alpine 컨테이너)"
 cd "$FE_DIR"
 # API 베이스는 openapi 정본과 같은 /api/v1. 단일 오리진이라 상대경로면 충분하다.
 printf 'VITE_API_BASE_URL=/api/v1\n' > .env.production
@@ -223,7 +224,7 @@ sudo find "$APP_DIR/web" -mindepth 1 -delete
 sudo cp -r dist/. "$APP_DIR/web"/
 
 # ── 6. 기동 ──────────────────────────────────────────────────────────────────
-log "6/6 컨테이너 빌드·기동"
+log "6/8 컨테이너 빌드·기동"
 cd "$APP_DIR"
 $DOCKER compose -f docker-compose.prod.yml up -d --build
 
@@ -241,5 +242,123 @@ cat <<MSG
 
 로그:
   sudo docker compose -f docker-compose.prod.yml logs -f backend
+
+MSG
+
+# ── 7. CD 설치·동기화 ────────────────────────────────────────────────────────
+# 🔴 CD 는 2026-08-21 에 main 에 들어갔는데 2026-08-27 까지 한 번도 돌지 않았다.
+#    코드가 없어서가 아니라 **설치가 배포와 분리돼 있어서**다 — 서버에서 한 줄을
+#    더 쳐야 하는 일이라 매 배포마다 빠졌고, 빠졌다는 사실조차 밖에서 안 보였다
+#    (없는 파일도 nginx SPA 폴백이 200 을 준다, D-92). 배포에 붙이면 빠질 자리가 없다.
+#
+# 🔴 설치보다 중요한 것이 동기화다. install-cd.sh 는 cd.conf 가 이미 있으면
+#    "건드리지 않는다". 그래서 예전 브랜치로 CD 를 깔아 둔 서버에 다른 브랜치를
+#    손으로 배포하면, 5분 뒤 CD 가 cd.conf 에 적힌 옛 브랜치로 되돌린다 —
+#    사람이 방금 한 배포가 조용히 취소되고 화면으로는 안 보인다(D-75 와 같은 계열).
+#    무엇이 배포됐는지 아는 것은 이 스크립트뿐이므로 여기서 맞춘다.
+#
+# 🔴 이 절의 어떤 실패도 배포 판정을 뒤집지 못한다. 배포는 6단계에서 이미 끝났고
+#    성공했다. 부수 작업이 본 경로를 죽이면 안 된다 — cd-watch.sh 의 배포 스탬프가
+#    같은 이유로 같은 방침을 쓴다.
+#
+# 🔴 그래서 이 안에서는 set -e 에 기대지 않고 실패를 손으로 되돌린다.
+#    `if cd_sync; then` 의 조건 자리에서는 set -e 가 꺼지고, **그 억제는 함수
+#    안쪽까지 따라 들어간다**(서브셸로 감싸도 마찬가지 — 실측했다). 기대고 썼다면
+#    중간에 실패해도 다음 줄로 넘어가 "절반만 설치된 상태"를 성공으로 보고했을 것이다.
+#
+# 끄려면 INSTALL_CD=0 을 넘긴다.
+
+# cd.conf 의 키 하나를 "방금 배포한 값" 으로 맞춘다. 있으면 갈고, 없으면 덧붙인다.
+# 🔴 키 목록을 고정하지 않는다. cd.conf 의 키 구성은 배포 계보마다 다르고
+#    (AI_BRANCH 는 AI 를 실제로 배포하는 계보에만 있다), 이 스크립트가 배포하지
+#    않은 것을 cd.conf 에 써 넣으면 추적과 배포가 어긋난다 — cd.conf.example 이
+#    경고하는 바로 그 상태다. 그래서 "내가 실제로 배포한 것" 만 반영한다.
+cd_conf_set() {  # $1=파일 $2=키 $3=값
+  [ -n "${3:-}" ] || return 0
+  local cur
+  if grep -qE "^$2=" "$1"; then
+    cur="$(grep -m1 -E "^$2=" "$1" | cut -d= -f2-)" || return 1
+    [ "$cur" = "$3" ] && return 0
+    sed -i "s|^$2=.*|$2=$3|" "$1" || return 1
+    echo "  cd.conf: $2 $cur → $3  ← 손으로 한 배포를 CD 가 되돌리지 않게 맞췄다"
+  else
+    printf '%s=%s\n' "$2" "$3" >> "$1" || return 1
+    echo "  cd.conf: $2=$3 (없어서 덧붙였다)"
+  fi
+  return 0
+}
+
+cd_sync() {
+  local conf="$APP_DIR/cd.conf"
+  local state="$APP_DIR/.cd-state"
+
+  # 7-1. cd.conf 를 "방금 배포한 것" 으로 맞춘다.
+  if [ ! -f "$conf" ]; then
+    cp "$APP_DIR/deploy/cd.conf.example" "$conf" || return 1
+    echo "  cd.conf 를 만들었다"
+  fi
+  cd_conf_set "$conf" BE_BRANCH "$BE_BRANCH"      || return 1
+  cd_conf_set "$conf" FE_BRANCH "$FE_BRANCH"      || return 1
+  cd_conf_set "$conf" AI_BRANCH "${AI_BRANCH:-}"  || return 1
+
+  # 7-2. 기준선을 버린다. install-cd.sh 가 방금 배포된 클론의 SHA 로 다시 만든다.
+  #      🔴 여기서 직접 쓰지 않는 이유: .cd-state 의 필드 구성은 cd-watch.sh 가
+  #         무엇을 추적하느냐를 따라간다. 형식을 아는 곳이 둘이면 언젠가 갈라지고,
+  #         갈라지면 매 회차 "바뀐 것으로 보여" 전체 재빌드가 5분마다 돈다.
+  #      🔴 버리지 않으면 install-cd.sh 는 옛 기준선을 그대로 둔다(있으면 안 건드린다).
+  #         그러면 CD 가 이미 배포된 것을 "아직 아님" 으로 읽어 첫 회차에 또 배포한다.
+  rm -f "$state" || return 1
+
+  # 7-3. 유닛 설치 + 타이머 기동. install-cd.sh 는 여러 번 돌려도 안전하다.
+  #      별도 bash 프로세스라 그쪽 set -euo pipefail 은 이 문맥의 억제를 받지 않는다.
+  BE_BRANCH="$BE_BRANCH" FE_BRANCH="$FE_BRANCH" AI_BRANCH="${AI_BRANCH:-}" \
+  APP_DIR="$APP_DIR" bash "$APP_DIR/deploy/install-cd.sh" || return 1
+
+  return 0
+}
+
+if [ "${INSTALL_CD:-1}" = 1 ]; then
+  log "7/8 CD 설치·동기화"
+  if cd_sync; then
+    echo "  🟢 CD 가 5분마다 ${BE_BRANCH} 를 따라간다"
+  else
+    echo "  ⚠️ CD 설치·동기화 실패 — 배포 자체는 끝났다(6단계 참고)." >&2
+    echo "     손으로: BE_BRANCH=$BE_BRANCH bash $APP_DIR/deploy/install-cd.sh" >&2
+  fi
+else
+  log "7/8 CD 설치·동기화 — INSTALL_CD=0 이라 건너뛴다"
+fi
+# ── 8. 배포 스탬프 ───────────────────────────────────────────────────────────
+# 🔴 5단계가 web/ 안을 통째로 비운다. 그래서 손으로 한 배포는 deploy-status.json 을
+#    지우기만 하고 다시 쓰지 않는다 — 배포를 마치고도 밖에서 보면 "CD 가 한 번도
+#    안 돌았다" 와 구별되지 않는다. 지운 쪽이 다시 쓴다.
+# 🔴 키 이름은 cd-watch.sh 의 스탬프와 같게 둔다. 같은 URL 을 읽는 사람이 두 형식을
+#    구분해야 하는 상황을 만들지 않는다 — source 한 필드로만 갈린다.
+# 🔴 이 기록도 배포 판정을 뒤집지 못한다(cd-watch.sh 와 같은 방침).
+log "8/8 배포 스탬프"
+be_sha="$(git -C "$APP_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
+fe_sha="$(git -C "$FE_DIR"  rev-parse HEAD 2>/dev/null || echo unknown)"
+if ! sudo tee "$APP_DIR/web/deploy-status.json" >/dev/null <<JSON
+{
+  "deployedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "ok": true,
+  "source": "bootstrap",
+  "backend":  { "branch": "$BE_BRANCH", "sha": "$be_sha" },
+  "frontend": { "branch": "$FE_BRANCH", "sha": "$fe_sha" }
+}
+JSON
+then
+  echo "  ⚠️ 배포 스탬프를 쓰지 못했다(web/ 권한?) — 배포 판정에는 영향 없음" >&2
+fi
+
+cat <<MSG
+
+  배포된 것 확인   curl -s https://openplan.services/deploy-status.json
+  🔴 그냥 200 인지 보지 말 것 — 없는 경로도 SPA 폴백이 200 을 준다(D-92).
+     대조군을 같이 던져 응답이 다른지 본다:
+       curl -s https://openplan.services/zzz-none.json | head -c 40
+
+  CD 상태          systemctl list-timers openplan-cd.timer
+  CD 로그          journalctl -u openplan-cd.service -n 80 --no-pager
 
 MSG
