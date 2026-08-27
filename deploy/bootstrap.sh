@@ -23,8 +23,13 @@ FE_REPO="${FE_REPO:-https://github.com/Seeds-OpenPlan/OpenPlan-Frontend.git}"
 # 기본값으로 두면 재배포해도 두 주 묵은 코드가 다시 올라간다(서버가 안 바뀌는 원인).
 BE_BRANCH="${BE_BRANCH:-main}"
 FE_BRANCH="${FE_BRANCH:-main}"
+# AI 서비스는 별도 저장소다(파이썬). docker-compose.prod.yml 이 ../openplan-ai 를 빌드 컨텍스트로
+# 참조하므로 APP_DIR 의 형제 자리에 받아야 한다 — 경로가 어긋나면 compose 가 빈 곳을 굽는다.
+AI_REPO="${AI_REPO:-https://github.com/Seeds-OpenPlan/OpenPlan-AI.git}"
+AI_BRANCH="${AI_BRANCH:-main}"
 APP_DIR="${APP_DIR:-$HOME/openplan}"
 FE_DIR="$HOME/openplan-fe"
+AI_DIR="$HOME/openplan-ai"
 
 log() { printf '\n\033[1;34m== %s\033[0m\n' "$*"; }
 
@@ -110,13 +115,15 @@ sync_repo() {  # $1=디렉터리 $2=저장소 $3=브랜치
 }
 sync_repo "$APP_DIR" "$BE_REPO" "$BE_BRANCH"
 sync_repo "$FE_DIR"  "$FE_REPO" "$FE_BRANCH"
+sync_repo "$AI_DIR"  "$AI_REPO" "$AI_BRANCH"
 
 # ── 4. .env 확인 ─────────────────────────────────────────────────────────────
 log "4/6 .env 확인"
 
 # 시드와 사전검사가 같은 목록을 본다 — 둘이 갈라지면 "안내는 여섯인데 검사는 넷" 이 된다.
 REQUIRED_KEYS=(DB_HOST DB_PASSWORD JWT_SECRET APP_BASE_URL API_BASE_URL
-               GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET MAIL_USERNAME MAIL_PASSWORD)
+               GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET MAIL_USERNAME MAIL_PASSWORD
+               GROQ_API_KEY)
 
 if [ ! -f "$APP_DIR/.env" ]; then
   # 🔴 .env.example 을 그대로 쓰면 안 된다. 거기엔 로컬 개발 기본값이 채워져 있어
@@ -135,7 +142,7 @@ if [ ! -f "$APP_DIR/.env" ]; then
 
      nano ~/openplan/.env
 
-  아래 아홉을 채워야 뜹니다(4단계 사전검사가 같은 목록을 봅니다):
+  아래 열을 채워야 뜹니다(4단계 사전검사가 같은 목록을 봅니다):
      DB_HOST         RDS 엔드포인트
      DB_PASSWORD     RDS 마스터 비밀번호
      JWT_SECRET      openssl rand -base64 48
@@ -144,6 +151,7 @@ if [ ! -f "$APP_DIR/.env" ]; then
      GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET   구글 클라우드 콘솔 발급값
      MAIL_USERNAME   Gmail 주소
      MAIL_PASSWORD   Gmail 앱 비밀번호 16자 (계정 비밀번호 아님)
+     GROQ_API_KEY    https://console.groq.com/keys (카드 불필요)
 
   MAIL_* 이 없으면 가입 메일이 안 나가고, 이메일 미인증 계정은 로그인이
   403 으로 막혀 "떴지만 아무도 못 쓰는" 서버가 됩니다.
@@ -185,6 +193,11 @@ fi
 #    http://localhost:8080 이 살아남았다. 키를 채워도 콜백이 localhost 로 나간다.
 #    🔴 카카오·네이버 키는 넣지 않는다 — 구글 최우선·둘은 포기 순서(6주차 문서
 #    "인증 범위 결정")라, 필수로 걸면 놓기로 한 것 때문에 배포가 막힌다.
+#
+# 🔴 GROQ_API_KEY 가 목록에 든 이유: 키가 없어도 AI 컨테이너는 **정상 기동한다.**
+#    다만 /plans/draft 가 503 을 돌려주고 Spring 이 계약 §4 대로 규칙 폴백하므로,
+#    화면은 멀쩡한 채 **AI 기능만 통째로 죽어 있는** 상태가 된다 — MAIL_* · GOOGLE_* 과
+#    정확히 같은 "떴지만 못 쓰는" 모양이고, 이건 기동 실패보다 알아채기 어렵다.
 #
 # 🔴 "비어 있는가" 만으로는 부족하다. .env.example 의 값을 그대로 둔 것도 미입력으로 본다 —
 #    블록리스트를 쓰지 않고 example 과 대조하므로, 앞으로 예시 기본값이 늘어도 저절로 잡힌다.

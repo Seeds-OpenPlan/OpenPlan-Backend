@@ -54,11 +54,23 @@ services:
     restart: unless-stopped
     environment:
       TZ: Asia/Seoul
-      # 🔴 모델 키. .env 에 GEMINI_API_KEY 가 없으면 이 서비스는 뜨지만 /plans/draft 가 503 을
-      #    돌려주고, Spring 은 계약 §4 대로 규칙 폴백한다 — 기동 실패가 아니라 조용한 폴백이다.
+      # 🔴 모델 키. 키가 없으면 이 서비스는 뜨지만 /plans/draft 가 503 을 돌려주고,
+      #    Spring 은 계약 §4 대로 규칙 폴백한다 — 기동 실패가 아니라 조용한 폴백이다.
+      #
+      # 🔴 2026-08-25 에 Gemini → Groq 로 갈아탔다. 이유는 계약 NFR-029(5초)다 —
+      #    Gemini 는 /plans/draft 가 10.9초라 예산을 못 지켰고, Groq 는 1.14~1.30초다.
+      #    Gemini 키는 폴백용으로 함께 넘긴다(제공자는 모델 문자열 접두사로 정해진다).
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      COMPLEX_MODEL: ${COMPLEX_MODEL:-gemini/gemini-3.6-flash}
-      LIGHT_MODEL: ${LIGHT_MODEL:-gemini/gemini-3.5-flash-lite}
+      COMPLEX_MODEL: ${COMPLEX_MODEL:-groq/openai/gpt-oss-120b}
+      LIGHT_MODEL: ${LIGHT_MODEL:-groq/openai/gpt-oss-20b}
+      # 🔴 REASONING_EFFORT 를 빠뜨리면 안 된다(D-87). 허용값이 제공자마다 다르고,
+      #    Groq gpt-oss 는 low|medium|high 만 받는다 — minimal 은 무효라 **매 호출이
+      #    거부되는데 화면은 멀쩡하다.** 기본값을 여기서 못 박아 그 사고를 막는다.
+      REASONING_EFFORT: ${REASONING_EFFORT:-low}
+      # 🔴 MAX_TOKENS 를 명시한다. 1024 로 두면 replan 응답이 char 2062 에서 잘린다
+      #    (08-24 에 원인 불명으로 하루를 쓴 결함 — .env.example 이 그 값을 배포하고 있었다).
+      MAX_TOKENS: ${MAX_TOKENS:-2048}
     expose:
       - "8000"
     # ports 를 두지 않는다. 8000 을 호스트에 열면 인증 없이 모델을 호출할 수 있는 구멍이 된다 —
