@@ -23,6 +23,7 @@ import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -212,6 +213,40 @@ public class AppleCalDavProvider implements CalendarProvider {
         return bodies;
     }
 
+    /**
+     * 발생의 종료 시각. 정할 수 없으면 {@code null} <b>과 함께 경고를 남긴다</b> — 조용히 사라지지 않게.
+     *
+     * <p>RFC5545 는 종료를 {@code DTEND} 로도, {@code DURATION} 으로도 적게 허용한다. 옛 구현은
+     * {@code DTEND} 만 읽어서, {@code DURATION} 만 쓴 VEVENT 는 길이 0 이 되어 아래 발생 필터에서
+     * <b>로그 없이 걸러졌다</b>(2026-08-27 리뷰 지적 — 서드파티 CalDAV 클라이언트에서 드물지 않다).
+     */
+    private static Instant endOf(ICalParser.Component event, Instant start, String calendarName) {
+        Instant end = ICalDateTime.parse(event.first("DTEND"), DEFAULT_ZONE);
+        if (end != null && end.isAfter(start)) {
+            return end;
+        }
+
+        ICalParser.Property duration = event.first("DURATION");
+        if (duration != null) {
+            Duration length = ICalDateTime.parseDuration(duration.value());
+            if (length != null) {
+                return start.plus(length);
+            }
+            log.warn("DURATION 을 해석하지 못해 일정 한 건을 건너뛴다 — calendar={} uid={} value={}",
+                    calendarName, event.value("UID"), duration.value());
+            return null;
+        }
+
+        if (end == null) {
+            log.warn("종료 시각이 없어(DTEND·DURATION 둘 다 없음) 일정 한 건을 건너뛴다 — calendar={} uid={}",
+                    calendarName, event.value("UID"));
+        } else {
+            log.warn("종료가 시작보다 앞서거나 같아 일정 한 건을 건너뛴다 — calendar={} uid={} start={} end={}",
+                    calendarName, event.value("UID"), start, end);
+        }
+        return null;
+    }
+
     private void collect(List<String> icsBodies, String calendarName, Instant from, Instant to,
                          List<ProviderEvent> target) {
         for (String ics : icsBodies) {
@@ -223,9 +258,18 @@ public class AppleCalDavProvider implements CalendarProvider {
                 }
                 Instant start = ICalDateTime.parse(dtStart, DEFAULT_ZONE);
                 if (start == null) {
+                    // 🔴 조용히 건너뛰지 않는다 (2026-08-27 리뷰 지적). 예전에는 로그 한 줄 없이
+                    //    continue 했고, 그러면 그 일정만 흔적 없이 후보에서 빠진다 —
+                    //    이 저장소가 이미 한 번 당한 "파싱 실패 → 일정이 조용히 사라짐" 과 같은 계열이다.
+                    //    사용자는 "없는 일정" 으로 보고 그 시간 위에 계획을 얹고, 서버 로그로도 원인을 알 수 없다.
+                    log.warn("DTSTART 를 해석하지 못해 일정 한 건을 건너뛴다 — calendar={} uid={} value={}",
+                            calendarName, event.value("UID"), dtStart == null ? null : dtStart.value());
                     continue;
                 }
-                Instant end = ICalDateTime.parse(event.first("DTEND"), DEFAULT_ZONE);
+                Instant end = endOf(event, start, calendarName);
+                if (end == null) {
+                    continue;   // 위에서 사유를 로그로 남겼다.
+                }
                 ZoneId zone = zoneOf(dtStart);
 
                 String uid = event.value("UID");

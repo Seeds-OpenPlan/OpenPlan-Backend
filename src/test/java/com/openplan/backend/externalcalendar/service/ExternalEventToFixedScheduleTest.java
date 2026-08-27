@@ -2,6 +2,8 @@ package com.openplan.backend.externalcalendar.service;
 
 import com.openplan.backend.common.Weekday;
 import com.openplan.backend.externalcalendar.domain.ExternalCalendarEvent;
+import com.openplan.backend.fixedschedule.service.FixedScheduleValidator;
+import com.openplan.backend.global.error.ErrorMessages;
 import com.openplan.backend.externalcalendar.dto.ApplyEventRequest;
 import com.openplan.backend.fixedschedule.domain.FixedSchedule;
 import com.openplan.backend.fixedschedule.domain.FixedScheduleSource;
@@ -57,7 +59,8 @@ class ExternalEventToFixedScheduleTest {
         }
     };
 
-    private final ExternalEventToFixedSchedule converter = new ExternalEventToFixedSchedule(clock);
+    private final ExternalEventToFixedSchedule converter =
+            new ExternalEventToFixedSchedule(clock, new FixedScheduleValidator(new ErrorMessages()));
 
     @Test
     @DisplayName("정각 일정은 그대로 옮겨진다 — source=EXTERNAL · 연결 id 유지")
@@ -145,6 +148,19 @@ class ExternalEventToFixedScheduleTest {
 
         assertThat(fs.getStartTime()).isEqualTo(LocalTime.of(23, 0));
         assertThat(fs.getEndTime()).isEqualTo(LocalTime.of(23, 55));
+    }
+
+    @Test
+    @DisplayName("EDITED 시각이 5분 단위가 아니면 422 — DB CHECK 까지 내려가 500 이 되면 안 된다")
+    void 격자를_벗어난_재정의는_422() {
+        ExternalCalendarEvent event = event("2026-08-20T01:00:00Z", "2026-08-20T02:00:00Z", "회의");
+        ApplyEventRequest.Edited edited =
+                new ApplyEventRequest.Edited(null, null, LocalTime.of(9, 7), LocalTime.of(10, 0));
+
+        // 원본 시각은 floor/ceil 로 격자에 맞지만 edited 는 사용자가 준 값 그대로 내려간다.
+        // 검증이 없으면 ck_fixed_step 위반 → DataIntegrityViolationException → 잡는 곳이 없어 500.
+        assertThatThrownBy(() -> converter.convert(USER, event, edited))
+                .isInstanceOf(OpenPlanException.class);
     }
 
     private static ExternalCalendarEvent event(String startUtc, String endUtc, String title) {
