@@ -6,12 +6,16 @@ import com.openplan.backend.common.WeekRange;
 import com.openplan.backend.executionlog.domain.ExecutionLog;
 import com.openplan.backend.executionlog.domain.ExecutionResult;
 import com.openplan.backend.executionlog.repository.ExecutionLogRepository;
+import com.openplan.backend.global.error.ErrorCode;
+import com.openplan.backend.global.error.OpenPlanException;
 import com.openplan.backend.global.time.UserClock;
 import com.openplan.backend.project.domain.Project;
 import com.openplan.backend.project.repository.ProjectRepository;
 import com.openplan.backend.stats.domain.DeviationGroupBy;
 import com.openplan.backend.stats.domain.StatsPeriod;
 import com.openplan.backend.stats.domain.TimeSlot;
+import com.openplan.backend.stats.dto.CorrectionProposalQuery;
+import com.openplan.backend.stats.dto.CorrectionProposalResponse;
 import com.openplan.backend.stats.dto.DeviationReportResponse;
 import com.openplan.backend.stats.dto.DeviationRowResponse;
 import com.openplan.backend.stats.dto.DeviationsQuery;
@@ -38,8 +42,9 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * 수행 통계 3종 유스케이스 (ST-B2-16 — RB-STAT-01/03 · SS-10/12). {@code /stats/correction-proposals}는
- * 산출식이 정본에 없어(SS-11) 여기 포함하지 않는다 — openapi {@code x-implementation-status} 그대로 유지.
+ * 수행 통계 유스케이스 (ST-B2-16 — RB-STAT-01/02/03 · SS-10/11/12). 보정 제안(SS-11)은 산출식 파라미터가
+ * 정본에 없어 오래 보류돼 있었고, W3 게이트에서 ASSUMPTION-CP1~CP5로 확정한 뒤 편입했다
+ * ({@link CorrectionProposalPolicy} 참고 — 재결정 시 상수·문구·골든·openapi를 한 커밋에 함께 갱신).
  *
  * <p><b>알려진 한계(리드 확인 대상, stats-dashboard-notes.md §2.2)</b>: {@code execution_logs}에
  * ST-B2-14 AC②가 요구하는 "기록 시점 예상시간 스냅샷" 컬럼이 없다. 이 서비스는 부득이
@@ -224,6 +229,126 @@ public class StatsService {
             byId.put(task.getId(), task);
         }
         return byId;
+    }
+
+    /**
+     * 예상 시간 보정 제안 (SS-11 / RB-STAT-02). 사용자가 태스크 폼에 입력 중인 예상값을, 같은 스코프의
+     * 과거 편차율만큼 조정해 제안한다. <b>읽기 전용·부작용 0</b>이며 자동 적용은 없다(C-2/P2).
+     *
+     * <p><b>편차율은 {@link #deviations}와 같은 산법이다</b> — 태스크별 실제시간 합산(로그 여러 건 합산) +
+     * 예상시간은 태스크당 1회, rate = (Σactual − Σestimated) × 100 / Σestimated. US 전제가 "편차 분석이
+     * 완료됨"(RB-STAT-01 소비)이라, 사용자가 통계 화면에서 보는 수치와 제안의 근거가 어긋나면 안 된다.
+     * 그래서 스냅샷 예상시간 전환도 이 메서드가 단독으로 앞서가지 않는다(클래스 javadoc의 알려진 한계 승계).
+     *
+     * <p><b>집계 창은 전체 이력</b>(ASSUMPTION-CP1) — 이 라우트에 기간 파라미터가 없다. 결과가 시계에
+     * 의존하지 않으므로 형제 3본보다 결정성이 강하다(같은 데이터면 언제 호출해도 같은 응답).
+     *
+     * <p>제안 불가 3사유는 모두 {@code null} 반환(호출자가 data 생략): ① 표본 부족(&lt; 3)
+     * ② Σestimated = 0(편차율 정의 불가) ③ estimatedMinutes 미제공(조정할 대상이 없음).
+     * 셋 다 오류가 아니라 정상 응답이다.
+     *
+     * <p>참조 ID는 소유 검증한다 — 부재·타인 categoryId/projectId는 404(구분 불가). 조용히 null로 삼키면
+     * FE가 "오타 UUID"와 "이력 부족"을 구분하지 못한다.
+     */
+    @Transactional(readOnly = true)
+    public CorrectionProposalResponse correctionProposal(UUID userId, CorrectionProposalQuery query) {
+        validator.validateEstimatedMinutes(query.getEstimatedMinutes()); // 422 (step) — null은 통과
+        requireOwnedReferences(userId, query);
+
+        Integer estimatedMinutes = query.getEstimatedMinutes();
+        if (estimatedMinutes == null) {
+            return null; // ③ 조정할 대상이 없다
+        }
+
+        CorrectionProposalPolicy.Scope scope = resolveScope(query);
+        List<ExecutionLog> logs = scopedLogs(userId, query, scope);
+        Map<UUID, Task> tasksById = loadTasks(logs);
+
+        List<ExecutionLog> measurable = measurableLogs(logs, tasksById);
+        int estimatedSum = distinctTaskEstimatedSum(measurable, tasksById);
+        if (estimatedSum == 0) {
+            return null; // ② 비교 기준이 없다 — 편차율을 정의할 수 없다
+        }
+        int actualSum = measurable.stream().mapToInt(l -> nz(l.getActualMinutes())).sum();
+        double deviationRate = (actualSum - estimatedSum) * 100.0 / estimatedSum;
+
+        // 표본 하한(①)은 Policy가 판정한다 — 여기서 미리 자르면 같은 규칙이 두 곳에 생긴다.
+        return CorrectionProposalPolicy.evaluate(estimatedMinutes, deviationRate, measurable.size(), scope);
+    }
+
+    /**
+     * 편차 계산에 <b>쓸 수 있는</b> 로그만 남긴다 — 소속 태스크의 예상시간이 있는 것.
+     *
+     * <p><b>예상시간이 없는 태스크의 로그를 섞으면 편차율이 부풀려진다</b>: 실제시간은 분자에 더해지는데
+     * 예상시간은 0으로 합산돼 분모에 기여하지 않기 때문이다. 예를 들어 예상 없는 태스크에 180분이 기록돼
+     * 있고 예상 60분짜리가 정확히 60분 걸렸다면, 거르지 않을 때 r = (240−60)/60 = +300%가 나온다 —
+     * 비교 가능한 유일한 태스크의 편차는 0%인데도 4배를 제안하게 된다.
+     *
+     * <p>스냅샷 컬럼 마이그레이션이 이미 같은 요구를 적어 두었다: <i>"소비처(통계)는 NULL 을 편차
+     * 계산에서 제외해야 한다"</i>. [Source: V202608161500__be1_execution_log_estimated_minutes.sql]
+     *
+     * <p>결과적으로 {@code sampleSize}도 "측정 가능한 이력 건수"가 된다 — 근거로 제시하는 숫자가
+     * 실제 계산에 쓰인 표본과 일치해야 사용자가 검산할 수 있다(P2).
+     *
+     * <p>※ {@code deviations}·{@code summaries}는 이 필터를 두지 않는다. 그쪽은 수치를 <b>보여줄</b> 뿐이라
+     * 총량이 사실대로 드러나는 편이 맞지만, 이 라우트는 그 수치를 사용자 입력값으로 <b>처방</b>한다.
+     */
+    private static List<ExecutionLog> measurableLogs(List<ExecutionLog> logs, Map<UUID, Task> tasksById) {
+        return logs.stream()
+                .filter(log -> {
+                    Task task = tasksById.get(log.getTaskId());
+                    return task != null && task.getEstimatedMinutes() != null;
+                })
+                .toList();
+    }
+
+    /** 스코프 우선순위 — categoryId &gt; projectId &gt; 전체(ASSUMPTION-CP3). 묵시 폴백은 없다. */
+    private static CorrectionProposalPolicy.Scope resolveScope(CorrectionProposalQuery query) {
+        if (query.getCategoryId() != null) {
+            return CorrectionProposalPolicy.Scope.CATEGORY;
+        }
+        return query.getProjectId() != null
+                ? CorrectionProposalPolicy.Scope.PROJECT
+                : CorrectionProposalPolicy.Scope.ALL;
+    }
+
+    /**
+     * 스코프에 해당하는 로그만 추린다. 전체 이력을 읽고 태스크 속성으로 거르는 이유는 로그에 카테고리·
+     * 프로젝트 컬럼이 없기 때문이다(태스크를 통해서만 분류된다 — {@link #deviations}와 동일 구조).
+     *
+     * <p><b>선택된 스코프의 이력이 부족해도 다른 스코프로 내려가지 않는다</b> — 폴백 사다리는 정본 무앵커이고,
+     * basis가 말하는 스코프와 실제 계산 스코프가 어긋나면 사용자가 검산할 수 없다(투명성 훼손).
+     */
+    private List<ExecutionLog> scopedLogs(UUID userId, CorrectionProposalQuery query,
+                                          CorrectionProposalPolicy.Scope scope) {
+        List<ExecutionLog> all = executionLogRepository.findByUserId(userId); // CP-1 — 기간 무한정
+        if (scope == CorrectionProposalPolicy.Scope.ALL) {
+            return all;
+        }
+        Map<UUID, Task> tasksById = loadTasks(all);
+        return all.stream()
+                .filter(log -> {
+                    Task task = tasksById.get(log.getTaskId());
+                    if (task == null) {
+                        return false; // 삭제된 태스크 방어(deviations와 동일)
+                    }
+                    return scope == CorrectionProposalPolicy.Scope.CATEGORY
+                            ? query.getCategoryId().equals(task.getCategoryId())
+                            : query.getProjectId().equals(task.getProjectId());
+                })
+                .toList();
+    }
+
+    /** 제공된 참조 ID의 소유 검증 (부재·타인 → 404 E-COM-004, 구분 불가). 미제공은 검증 대상이 아니다. */
+    private void requireOwnedReferences(UUID userId, CorrectionProposalQuery query) {
+        if (query.getCategoryId() != null
+                && !taskCategoryRepository.existsByIdAndUserId(query.getCategoryId(), userId)) {
+            throw new OpenPlanException(ErrorCode.E_COM_004);
+        }
+        if (query.getProjectId() != null
+                && projectRepository.findByIdAndUserId(query.getProjectId(), userId).isEmpty()) {
+            throw new OpenPlanException(ErrorCode.E_COM_004);
+        }
     }
 
     private int distinctTaskEstimatedSum(List<ExecutionLog> logs, Map<UUID, Task> tasksById) {
