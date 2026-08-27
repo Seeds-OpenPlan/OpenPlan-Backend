@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -17,6 +18,26 @@ import java.util.UUID;
 public interface WbsItemRepository extends JpaRepository<WbsItem, UUID> {
 
     Optional<WbsItem> findByTaskId(UUID taskId);
+
+    /** 프로젝트의 WBS 항목 수 (복제 프리뷰 — PROJ-11). */
+    long countByProjectId(UUID projectId);
+
+    /** 프로젝트의 WBS 전량 (복제 실행 — PROJ-12). 복제본 태스크에 재연결하기 위해 task_id별로 읽는다. */
+    List<WbsItem> findByProjectId(UUID projectId);
+
+    /**
+     * WBS 뷰 (PROJ-13 / GET) — 기간 바 렌더링용으로 태스크 제목을 조인해 함께 읽는다(N+1 회피).
+     * 정렬은 서버 고정(D-9): 시작일 오름차순 = 타임라인 위에서 아래로. 같은 시작일은 짧은 바가 먼저,
+     * 그마저 같으면 wbs_item_id로 완전 결정적이게 한다(페이지네이션 없는 전량 반환이라 tie도 안정 필요).
+     */
+    @Query("""
+            select new com.openplan.backend.task.repository.WbsItemRow(w, t.title)
+              from WbsItem w, Task t
+             where t.id = w.taskId
+               and w.projectId = :projectId
+             order by w.startDate asc, w.endDate asc, w.id asc
+            """)
+    List<WbsItemRow> findViewsByProjectId(@Param("projectId") UUID projectId);
 
     /**
      * WBS 기간 업서트 (PUT — 있으면 갱신, 없으면 생성). {@code INSERT ... ON CONFLICT (task_id)

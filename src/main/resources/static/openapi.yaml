@@ -1199,9 +1199,8 @@ paths:
   /projects/{projectId}/duplication-preview:
     get:
       tags: [projects]
-      x-implementation-status: not-implemented
       operationId: getDuplicationPreview
-      summary: "[미구현] 복제 항목 확인 (이름·설명·태스크·WBS 개요 — PROJ-11)"
+      summary: "복제 항목 확인 (이름·설명·태스크·WBS 개요 — PROJ-11)"
       x-lane: BE-2
       x-user-stories: [PROJ-10, PROJ-11]
       parameters: [{ $ref: "#/components/parameters/ProjectId" }]
@@ -1221,33 +1220,56 @@ paths:
                       taskCount: { type: integer }
                       wbsItemCount: { type: integer }
                       note: { type: string, description: "주간 계획 항목은 복제되지 않음(47행 열거 밖) — 복제본 태스크 전량 미배치" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /projects/{projectId}/duplications:
     post:
       tags: [projects]
-      x-implementation-status: not-implemented
       operationId: duplicateProject
-      summary: "[미구현] 복제 실행 (Idempotency-Key 수용 — 이중 클릭 방지)"
+      summary: "복제 실행 (Idempotency-Key 수용 — 서버 dedup 아님, 아래 설명 참조)"
       x-lane: BE-2
       x-user-stories: [PROJ-12]
       parameters:
         - { $ref: "#/components/parameters/ProjectId" }
         - { $ref: "#/components/parameters/IdempotencyKey" }
       requestBody:
+        required: false
+        description: "본문 전체 생략 가능 — 생략(또는 {})하면 복제본 이름은 '원본명 (복제)'가 된다."
         content:
           application/json:
             schema:
               type: object
+              # 기본 예시는 빈 객체 — Swagger UI가 newName 을 "string" 으로 자동 채워 보내
+              # 복제본이 'string' 으로 생성되는 함정을 막는다.
+              example: {}
               properties:
-                newName: { type: string, description: "미지정 시 '원본명 (복제)'" }
+                newName:
+                  type: string
+                  maxLength: 100
+                  description: "미지정·공백이면 '원본명 (복제)'(접미사 포함 100자 초과 시 원본명을 잘라 맞춤). 지정 시 생성과 동일 규칙(trim·1~100자, 위반 422)."
+                  example: "마케팅 2026"
       responses:
         "201":
-          description: 복제본 생성 — 원본 무변경, 태스크 전량 UNASSIGNED
+          description: >-
+            복제본 생성 — 원본 무변경, 태스크 전량 UNASSIGNED, 복제본은 IN_PROGRESS.
+            WBS 는 복제본 태스크로 재연결된다. 주간 계획 블록·수행 이력은 복사하지 않는다.
+
+
+            🔴 Idempotency-Key 는 수용하지만 **서버가 dedup 하지 않는다** — 관측 로그로만 남긴다.
+            같은 키로 두 번 POST 하면 복제본이 둘 생긴다(확정 POST /confirmation 과 다르다 — 그쪽은
+            상태 기반 멱등이라 키 없이도 멱등이다). 이중 클릭 방지는 현재 **클라이언트 책임**이다.
+            서버 dedup(키 저장소)은 전 도메인 공통 인프라라 후속 과제로 남아 있다.
+
+
+            원본 마감일이 이미 지났으면 복제본 dueDate 는 null(무기한)이 된다 — 지난 마감일을
+            그대로 물려주면 자동 종료(ADR-0006)가 다음 조회에서 복제본을 CLOSED 로 뒤집는다.
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   data: { $ref: "#/components/schemas/Project" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/UnprocessableEntity" }
   /projects/{projectId}/tasks:
     get:
       tags: [projects]
@@ -1585,15 +1607,18 @@ paths:
   /projects/{projectId}/wbs:
     get:
       tags: [projects]
-      x-implementation-status: not-implemented
       operationId: getProjectWbs
-      summary: "[미구현] WBS 뷰 (태스크별 기간 바)"
+      summary: "WBS 뷰 (태스크별 기간 바)"
       x-lane: BE-2
       x-user-stories: [PROJ-13]
       parameters: [{ $ref: "#/components/parameters/ProjectId" }]
       responses:
         "200":
-          description: OK
+          description: >-
+            OK — 정렬 start_date ASC, end_date ASC, wbs_item_id ASC 서버 고정(간트 바를 시작일 순으로 렌더링).
+            페이지네이션 없음(전량 반환). 기간 미설정 태스크는 wbs_items 행이 없어 미포함 —
+            "전체 태스크 + 기간 유무" 뷰가 필요하면 GET /projects/{projectId}/tasks 와 합성한다.
+            평가 불요 — CLOSED/PAUSED 프로젝트도 조회 가능. 부재·타인 projectId → 404 E-COM-004.
           content:
             application/json:
               schema:
@@ -1602,6 +1627,7 @@ paths:
                   data:
                     type: array
                     items: { $ref: "#/components/schemas/WbsItem" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /projects/{projectId}/structuring-drafts:
     post:
       tags: [projects]
@@ -1624,15 +1650,40 @@ paths:
   /projects/{projectId}/structure-warnings:
     get:
       tags: [projects]
-      x-implementation-status: not-implemented
       operationId: getStructureWarnings
-      summary: "[미구현] 태스크 구조 부족 경고 (SS-04 — 임계값은 W3 확정 후 골든 고정)"
+      summary: "태스크 구조 부족 경고 (SS-04 — 임계값 W3 확정·골든 고정)"
       x-lane: BE-2
       x-user-stories: [RB-PROJ-02]
       parameters: [{ $ref: "#/components/parameters/ProjectId" }]
       responses:
         "200":
-          description: OK
+          description: >-
+            계획 전 점검 항목을 규칙으로 판정해 반환한다(읽기 전용·저장 없음).
+            경고가 없으면 data: [] — 오류가 아니다. meta 없음, 페이지네이션 없음(최대 3건).
+
+
+            임계값(W3 게이트 확정 — ASSUMPTION-SW1~SW3, 변경 시 상수·문구·골든·이 설명을 함께 갱신):
+            TOO_FEW_TASKS = 태스크 총수(상태 무관) 3건 미만 → action ADD_TASK ·
+            MISSING_ESTIMATES = 미완료(status≠COMPLETED) 태스크 중 estimatedMinutes 미입력 1건 이상 → EDIT_TASK ·
+            DEADLINE_PRESSURE = status=IN_PROGRESS ∧ dueDate≠null ∧ 마감까지 0~3일 ∧ 미완료 1건 이상 → EDIT_TASK.
+            마감 임박 창 3일은 대시보드 마감 임박 카운트·프로젝트 배지와 같은 공용 정의다.
+
+
+            TOO_FEW만 상태 무관 총수를 세는 것은 의도된 비대칭이다 — 구조(분해 수준)는 완료 여부와
+            독립된 프로젝트 속성이라, 미완료만 세면 완료에 가까워질수록 경고가 되살아나는 역설이 생긴다.
+
+
+            순서는 위 나열 순(enum 선언 순) 고정이고 유형당 최대 1건이라 동일 입력이면 문자 단위로 같은 응답이다.
+            건수는 reason에 집계한다.
+
+
+            상태 분기: CLOSED → 항상 data: [] (하위 태스크 쓰기가 전부 422라 실행 불가능한 action을 제안하지 않는다.
+            조회 자체는 상태 무관 허용이므로 오류가 아니라 빈 배열) · PAUSED → TOO_FEW·MISSING은 판정하고
+            DEADLINE만 보류(자동 종료 대상이 아니라 과거 마감일을 합법적으로 가질 수 있어 "마감까지 -N일"이 무의미).
+
+
+            조회 전 자동 종료 평가가 선행한다(ADR-0006) — 어제 마감된 stale IN_PROGRESS가 좀비 경고를
+            만들지 않도록. 부재·타인 projectId → 404 E-COM-004(구분 불가).
           content:
             application/json:
               schema:
@@ -1644,8 +1695,9 @@ paths:
                       type: object
                       properties:
                         warningType: { type: string, enum: [TOO_FEW_TASKS, MISSING_ESTIMATES, DEADLINE_PRESSURE] }
-                        reason: { type: string }
+                        reason: { type: string, description: "사실 서술(P4) — 판정에 쓴 숫자와 기준을 밝힌다. 예: '태스크가 2건입니다. (기준 3건 미만)'" }
                         action: { type: string, enum: [ADD_TASK, EDIT_TASK] }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   # ───────────────────────────────────────────── WEEKLY PLANS / BLOCKS / VALIDATION / REPLAN (BE-2)
   /weekly-plans:
@@ -1745,9 +1797,8 @@ paths:
   /weekly-plans/{planId}/auto-placements:
     post:
       tags: [weekly-plans]
-      x-implementation-status: not-implemented
       operationId: proposeAutoPlacement
-      summary: "[미구현] 자동 배치 제안 (SS-05 — first-fit, 저장 아님 · C-2 · NFR-029 5초)"
+      summary: "자동 배치 제안 (SS-05 — first-fit, 저장 아님 · C-2 · NFR-029 5초)"
       x-lane: BE-2
       x-user-stories: [RB-PLAN-01]
       parameters: [{ $ref: "#/components/parameters/PlanId" }]
@@ -1773,9 +1824,8 @@ paths:
   /weekly-plans/{planId}/block-batches:
     post:
       tags: [weekly-plans]
-      x-implementation-status: not-implemented
       operationId: applyBlockBatch
-      summary: "[미구현] 블록 일괄 적용 (제안 수용 = 사용자 확정 행위 — P2)"
+      summary: "블록 일괄 적용 (제안 수용 = 사용자 확정 행위 — P2)"
       x-lane: BE-2
       x-user-stories: [RB-PLAN-01, PLAN-29]
       parameters: [{ $ref: "#/components/parameters/PlanId" }]
@@ -1831,9 +1881,8 @@ paths:
   /plan-blocks/{blockId}:
     patch:
       tags: [plan-blocks]
-      x-implementation-status: not-implemented
       operationId: movePlanBlock
-      summary: "[미구현] 블록 이동·시간 조정 (PLAN-19) · 주차 이동은 targetWeekStartDate (PLAN-20 — 대상 주차 초안 get-or-create)"
+      summary: "블록 이동·시간 조정 (PLAN-19) · 주차 이동은 targetWeekStartDate (PLAN-20 — 대상 주차 초안 get-or-create)"
       x-lane: BE-2
       x-user-stories: [PLAN-19, PLAN-20, PLAN-09]
       parameters: [{ $ref: "#/components/parameters/BlockId" }]
@@ -1859,9 +1908,8 @@ paths:
         "422": { description: "E-PLAN-002 시작>=종료 (NFR-009) · E-COM-009 5분 단위", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
     delete:
       tags: [plan-blocks]
-      x-implementation-status: not-implemented
       operationId: deletePlanBlock
-      summary: "[미구현] TASK 블록=배치 해제(태스크 UNASSIGNED 복귀 — PLAN-16) / SCHEDULE 블록=일정 삭제(schedules 행 연쇄 — PLAN-18)"
+      summary: "TASK 블록=배치 해제(태스크 UNASSIGNED 복귀 — PLAN-16) / SCHEDULE 블록=일정 삭제(schedules 행 연쇄 — PLAN-18)"
       x-lane: BE-2
       x-user-stories: [PLAN-16, PLAN-18, TUT-07]
       parameters: [{ $ref: "#/components/parameters/BlockId" }]
@@ -1870,9 +1918,8 @@ paths:
   /schedules/{scheduleId}:
     patch:
       tags: [schedules]
-      x-implementation-status: not-implemented
       operationId: updateSchedule
-      summary: "[미구현] 일정 편집 (제목·예상시간·우선순위·메모 — B2 보강 컬럼, version 필수)"
+      summary: "일정 편집 (제목·예상시간·우선순위·메모 — B2 보강 컬럼, version 필수)"
       x-lane: BE-2
       x-user-stories: [PLAN-17]
       parameters: [{ name: scheduleId, in: path, required: true, schema: { type: string, format: uuid } }]
@@ -1902,9 +1949,8 @@ paths:
   /weekly-plans/{planId}/replan-options:
     post:
       tags: [weekly-plans]
-      x-implementation-status: not-implemented
       operationId: generateReplanOptions
-      summary: "[미구현] 재계획 대안 생성 (SS-07~09 — 3전략 + 기준선, NFR-029 5초, SS-13 구간 우선 반영)"
+      summary: "재계획 대안 생성 (SS-07~09 — 3전략 + 기준선, NFR-029 5초, SS-13 구간 우선 반영)"
       x-lane: BE-2
       x-user-stories: [PLAN-29, RB-PLAN-03, RB-PLAN-04, RB-PLAN-05, RB-STAT-04]
       parameters: [{ $ref: "#/components/parameters/PlanId" }]
@@ -1925,9 +1971,8 @@ paths:
                         items: { $ref: "#/components/schemas/ReplanOption" }
     get:
       tags: [weekly-plans]
-      x-implementation-status: not-implemented
       operationId: listReplanOptions
-      summary: "[미구현] 대안 재조회 (비교 화면 새로고침)"
+      summary: "대안 재조회 (비교 화면 새로고침)"
       x-lane: BE-2
       x-user-stories: [PLAN-29]
       parameters: [{ $ref: "#/components/parameters/PlanId" }]
@@ -1945,9 +1990,8 @@ paths:
   /replan-options/{optionId}/application:
     post:
       tags: [replan-options]
-      x-implementation-status: not-implemented
       operationId: applyReplanOption
-      summary: "[미구현] 대안 선택+초안 반영 (is_selected/selected_at 기록 — SC-07 대체, SS-14 입력. 초안 반영이며 확정 아님 — P2)"
+      summary: "대안 선택+초안 반영 (is_selected/selected_at 기록 — SC-07 대체, SS-14 입력. 초안 반영이며 확정 아님 — P2)"
       x-lane: BE-2
       x-user-stories: [PLAN-29, RB-FIX-01]
       parameters: [{ name: optionId, in: path, required: true, schema: { type: string, format: uuid } }]
@@ -2090,9 +2134,8 @@ paths:
   /fixed-schedules/conflict-previews:
     post:
       tags: [fixed-schedules]
-      x-implementation-status: not-implemented
       operationId: previewFixedScheduleConflicts
-      summary: "[미구현] 생성·편집 전 충돌 미리보기 (dry-run C-4 — 저장된 주간 계획 대상 V2 판정)"
+      summary: "생성·편집 전 충돌 미리보기 (dry-run C-4 — 저장된 주간 계획 대상 V2 판정)"
       x-lane: BE-2
       x-user-stories: [FIX-07, FIX-08]
       requestBody:
@@ -2111,7 +2154,15 @@ paths:
                         fixedScheduleId: { type: [string, "null"], format: uuid, description: "편집 시 기존 ID (자기 자신 제외 판정)" }
       responses:
         "200":
-          description: 주차별 충돌 목록 (무영속)
+          description: >-
+            주차별 충돌 목록 (무영속 — 아무것도 저장하지 않고 validationIssueId는 항상 null).
+            대상은 저장된 주간 계획 전량(과거 주 포함), 주차 오름차순. 충돌이 있는 주만 담기며
+            충돌 0건이면 data: [] (오류 아님). issues는 후보가 일으킨 V2_FIXED_CONFLICT만 —
+            기존 고정 일정끼리의 충돌·블록 겹침은 후보와 무관하므로 제외한다.
+            후보 유효기간(startDate/endDate) 밖 주는 V2가 스스로 0건 처리한다.
+            편집(fixedScheduleId 지정) 시 그 일정은 판정에서 빠지고(자기 자신 제외),
+            그 일정에 걸린 주차 예외(PLAN-33)가 있는 주는 건너뛴다(저장해도 그 주엔 안 생길 충돌이므로).
+            생성(fixedScheduleId 미지정) 시 counterpartId는 null — 가리킬 고정 일정 행이 아직 없다.
           content:
             application/json:
               schema:
@@ -2126,6 +2177,12 @@ paths:
                         issues:
                           type: array
                           items: { $ref: "#/components/schemas/ValidationIssue" }
+        "404":
+          description: >-
+            E-COM-004 — candidate.fixedScheduleId 가 부재하거나 타인 소유(존재 은닉).
+            값 검증(422)보다 먼저 판정한다.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+        "422": { $ref: "#/components/responses/UnprocessableEntity" }
 
   # ───────────────────────────────────────────── DASHBOARD / STATS (BE-2)
   /dashboard:
@@ -2696,7 +2753,11 @@ components:
           type: array
           description: 가용 슬롯 부족으로 배치 못 한 태스크
           items: { type: string, format: uuid }
-        reason: { type: string, description: "정렬 규칙 설명 (우선순위→마감일→예상시간, first-fit)" }
+        # 🔴 이 필드만 P4(사용자 노출 문구는 카탈로그에서만) 의 예외다. 제안기가 규칙(first-fit)이면
+        #    카탈로그 고정 문구가, AI 초안이면 그 초안이 동반한 근거가 담긴다 — AI 는 매번 근거가
+        #    달라 제안기만이 그 문구를 알기 때문이다(Spring↔AI 계약 §4: "reason 은 필수다 …
+        #    AI 제안도 근거를 동반한다"). grep 감사로는 이 필드를 덮을 수 없으니 여기 적어 둔다.
+        reason: { type: string, description: "배치 근거. 규칙 경로면 정렬 규칙 설명(우선순위→마감일→예상시간, first-fit), AI 경로면 초안이 동반한 근거 문구 — 이 필드는 P4 카탈로그 예외" }
     ReplanOption:
       type: object
       properties:
