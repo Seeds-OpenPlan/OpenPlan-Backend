@@ -397,6 +397,37 @@ class CorrectionProposalApiTest {
                 .andExpect(jsonPath("$.data.rows[0].deviationRate").value(20.0)); // basis 의 +20% 와 같은 값
     }
 
+    @Test
+    @DisplayName("AC-15 괴리 — 제외 대상 이력이 섞이면 두 화면 편차율이 갈라진다(의도된 차이)")
+    void divergesFromDeviationsWhenExcludedLogsExist() throws Exception {
+        // 정본이 약속하는 것은 "집계 방식이 같다"이지 "항상 같은 수치"가 아니다.
+        // 근거에서 빼는 이력(예상시간 없음·ABORTED)이 있으면 두 화면이 다르게 보이는 것이 정상이며,
+        // 그 사실 자체를 여기서 고정한다 — 위 정합 테스트만 있으면 이 괴리를 아무도 못 본다.
+        UUID task = insertTask(project, category, 60);
+        insertLogAt(MAIN, task, 30, "2026-06-05T01:00:00Z");
+        insertLogAt(MAIN, task, 30, "2026-06-12T01:00:00Z");
+        insertLogAt(MAIN, task, 30, "2026-06-19T01:00:00Z"); // 근거 3건, Σactual=90
+        insertLogAt(MAIN, task, 5, "2026-06-20T01:00:00Z", "ABORTED");
+        insertLogAt(MAIN, task, 5, "2026-06-21T01:00:00Z", "ABORTED"); // 제외 대상
+
+        // 보정 제안: (90-60)/60 = +50% — 중단분 미산입
+        mockMvc.perform(req(MAIN).param("categoryId", category.toString())
+                        .param("estimatedMinutes", "60"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.basis").value("해당 카테고리 편차율 +50% 반영"))
+                .andExpect(jsonPath("$.data.sampleSize").value(3)); // 5가 아니다
+
+        // 통계 화면: (100-60)/60 = +66.67% — 중단분까지 사실대로 표시
+        mockMvc.perform(get("/api/v1/stats/deviations").header("X-Dev-User", MAIN.toString())
+                        .param("period", "MONTHLY")
+                        .param("baseDate", "2026-06-15")
+                        .param("groupBy", "CATEGORY"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.rows[0].actualMinutes").value(100))
+                .andExpect(jsonPath("$.data.rows[0].deviationRate")
+                        .value(org.hamcrest.Matchers.closeTo(66.67, 0.01)));
+    }
+
     // ═══════════════ [G4] 결정성 ═══════════════
 
     @Test
@@ -485,17 +516,21 @@ class CorrectionProposalApiTest {
         insertLog(userId, taskId, actualMinutes, "COMPLETED");
     }
 
-    /** 시각을 지정해 시딩 — deviations 정합 테스트만 필요로 한다(그쪽은 period 로 기간을 자르므로). */
     private void insertLogAt(UUID userId, UUID taskId, int actualMinutes, String startedAt) {
+        insertLogAt(userId, taskId, actualMinutes, startedAt, "COMPLETED");
+    }
+
+    /** 시각을 지정해 시딩 — deviations 대조 테스트만 필요로 한다(그쪽은 period 로 기간을 자르므로). */
+    private void insertLogAt(UUID userId, UUID taskId, int actualMinutes, String startedAt, String result) {
         Instant t = Instant.parse(startedAt);
         jdbc.update("""
                 INSERT INTO execution_logs (execution_log_id, user_id, task_id, plan_block_id,
                                             started_at, ended_at, actual_minutes, result, memo, created_at)
-                VALUES (?, ?, ?, NULL, ?, ?, ?, 'COMPLETED', NULL, ?)
+                VALUES (?, ?, ?, NULL, ?, ?, ?, ?, NULL, ?)
                 """, UUID.randomUUID(), userId, taskId,
                 OffsetDateTime.ofInstant(t, ZoneOffset.UTC),
                 OffsetDateTime.ofInstant(t.plusSeconds(actualMinutes * 60L), ZoneOffset.UTC),
-                actualMinutes, OffsetDateTime.now(ZoneOffset.UTC));
+                actualMinutes, result, OffsetDateTime.now(ZoneOffset.UTC));
     }
 
     private void insertLog(UUID userId, UUID taskId, int actualMinutes, String result) {

@@ -64,7 +64,9 @@ public class StatsController {
     @Operation(summary = "예상 시간 보정 제안 (SS-11 / RB-STAT-02 — 제안만, 자동 적용 없음)",
             description = "입력 중인 예상값을 같은 스코프의 과거 편차율만큼 조정해 제안한다(읽기 전용). "
                     + "식: proposed = max(5, round5(estimatedMinutes × (100 + r) / 100)), r = 편차율 정수 반올림. "
-                    + "편차율은 /stats/deviations와 같은 산법이고 집계 창은 전체 이력이라 시계에 의존하지 않는다. "
+                    + "집계 방식은 /stats/deviations와 같고 집계 창은 전체 이력이라 시계에 의존하지 않는다. "
+                    + "다만 근거로 삼는 이력은 더 좁다 — 예상시간이 없는 태스크의 이력과 중단(ABORTED) 이력을 제외한다"
+                    + "(DELAYED는 산입). 그런 이력이 섞여 있으면 deviations 화면의 편차율과 basis의 값이 달라진다. "
                     + "스코프 우선순위 categoryId > projectId > 전체이며 묵시 폴백은 없다 — 지정한 스코프의 "
                     + "이력이 부족하면 다른 스코프로 내려가지 않고 제안을 생략한다. "
                     + "제안 불가 3사유(표본 3건 미만 · 예상시간 합 0 · estimatedMinutes 미제공)는 모두 data 생략(200). "

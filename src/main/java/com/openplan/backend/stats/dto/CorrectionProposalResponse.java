@@ -10,8 +10,9 @@ package com.openplan.backend.stats.dto;
  * @param basis 산출 근거(P4 사실 서술) — 예: {@code "해당 카테고리 편차율 +20% 반영"}
  * @param sampleSize 집계에 실제로 쓰인 <b>수행 이력(로그) 건수</b> — 태스크 건수가 아니다.
  *                   단일 태스크를 여러 번 기록해도 그만큼 늘어난다(FE 표시 문구는 "수행 이력 N건" 계열로).
- *                   예상시간이 없는 태스크의 로그는 편차 계산에서 제외되므로 이 수에도 포함되지 않는다 —
- *                   근거로 제시하는 숫자가 계산에 쓰인 표본과 어긋나면 사용자가 검산할 수 없다.
+ *                   <b>근거에서 제외되는 이력은 이 수에도 포함되지 않는다</b> — 예상시간이 없는 태스크의 로그와
+ *                   중단(ABORTED) 이력 둘 다. 제시하는 숫자가 계산에 쓰인 표본과 어긋나면 사용자가 검산할 수 없다.
+ *                   그래서 {@code /stats/deviations} 화면이 세는 이력 수와 이 값이 다를 수 있다.
  */
 public record CorrectionProposalResponse(
         int proposedEstimatedMinutes,
