@@ -37,8 +37,11 @@ concurrency:
 
 env:
   PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
-  # PR 당 자동 실행 예산. workflow_dispatch 는 여기 안 걸린다(리드의 명시적 재실행).
-  RUN_BUDGET: 5
+  # 같은 커밋(HEAD SHA)에서 허용하는 자동 리뷰 횟수. 일시적 실패 재시도 여유로 2.
+  # 고쳐서 새 커밋을 올리면 새로 2회를 받는다 — 라운드 수 자체에는 상한이 없다.
+  SHA_BUDGET: 2
+  # 브랜치 누적 안전망(폭주 방지). 여기에 닿으면 사람이 들여다볼 때다.
+  PR_CEILING: 20
 
 jobs:
   review:
@@ -54,24 +57,56 @@ jobs:
       actions: read
 
     steps:
+      # ── 0. 수동 실행의 PR 맥락 ─────────────────────────────────────────────
+      # 🔴 workflow_dispatch 에는 github.event.pull_request 가 없다 (D-89, 2026-08-26).
+      #    그래서 HEAD SHA 도, 코멘트를 붙일 PR 엔티티도 없다. 옛 구현은 이걸 모르고
+      #    돌아 **리뷰가 72턴·$2.71 을 쓰고도 산출물 0** 이었고(잡은 success), 판정 스텝은
+      #    그 사이 옛 코멘트를 집었다. 여기서 SHA 를 직접 조회해 뒤 스텝들에 넘긴다.
+      - name: 수동 실행 — PR 의 HEAD SHA 조회
+        id: dispatch_sha
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          SHA=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')
+          echo "PR #${PR_NUMBER} HEAD = ${SHA}"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+
       # ── 1. 예산 ────────────────────────────────────────────────────────────
-      # 같은 헤드 브랜치에서 끝난 실행 수를 센다. 취소된 실행은 빼는데, 연속 푸시 때
-      # cancel-in-progress 로 죽은 것까지 예산을 먹으면 5회가 두세 번에 소진되기 때문이다.
-      # ⚠️ 브랜치 기준이라 한 브랜치를 여러 PR 이 돌려 쓰면 예산을 공유한다.
-      - name: 예산 확인 (PR 당 5회)
+      # 🔴 2026-08-26 실장애로 계산 기준을 바꿨다 (D-91).
+      #    옛 구현은 "그 **브랜치**에서 끝난 실행 수" 를 셌다. 이 수는 **줄지 않는다** —
+      #    고칠수록 예산이 닳고, 다 쓰면 **고쳐도 판정을 못 받는다.** 라운드가 많이 필요한 PR
+      #    = 결함이 많아 게이트가 가장 필요한 PR 이 정확히 그 게이트에서 먼저 잠긴다.
+      #    PR #33 이 그렇게 영구 봉쇄됐다(자동 5/5 소진 + 수동 경로도 D-89 로 막힘).
+      #
+      #    지금은 **현재 HEAD SHA** 기준으로 센다. 고쳐서 새 커밋을 올리면 새 예산을 받고,
+      #    **같은 코드로 반복 재시도하는 것만** 막힌다 — 원래 막고 싶었던 것이 그쪽이다.
+      #    취소된 실행은 뺀다(연속 푸시 때 cancel-in-progress 로 죽은 것까지 세면 안 된다).
+      #
+      #    PR 누적 상한은 안전망으로만 남긴다. 지갑이 팀원 대화형 사용과 공유라 무한은 안 되지만,
+      #    상한이 **고칠 길을 막아서는 안 된다** — 그래서 SHA 예산보다 훨씬 헐겁게 잡는다.
+      - name: 예산 확인 (같은 코드 재리뷰 제한)
         id: budget
         if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
         run: |
           set -euo pipefail
           USED=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/ai-review.yml/runs?head_sha=${HEAD_SHA}&per_page=100" \
+            --jq '[.workflow_runs[] | select(.status == "completed" and .conclusion != "cancelled")] | length')
+          TOTAL=$(gh api \
             "repos/${GITHUB_REPOSITORY}/actions/workflows/ai-review.yml/runs?branch=${HEAD_BRANCH}&per_page=100" \
             --jq '[.workflow_runs[] | select(.status == "completed" and .conclusion != "cancelled")] | length')
-          echo "이 브랜치에서 끝난 리뷰: ${USED}회 / 예산 ${RUN_BUDGET}회"
-          if [ "${USED}" -ge "${RUN_BUDGET}" ]; then
-            echo "exhausted=true" >> "$GITHUB_OUTPUT"
+          echo "이 커밋(${HEAD_SHA:0:7})에서 끝난 리뷰: ${USED}회 / 예산 ${SHA_BUDGET}회"
+          echo "이 브랜치 누적: ${TOTAL}회 / 안전망 ${PR_CEILING}회"
+          if [ "${USED}" -ge "${SHA_BUDGET}" ]; then
+            echo "exhausted=same-code" >> "$GITHUB_OUTPUT"
+          elif [ "${TOTAL}" -ge "${PR_CEILING}" ]; then
+            echo "exhausted=ceiling" >> "$GITHUB_OUTPUT"
           else
             echo "exhausted=false" >> "$GITHUB_OUTPUT"
           fi
@@ -79,12 +114,16 @@ jobs:
       # ── 2. 리뷰 ────────────────────────────────────────────────────────────
       # 얕은 클론이면 diff 기준이 안 잡힌다. 전체를 받아야 계약 정본·ADR 도 읽을 수 있다.
       - uses: actions/checkout@v4
-        if: steps.budget.outputs.exhausted != 'true'
+        if: steps.budget.outputs.exhausted == '' || steps.budget.outputs.exhausted == 'false'
         with:
           fetch-depth: 0
 
       - uses: anthropics/claude-code-action@v1
-        if: steps.budget.outputs.exhausted != 'true'
+        if: steps.budget.outputs.exhausted == '' || steps.budget.outputs.exhausted == 'false'
+        env:
+          # 에이전트의 Bash 가 gh 를 쓸 수 있어야 한다 — 수동 실행에서는 스티키 코멘트가
+          # 붙을 PR 엔티티가 없어 **에이전트가 직접** 코멘트를 올려야 하기 때문이다(D-89).
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           # Max 구독 토큰으로 인증한다 — 종량 과금 대신 구독 한도를 쓴다.
           # 🔴 이 한도는 팀원의 대화형 Claude Code 사용과 **같은 지갑**이다
@@ -130,9 +169,21 @@ jobs:
             🔴 **요약 코멘트의 맨 마지막 줄에 아래 형식의 한 줄을 반드시 그대로 남긴다.**
             자동 판정이 이 줄만 읽는다. 빠지면 리뷰가 실패한 것으로 처리된다.
 
-                <!-- REVIEW-VERDICT blocking=N -->
+                <!-- REVIEW-VERDICT blocking=N sha=${{ github.event.pull_request.head.sha || steps.dispatch_sha.outputs.sha }} -->
 
-            N 은 Blocking 건수다(0 이면 `blocking=0`). 다른 문자를 덧붙이지 않는다.
+            N 은 Blocking 건수다(0 이면 `blocking=0`). `sha=` 값은 **위에 적힌 그대로** 옮긴다.
+            🔴 **SHA 를 바꾸거나 줄이지 않는다.** 판정은 "지금 이 커밋"에 대한 것임을 그 값으로 증명한다 —
+            값이 틀리면 판정이 없는 것으로 처리돼 리뷰가 헛돈다.
+
+            🔴 **이 실행의 이벤트는 `${{ github.event_name }}` 이다.**
+            그것이 `workflow_dispatch` 라면 **스티키 코멘트가 붙을 PR 맥락이 없다** —
+            네가 남기는 요약이 자동으로 올라가지 않는다(2026-08-26 에 이것으로 리뷰 하나가
+            통째로 증발했다). 그 경우 **작업의 마지막에 반드시 직접 올려라**:
+
+                gh pr comment ${{ github.event.pull_request.number || inputs.pr_number }} \
+                  --body-file <요약을 쓴 파일>
+
+            `pull_request` 이벤트라면 올리지 마라 — 스티키 코멘트와 **중복**된다.
 
             지켜야 할 것:
             - **승인(Approve)하지 않는다. 머지하지 않는다.** 코멘트만 단다.
@@ -150,30 +201,44 @@ jobs:
         if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || steps.dispatch_sha.outputs.sha }}
         run: |
           set -euo pipefail
 
-          if [ "${{ steps.budget.outputs.exhausted }}" = "true" ]; then
-            echo "::error::리뷰 예산 ${RUN_BUDGET}회를 다 썼습니다."
-            echo "판정을 새로 받으려면 리드가 workflow_dispatch 로 PR #${PR_NUMBER} 를 지정해 다시 돌리십시오."
-            echo "(예산은 자동 실행에만 걸립니다 — 수동 재실행은 세지 않습니다.)"
-            exit 1
-          fi
+          case "${{ steps.budget.outputs.exhausted }}" in
+            same-code)
+              echo "::error::같은 커밋(${HEAD_SHA:0:7})에서 이미 리뷰 ${SHA_BUDGET}회를 썼습니다."
+              echo "코드를 고쳐 새 커밋을 올리면 예산이 새로 생깁니다 — 라운드 수에는 상한이 없습니다."
+              echo "코드를 안 고치고 판정만 다시 받으려면 workflow_dispatch 로 PR #${PR_NUMBER} 를 돌리십시오."
+              exit 1
+              ;;
+            ceiling)
+              echo "::error::이 브랜치 누적 리뷰가 안전망 ${PR_CEILING}회에 닿았습니다."
+              echo "여기까지 왔으면 자동 리뷰로 풀 문제가 아닙니다 — 사람이 들여다볼 때입니다."
+              exit 1
+              ;;
+          esac
 
-          # 스티키 코멘트는 갱신되므로 한 개다. 그래도 전체를 훑고 마지막 것을 쓴다.
+          # 🔴 판정은 **지금 이 커밋에 대한 것**이어야 한다 (D-90, 2026-08-26 실장애).
+          #    옛 구현은 코멘트 전체에서 마지막 마커를 tail -1 로 집었다. 새 리뷰가 코멘트를
+          #    못 남긴 회차에서 **하루 전 판정을 집어 고친 코드를 떨어뜨렸다.**
+          #    D-86 이 "갱신 안 된 초록은 판정이 아니다" 였다면 이건 그 거울상이다 —
+          #    **빨강도 갱신 안 된 판정일 수 있다.** 그래서 마커에 SHA 를 박고 그것만 인정한다.
+          #    못 찾으면 옛것으로 대신하지 않는다. **판정 없음은 통과도 실패도 아닌 오류다.**
           VERDICT=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
             --jq '.[].body' \
-            | grep -o 'REVIEW-VERDICT blocking=[0-9][0-9]*' \
+            | grep -o "REVIEW-VERDICT blocking=[0-9][0-9]* sha=${HEAD_SHA}" \
             | tail -1 || true)
 
           if [ -z "${VERDICT}" ]; then
-            echo "::error::리뷰 판정을 찾지 못했습니다 — 코멘트에 REVIEW-VERDICT 줄이 없습니다."
+            echo "::error::이 커밋(${HEAD_SHA:0:7})에 대한 리뷰 판정을 찾지 못했습니다."
             echo "리뷰가 도중에 끊겼거나(턴 상한·인증 실패) 코멘트를 못 올린 것입니다."
+            echo "🔴 옛 커밋의 판정은 쓰지 않습니다 — 그것은 남의 코드에 대한 판정입니다."
             echo "판정이 없는 것은 통과가 아닙니다. 실행 로그를 확인하고 다시 돌리십시오."
             exit 1
           fi
 
-          COUNT="${VERDICT##*=}"
+          COUNT=$(echo "${VERDICT}" | grep -o "blocking=[0-9][0-9]*" | cut -d= -f2)
           echo "AI 리뷰 판정: Blocking ${COUNT}건"
 
           if [ "${COUNT}" -gt 0 ]; then
