@@ -29,7 +29,11 @@ AI_REPO="${AI_REPO:-https://github.com/Seeds-OpenPlan/OpenPlan-AI.git}"
 AI_BRANCH="${AI_BRANCH:-main}"
 APP_DIR="${APP_DIR:-$HOME/openplan}"
 FE_DIR="$HOME/openplan-fe"
-AI_DIR="$HOME/openplan-ai"
+# 🔴 APP_DIR 의 **형제 자리**여야 한다. docker-compose.prod.yml 의
+#    openplan-ai.build.context 가 `../openplan-ai` 라 compose 파일 위치(=APP_DIR) 기준
+#    상대경로로 풀리는데, 여기를 $HOME 에 고정하면 APP_DIR 을 옮긴 순간 둘이 어긋나
+#    **compose 가 없는 디렉터리를 굽는다**(2026-08-27 리뷰 지적).
+AI_DIR="$(dirname "$APP_DIR")/openplan-ai"
 
 log() { printf '\n\033[1;34m== %s\033[0m\n' "$*"; }
 
