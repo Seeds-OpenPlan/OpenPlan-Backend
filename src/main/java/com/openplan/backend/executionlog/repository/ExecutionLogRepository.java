@@ -23,9 +23,13 @@ public interface ExecutionLogRepository extends JpaRepository<ExecutionLog, UUID
             UUID userId, Instant from, Instant to);
 
     /**
-     * 기간 미한정 전체 이력 — DASH-06 ACTUAL_OVERRUN 배지(프로젝트별 실제 vs 예상, 전체 이력 기준 —
-     * dashboard 라우트에 기간 파라미터가 없어 채택, stats-dashboard-notes.md 참고) 전용.
-     * MVP 규모(사용자당 이력 수 적음) 전제 — 이력이 커지면 배지 판정도 기간·페이지네이션이 필요해진다.
+     * 기간 미한정 전체 이력. 소비처 둘 다 <b>라우트에 기간 파라미터가 없어</b> 전체 이력을 채택한 경우다:
+     * <ul>
+     *   <li>DASH-06 ACTUAL_OVERRUN 배지(프로젝트별 실제 vs 예상 — stats-dashboard-notes.md 참고)</li>
+     *   <li>SS-11 보정 제안(RB-STAT-02 — ASSUMPTION-CP1 "집계 창 = 전체 이력". 부수 효과로 결과가
+     *       시계에 의존하지 않아 같은 데이터면 언제 호출해도 같은 응답이다)</li>
+     * </ul>
+     * MVP 규모(사용자당 이력 수 적음) 전제 — 이력이 커지면 두 소비처 모두 기간·페이지네이션이 필요해진다.
      */
     List<ExecutionLog> findByUserId(UUID userId);
 }
