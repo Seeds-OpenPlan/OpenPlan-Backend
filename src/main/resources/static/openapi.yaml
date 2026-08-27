@@ -2228,18 +2228,60 @@ paths:
   /stats/correction-proposals:
     get:
       tags: [stats]
-      x-implementation-status: not-implemented
       operationId: getCorrectionProposals
-      summary: "[미구현] 예상 시간 보정 제안 (SS-11 — 태스크 폼 소비, 제안만 · C-2)"
+      summary: "예상 시간 보정 제안 (SS-11 — 태스크 폼 소비, 제안만 · C-2)"
       x-lane: BE-2
       x-user-stories: [RB-STAT-02]
       parameters:
-        - { name: categoryId, in: query, schema: { type: string, format: uuid } }
-        - { name: projectId, in: query, schema: { type: string, format: uuid } }
-        - { name: estimatedMinutes, in: query, schema: { type: integer }, description: "사용자 입력 중인 예상값" }
+        - name: categoryId
+          in: query
+          schema: { type: string, format: uuid }
+          description: "집계 스코프(1순위). 부재·타인 → 404"
+        - name: projectId
+          in: query
+          schema: { type: string, format: uuid }
+          description: "집계 스코프(2순위 — categoryId 미제공 시). 부재·타인 → 404"
+        - name: estimatedMinutes
+          in: query
+          schema: { type: integer, multipleOf: 5, minimum: 5 }
+          description: "사용자 입력 중인 예상값. 5분 단위·양수 위반 → 422. 미제공 시 제안 생략"
       responses:
         "200":
-          description: 편차 이력 부족 시 data=null
+          description: >-
+            보정 제안. 제안이 성립하지 않으면 data 를 생략한다 — 오류가 아니다.
+            ⚠ 실제 직렬화는 `{}` 다(`{"data": null}` 이 아님 — 성공 봉투가 null 필드를 내보내지 않는다).
+            클라이언트는 `data` 키의 존재 여부로 분기할 것.
+
+
+            산출식: `proposed = max(5, round5(estimatedMinutes × (100 + r) / 100))`,
+            r = 스코프 편차율(%)을 정수로 반올림. basis 에 표시하는 r 과 계산에 쓰는 r 이 같은 값이라
+            사용자가 검산할 수 있다. 5분 정렬은 최근접(half-up), 하한 5분.
+
+
+            편차율은 `/stats/deviations` 와 **같은 산법**이다(태스크별 실제시간 합산 + 예상시간은 태스크당 1회).
+            두 화면이 다른 수치를 말하지 않도록 의도적으로 묶여 있다.
+            집계 창은 **전체 이력**(이 라우트에 기간 파라미터가 없다) — 결과가 시계에 의존하지 않아
+            같은 데이터면 언제 호출해도 같은 응답이다.
+
+
+            스코프 우선순위는 categoryId > projectId > 전체이며 **묵시 폴백이 없다** — 지정한 스코프의
+            이력이 부족하면 다른 스코프로 내려가지 않고 제안을 생략한다(basis 가 말하는 스코프와
+            실제 계산 스코프가 어긋나면 사용자가 검산할 수 없다).
+
+
+            예상시간이 없는 태스크의 이력은 편차 계산에서 제외한다 — 실제시간만 분자에 더해지고 예상시간은
+            분모에 기여하지 않아 편차율이 부풀려지기 때문이다. sampleSize 도 그렇게 걸러낸 뒤의 건수다.
+            (`/stats/deviations` 는 총량을 사실대로 보여주는 것이 목적이라 이 필터를 두지 않는다.)
+
+
+            제안 생략 3사유: ① 측정 가능한 표본 3건 미만 ② 스코프 예상시간 합이 0(비교 기준 없음)
+            ③ estimatedMinutes 미제공. 편차율이 0이어도 제안은 반환한다(제안값 = 입력값).
+
+
+            🔴 **상한·감쇠를 두지 않는다** — 편차율이 크면 제안값도 그만큼 커진다(예: 편차율 +300%,
+            입력 60분 → 제안 240분). 자동 적용이 없고 사용자가 basis·sampleSize 를 보고 채택을
+            결정한다는 전제(C-2/P2)가 방어선이다. sampleSize 는 **수행 이력 건수**이며 태스크 건수가
+            아니다 — 단일 태스크를 여러 번 기록해도 그만큼 늘어난다.
           content:
             application/json:
               schema:
@@ -2249,6 +2291,8 @@ paths:
                     oneOf:
                       - { $ref: "#/components/schemas/CorrectionProposal" }
                       - { type: "null" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/UnprocessableEntity" }
 
 # ───────────────────────────────────────────────────────────── components
 components:
@@ -2820,5 +2864,5 @@ components:
       description: SS-11 출력 — 제안일 뿐 자동 적용 없음 (P2)
       properties:
         proposedEstimatedMinutes: { type: integer, multipleOf: 5 }
-        basis: { type: string, description: "산출 근거 (예: '해당 카테고리 최근 편차율 +20% 반영') — P4 준수" }
+        basis: { type: string, description: "산출 근거 (예: '해당 카테고리 편차율 +20% 반영') — P4 준수. 집계 창이 전체 이력이라 '최근'이라 쓰지 않는다" }
         sampleSize: { type: integer }
