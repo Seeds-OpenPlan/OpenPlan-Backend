@@ -1614,15 +1614,40 @@ paths:
   /projects/{projectId}/structure-warnings:
     get:
       tags: [projects]
-      x-implementation-status: not-implemented
       operationId: getStructureWarnings
-      summary: "[미구현] 태스크 구조 부족 경고 (SS-04 — 임계값은 W3 확정 후 골든 고정)"
+      summary: "태스크 구조 부족 경고 (SS-04 — 임계값 W3 확정·골든 고정)"
       x-lane: BE-2
       x-user-stories: [RB-PROJ-02]
       parameters: [{ $ref: "#/components/parameters/ProjectId" }]
       responses:
         "200":
-          description: OK
+          description: >-
+            계획 전 점검 항목을 규칙으로 판정해 반환한다(읽기 전용·저장 없음).
+            경고가 없으면 data: [] — 오류가 아니다. meta 없음, 페이지네이션 없음(최대 3건).
+
+
+            임계값(W3 게이트 확정 — ASSUMPTION-SW1~SW3, 변경 시 상수·문구·골든·이 설명을 함께 갱신):
+            TOO_FEW_TASKS = 태스크 총수(상태 무관) 3건 미만 → action ADD_TASK ·
+            MISSING_ESTIMATES = 미완료(status≠COMPLETED) 태스크 중 estimatedMinutes 미입력 1건 이상 → EDIT_TASK ·
+            DEADLINE_PRESSURE = status=IN_PROGRESS ∧ dueDate≠null ∧ 마감까지 0~3일 ∧ 미완료 1건 이상 → EDIT_TASK.
+            마감 임박 창 3일은 대시보드 마감 임박 카운트·프로젝트 배지와 같은 공용 정의다.
+
+
+            TOO_FEW만 상태 무관 총수를 세는 것은 의도된 비대칭이다 — 구조(분해 수준)는 완료 여부와
+            독립된 프로젝트 속성이라, 미완료만 세면 완료에 가까워질수록 경고가 되살아나는 역설이 생긴다.
+
+
+            순서는 위 나열 순(enum 선언 순) 고정이고 유형당 최대 1건이라 동일 입력이면 문자 단위로 같은 응답이다.
+            건수는 reason에 집계한다.
+
+
+            상태 분기: CLOSED → 항상 data: [] (하위 태스크 쓰기가 전부 422라 실행 불가능한 action을 제안하지 않는다.
+            조회 자체는 상태 무관 허용이므로 오류가 아니라 빈 배열) · PAUSED → TOO_FEW·MISSING은 판정하고
+            DEADLINE만 보류(자동 종료 대상이 아니라 과거 마감일을 합법적으로 가질 수 있어 "마감까지 -N일"이 무의미).
+
+
+            조회 전 자동 종료 평가가 선행한다(ADR-0006) — 어제 마감된 stale IN_PROGRESS가 좀비 경고를
+            만들지 않도록. 부재·타인 projectId → 404 E-COM-004(구분 불가).
           content:
             application/json:
               schema:
@@ -1634,8 +1659,9 @@ paths:
                       type: object
                       properties:
                         warningType: { type: string, enum: [TOO_FEW_TASKS, MISSING_ESTIMATES, DEADLINE_PRESSURE] }
-                        reason: { type: string }
+                        reason: { type: string, description: "사실 서술(P4) — 판정에 쓴 숫자와 기준을 밝힌다. 예: '태스크가 2건입니다. (기준 3건 미만)'" }
                         action: { type: string, enum: [ADD_TASK, EDIT_TASK] }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   # ───────────────────────────────────────────── WEEKLY PLANS / BLOCKS / VALIDATION / REPLAN (BE-2)
   /weekly-plans:
