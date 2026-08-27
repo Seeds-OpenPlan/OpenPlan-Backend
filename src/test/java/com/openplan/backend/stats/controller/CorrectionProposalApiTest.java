@@ -368,6 +368,35 @@ class CorrectionProposalApiTest {
                 .andExpect(jsonPath("$.error.code").value("E-COM-002"));
     }
 
+    // ═══════════════ AC-15 deviations 정합 ═══════════════
+
+    @Test
+    @DisplayName("AC-15 정합 — 같은 픽스처에서 /stats/deviations 의 deviationRate 와 basis 의 r 이 일치")
+    void consistentWithDeviations() throws Exception {
+        // ⚠ 두 엔드포인트가 같은 로그 집합을 보게 하려면 픽스처를 단일 달력월에 넣어야 한다 —
+        // deviations 는 period 가 필수라 unbounded 조회가 없고, 보정 제안은 전체 이력을 본다(CP-1).
+        // 이 구성이 없으면 "정합 테스트"가 실제로는 서로 다른 스코프를 비교하게 된다(게이트 리뷰 Thomas N-3).
+        UUID task = insertTask(project, category, 50);
+        insertLogAt(MAIN, task, 20, "2026-05-05T01:00:00Z");
+        insertLogAt(MAIN, task, 20, "2026-05-12T01:00:00Z");
+        insertLogAt(MAIN, task, 20, "2026-05-19T01:00:00Z"); // 전부 2026-05 안 → r=+20
+
+        // 보정 제안 — basis 가 말하는 r
+        mockMvc.perform(req(MAIN).param("categoryId", category.toString())
+                        .param("estimatedMinutes", "60"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.basis").value("해당 카테고리 편차율 +20% 반영"));
+
+        // 통계 화면 — 같은 로그 집합에 대한 deviationRate
+        mockMvc.perform(get("/api/v1/stats/deviations").header("X-Dev-User", MAIN.toString())
+                        .param("period", "MONTHLY")
+                        .param("baseDate", "2026-05-15")
+                        .param("groupBy", "CATEGORY"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.rows[0].groupId").value(category.toString()))
+                .andExpect(jsonPath("$.data.rows[0].deviationRate").value(20.0)); // basis 의 +20% 와 같은 값
+    }
+
     // ═══════════════ [G4] 결정성 ═══════════════
 
     @Test
@@ -454,6 +483,19 @@ class CorrectionProposalApiTest {
     /** 시각은 아무 값이어도 된다 — 집계 창이 전체 이력이라 결과에 영향이 없다(CP-1). */
     private void insertLog(UUID userId, UUID taskId, int actualMinutes) {
         insertLog(userId, taskId, actualMinutes, "COMPLETED");
+    }
+
+    /** 시각을 지정해 시딩 — deviations 정합 테스트만 필요로 한다(그쪽은 period 로 기간을 자르므로). */
+    private void insertLogAt(UUID userId, UUID taskId, int actualMinutes, String startedAt) {
+        Instant t = Instant.parse(startedAt);
+        jdbc.update("""
+                INSERT INTO execution_logs (execution_log_id, user_id, task_id, plan_block_id,
+                                            started_at, ended_at, actual_minutes, result, memo, created_at)
+                VALUES (?, ?, ?, NULL, ?, ?, ?, 'COMPLETED', NULL, ?)
+                """, UUID.randomUUID(), userId, taskId,
+                OffsetDateTime.ofInstant(t, ZoneOffset.UTC),
+                OffsetDateTime.ofInstant(t.plusSeconds(actualMinutes * 60L), ZoneOffset.UTC),
+                actualMinutes, OffsetDateTime.now(ZoneOffset.UTC));
     }
 
     private void insertLog(UUID userId, UUID taskId, int actualMinutes, String result) {

@@ -261,10 +261,13 @@ public class StatsService {
         }
 
         CorrectionProposalPolicy.Scope scope = resolveScope(query);
-        List<ExecutionLog> logs = scopedLogs(userId, query, scope);
-        Map<UUID, Task> tasksById = loadTasks(logs);
 
-        List<ExecutionLog> measurable = measurableLogs(logs, tasksById);
+        // 전체 이력을 한 번 읽고(CP-1) 태스크도 한 번만 올린 뒤, 스코프·근거 판정을 같은 맵으로 처리한다 —
+        // 로그에 카테고리·프로젝트 컬럼이 없어 둘 다 태스크를 거쳐야 하므로 한 번에 묶는 편이 맞다.
+        List<ExecutionLog> all = executionLogRepository.findByUserId(userId);
+        Map<UUID, Task> tasksById = loadTasks(all);
+
+        List<ExecutionLog> measurable = measurableLogs(inScope(all, tasksById, query, scope), tasksById);
         int estimatedSum = distinctTaskEstimatedSum(measurable, tasksById);
         if (estimatedSum == 0) {
             return null; // ② 비교 기준이 없다 — 편차율을 정의할 수 없다
@@ -321,20 +324,24 @@ public class StatsService {
     }
 
     /**
-     * 스코프에 해당하는 로그만 추린다. 전체 이력을 읽고 태스크 속성으로 거르는 이유는 로그에 카테고리·
-     * 프로젝트 컬럼이 없기 때문이다(태스크를 통해서만 분류된다 — {@link #deviations}와 동일 구조).
+     * 스코프에 해당하는 로그만 추린다. 로그에 카테고리·프로젝트 컬럼이 없어 태스크를 거쳐야 한다
+     * (태스크를 통해서만 분류된다 — {@link #deviations}와 동일 구조).
      *
      * <p><b>선택된 스코프의 이력이 부족해도 다른 스코프로 내려가지 않는다</b> — 폴백 사다리는 정본 무앵커이고,
      * basis가 말하는 스코프와 실제 계산 스코프가 어긋나면 사용자가 검산할 수 없다(투명성 훼손).
+     *
+     * <p><b>알려진 한계</b>: 스코프가 좁아도 사용자의 전 이력을 읽어 메모리에서 거른다. 스코프 조건을
+     * 쿼리로 내리면 읽는 양이 줄지만 저장소 표면이 늘어나므로(이 스토리는 신규 쿼리 0이 요구사항)
+     * 이번 슬라이스에서는 하지 않았다. {@code ExecutionLogRepository#findByUserId}의 "MVP 규모" 전제가
+     * 깨지면 — 이력이 커지거나 이 라우트가 입력 도중 자주 호출되면 — 스코프 조건을 내린 쿼리가 필요하다.
      */
-    private List<ExecutionLog> scopedLogs(UUID userId, CorrectionProposalQuery query,
-                                          CorrectionProposalPolicy.Scope scope) {
-        List<ExecutionLog> all = executionLogRepository.findByUserId(userId); // CP-1 — 기간 무한정
+    private static List<ExecutionLog> inScope(List<ExecutionLog> logs, Map<UUID, Task> tasksById,
+                                              CorrectionProposalQuery query,
+                                              CorrectionProposalPolicy.Scope scope) {
         if (scope == CorrectionProposalPolicy.Scope.ALL) {
-            return all;
+            return logs;
         }
-        Map<UUID, Task> tasksById = loadTasks(all);
-        return all.stream()
+        return logs.stream()
                 .filter(log -> {
                     Task task = tasksById.get(log.getTaskId());
                     if (task == null) {
