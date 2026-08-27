@@ -176,6 +176,17 @@ class StructureWarningPolicyTest {
         assertThat(w).isEmpty();
     }
 
+    @Test
+    @DisplayName("PAUSED + 마감 임박(D+2) → DEADLINE 미발생 — 상태 필터가 실제로 가르는 지점")
+    void pausedWithImminentDueDateStillSuppressed() {
+        // 이 케이스가 상태 필터의 존재 이유다. 과거 마감(위 테스트)은 daysUntil >= 0 가드만으로도
+        // 억제되므로, 그것만 있으면 status != IN_PROGRESS 조건을 지워도 테스트가 안 깨진다.
+        // 여기서 억제를 잠가야 "대시보드와의 대칭"(DASH-06이 IN_PROGRESS만 대상) 결정이 지켜진다.
+        List<StructureWarningResponse> w = evaluate(ProjectStatus.PAUSED, TODAY.plusDays(2), 5, 5, 0);
+
+        assertThat(w).isEmpty();
+    }
+
     // ═══════════════ 다중 발생 순서 ═══════════════
 
     @Test

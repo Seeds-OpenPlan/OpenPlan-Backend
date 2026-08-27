@@ -93,12 +93,27 @@ public final class StructureWarningPolicy {
     }
 
     /**
-     * 마감 압박 성립 여부. <b>IN_PROGRESS 한정</b>이다 — PAUSED는 자동 종료 대상이 아니라 과거 마감일을
-     * 합법적으로 가질 수 있는 상태(E-PROJ-006이 그 상태를 전제)라, "마감까지 -5일" 같은 경고가 무의미하다.
+     * 마감 압박 성립 여부. <b>IN_PROGRESS 한정</b>이다 — 근거는 아래 두 가지이며, 뒤의 날짜 가드와는
+     * <b>겹치지 않는 별개 층</b>이다(그 구분이 중요해서 나눠 적는다).
      *
-     * <p>{@code 0 <= daysUntil} 조건은 방어적 명문이다 — B-5 평가 선행 후 IN_PROGRESS의 dueDate는
-     * today 이상이 보장되지만(자동 종료가 {@code dueDate < today}를 걷어낸다), 평가를 건너뛴 호출자가
-     * 생겨도 음수 일 문구가 새어나가지 않게 한다. 마감 당일(0일)은 발생 — 아직 진행 중이고 압박이 가장 크다.
+     * <ol>
+     *   <li><b>대시보드와의 대칭</b>(주 근거). {@code DashboardService}가 "이번 주 영향 프로젝트"를
+     *       IN_PROGRESS만 대상으로 뽑는다. 여기서 PAUSED에 마감 압박을 띄우면 <b>대시보드는 조용한데
+     *       작업공간만 재촉하는</b> 상태가 되어, 같은 사용자에게 두 화면이 다른 말을 한다.</li>
+     *   <li><b>일시중지의 의미</b>. PAUSED는 사용자가 의도적으로 손을 뗀 상태라, 멈춰둔 일에 대한
+     *       마감 재촉은 도움보다 소음에 가깝다고 판단했다(W3 게이트 판단 — 뒤집으려면 재게이트가 절차다.
+     *       AC-10과 지명 테스트 [G6]이 이 동작을 잠그고 있어 조용히 바뀌지 않는다).</li>
+     * </ol>
+     *
+     * <p><b>"과거 마감일이라 음수 일이 무의미하다"는 이 상태 필터의 근거가 아니다</b> — 그 걱정은 아래
+     * {@code daysUntil >= 0}이 이미 처리한다. 상태 필터가 없어도 과거 마감 PAUSED는 어차피 경고가 안 난다.
+     * 상태 필터가 실제로 가르는 것은 <b>마감이 코앞인 PAUSED</b>(예: D+2, 미완료 5건)이고, 그것을 억제하는
+     * 근거가 위 ①②다. (리뷰 지적 반영 — 이전 주석은 날짜 가드로 이미 해결되는 이유만 적어 두어 상태
+     * 필터의 존재를 설명하지 못했다.)
+     *
+     * <p>{@code 0 <= daysUntil}은 방어적 명문이다 — B-5 평가 선행 후 IN_PROGRESS의 dueDate는 today 이상이
+     * 보장되지만(자동 종료가 {@code dueDate < today}를 걷어낸다), 평가를 건너뛴 호출자가 생겨도 음수 일
+     * 문구가 새어나가지 않게 한다. 마감 당일(0일)은 발생 — 아직 진행 중이고 압박이 가장 크다.
      */
     private static boolean isDeadlinePressure(ProjectStatus status, LocalDate dueDate, LocalDate today,
                                               long remainingTasks) {
