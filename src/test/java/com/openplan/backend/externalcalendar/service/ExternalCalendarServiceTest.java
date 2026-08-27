@@ -65,6 +65,8 @@ class ExternalCalendarServiceTest {
     @Mock
     private ExternalCalendarEventRepository eventRepository;
     @Mock
+    private ExternalCalendarEventWriter eventWriter;
+    @Mock
     private ExternalFixedScheduleRepository fixedScheduleRepository;
     @Mock
     private CalendarProviderRegistry providerRegistry;
@@ -137,7 +139,7 @@ class ExternalCalendarServiceTest {
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<ExternalCalendarEvent>> captor = ArgumentCaptor.forClass(List.class);
-        verify(eventRepository).saveAllAndFlush(captor.capture());
+        verify(eventWriter).insertAll(captor.capture());
         assertThat(captor.getValue()).hasSize(1);
     }
 
@@ -152,7 +154,9 @@ class ExternalCalendarServiceTest {
                 new ProviderEvent("evt-b", "나", Instant.parse("2026-08-20T03:00:00Z"),
                         Instant.parse("2026-08-20T04:00:00Z"), "내 캘린더")));
         // 탭 두 개·중복 새로고침으로 같은 connection 동기화가 겹친 상황 — 진 쪽이 UQ 를 맞는다.
-        doThrow(new DataIntegrityViolationException("uq_external_event")).when(eventRepository).saveAllAndFlush(any());
+        doThrow(new DataIntegrityViolationException("uq_external_event")).when(eventWriter).insertAll(any());
+        // 배치가 통째로 되돌아갔으니 한 건씩 다시 넣는다 — 겹친 것만 다시 실패한다.
+        doThrow(new DataIntegrityViolationException("uq_external_event")).when(eventWriter).insertOne(any());
 
         assertThatCode(() -> service.listEvents(USER, connection.getId(), null)).doesNotThrowAnyException();
     }
@@ -180,8 +184,8 @@ class ExternalCalendarServiceTest {
     }
 
     @Test
-    @DisplayName("🔴 신규 저장은 flush 까지 여기서 끝낸다 — saveAll 만 쓰면 UQ 위반이 이 트랜잭션 밖에서 터진다")
-    void 신규_저장은_flush_까지_한다() {
+    @DisplayName("🔴 신규 저장은 바깥 트랜잭션 밖으로 나간다 — 여기서 넣으면 경합을 잡아도 500 이 된다")
+    void 신규_저장은_별도_트랜잭션으로_나간다() {
         ExternalCalendarConnection connection = stubSync();
         when(calendarProvider.listEvents(any(), eq("cal-a"), any(), any(), any())).thenReturn(List.of(
                 new ProviderEvent("evt-a", "가", Instant.parse("2026-08-20T01:00:00Z"),
@@ -190,12 +194,13 @@ class ExternalCalendarServiceTest {
 
         service.listEvents(USER, connection.getId(), null);
 
-        // ExternalCalendarEvent 는 UUID 를 앱이 채워 @GeneratedValue 가 없다. 그래서 saveAll 은
-        // INSERT 를 미루고, 실제 INSERT 는 뒤따르는 조회의 auto-flush 때 — 즉 경합을 받아 주는
-        // catch 블록 **밖에서** 나간다. 그 경로에서는 UQ 위반이 E-COM-005 500 으로 새어 나간다.
-        // 여기서 saveAllAndFlush 를 고정해 두면 그 회귀가 이 테스트에서 잡힌다.
-        verify(eventRepository).saveAllAndFlush(any());
+        // 동기화는 조회 트랜잭션 안에서 돈다. 그 트랜잭션에서 직접 insert 하면 UQ 위반을 잡아도
+        // 되돌릴 수 없다 — 실패한 flush 가 세션을 못 쓰게 만들고, 참여 트랜잭션 실패가 바깥을
+        // rollback-only 로 표시해 커밋에서 다시 터진다(2026-08-27 통합 테스트로 재현).
+        // 그래서 저장은 REQUIRES_NEW 인 writer 로만 나가야 한다.
+        verify(eventWriter).insertAll(any());
         verify(eventRepository, never()).saveAll(any());
+        verify(eventRepository, never()).saveAllAndFlush(any());
     }
 
     /** 동기화 경로가 도는 데 필요한 최소 스텁. 반환값은 활성 연결. */
