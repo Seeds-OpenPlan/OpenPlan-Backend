@@ -114,8 +114,17 @@ public final class ICalDateTime {
         }
         Matcher weeks = WEEK_DURATION.matcher(value);
         if (weeks.matches()) {
-            long days = Long.parseLong(weeks.group(1)) * 7L;
-            return days > 0 ? Duration.ofDays(days) : null;
+            // 🔴 이 두 줄도 반드시 감싼다 (2026-08-27 리뷰 지적). 자릿수가 long 을 넘는 값
+            //    (`P99999999999999999999W`)이면 Long.parseLong 이 NumberFormatException 을,
+            //    통과하더라도 곱셈·Duration.ofDays 가 ArithmeticException 을 던진다. 호출부에
+            //    이것을 받는 곳이 없어, 기형 DURATION 한 건이 **동기화 요청 전체를 500** 으로
+            //    만든다 — 이 메서드를 만든 목적("파싱 실패는 그 일정만 건너뛴다")과 정반대다.
+            try {
+                long days = Math.multiplyExact(Long.parseLong(weeks.group(1)), 7L);
+                return days > 0 ? Duration.ofDays(days) : null;
+            } catch (NumberFormatException | ArithmeticException e) {
+                return null;
+            }
         }
         try {
             Duration parsed = Duration.parse(value);

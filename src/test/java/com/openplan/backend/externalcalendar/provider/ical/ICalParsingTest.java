@@ -403,5 +403,16 @@ class ICalParsingTest {
             // 음수는 알람 TRIGGER 용 표기다 — 일정 길이로 쓰면 종료가 시작보다 앞선다.
             assertThat(ICalDateTime.parseDuration("-PT15M")).isNull();
         }
+
+        @Test
+        @DisplayName("🔴 자릿수가 넘치는 주 표기도 null — 예외가 새면 일정 하나가 요청 전체를 죽인다")
+        void 넘치는_주표기() {
+            // Long.parseLong 이 NumberFormatException 을, 통과해도 곱셈·ofDays 가
+            // ArithmeticException 을 던진다. 호출부(AppleCalDavProvider.collect)에 이것을 받는
+            // 곳이 없어 기형 DURATION 한 건이 동기화 요청 전체를 500 으로 만든다.
+            assertThat(ICalDateTime.parseDuration("P99999999999999999999W")).isNull();
+            assertThat(ICalDateTime.parseDuration("P2000000000000000W")).isNull();
+            assertThat(ICalDateTime.parseDuration("P0W")).isNull();
+        }
     }
 }
