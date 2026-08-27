@@ -1735,9 +1735,8 @@ paths:
   /weekly-plans/{planId}/auto-placements:
     post:
       tags: [weekly-plans]
-      x-implementation-status: not-implemented
       operationId: proposeAutoPlacement
-      summary: "[미구현] 자동 배치 제안 (SS-05 — first-fit, 저장 아님 · C-2 · NFR-029 5초)"
+      summary: "자동 배치 제안 (SS-05 — first-fit, 저장 아님 · C-2 · NFR-029 5초)"
       x-lane: BE-2
       x-user-stories: [RB-PLAN-01]
       parameters: [{ $ref: "#/components/parameters/PlanId" }]
@@ -1763,9 +1762,8 @@ paths:
   /weekly-plans/{planId}/block-batches:
     post:
       tags: [weekly-plans]
-      x-implementation-status: not-implemented
       operationId: applyBlockBatch
-      summary: "[미구현] 블록 일괄 적용 (제안 수용 = 사용자 확정 행위 — P2)"
+      summary: "블록 일괄 적용 (제안 수용 = 사용자 확정 행위 — P2)"
       x-lane: BE-2
       x-user-stories: [RB-PLAN-01, PLAN-29]
       parameters: [{ $ref: "#/components/parameters/PlanId" }]
@@ -1821,9 +1819,8 @@ paths:
   /plan-blocks/{blockId}:
     patch:
       tags: [plan-blocks]
-      x-implementation-status: not-implemented
       operationId: movePlanBlock
-      summary: "[미구현] 블록 이동·시간 조정 (PLAN-19) · 주차 이동은 targetWeekStartDate (PLAN-20 — 대상 주차 초안 get-or-create)"
+      summary: "블록 이동·시간 조정 (PLAN-19) · 주차 이동은 targetWeekStartDate (PLAN-20 — 대상 주차 초안 get-or-create)"
       x-lane: BE-2
       x-user-stories: [PLAN-19, PLAN-20, PLAN-09]
       parameters: [{ $ref: "#/components/parameters/BlockId" }]
@@ -1849,9 +1846,8 @@ paths:
         "422": { description: "E-PLAN-002 시작>=종료 (NFR-009) · E-COM-009 5분 단위", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
     delete:
       tags: [plan-blocks]
-      x-implementation-status: not-implemented
       operationId: deletePlanBlock
-      summary: "[미구현] TASK 블록=배치 해제(태스크 UNASSIGNED 복귀 — PLAN-16) / SCHEDULE 블록=일정 삭제(schedules 행 연쇄 — PLAN-18)"
+      summary: "TASK 블록=배치 해제(태스크 UNASSIGNED 복귀 — PLAN-16) / SCHEDULE 블록=일정 삭제(schedules 행 연쇄 — PLAN-18)"
       x-lane: BE-2
       x-user-stories: [PLAN-16, PLAN-18, TUT-07]
       parameters: [{ $ref: "#/components/parameters/BlockId" }]
@@ -1860,9 +1856,8 @@ paths:
   /schedules/{scheduleId}:
     patch:
       tags: [schedules]
-      x-implementation-status: not-implemented
       operationId: updateSchedule
-      summary: "[미구현] 일정 편집 (제목·예상시간·우선순위·메모 — B2 보강 컬럼, version 필수)"
+      summary: "일정 편집 (제목·예상시간·우선순위·메모 — B2 보강 컬럼, version 필수)"
       x-lane: BE-2
       x-user-stories: [PLAN-17]
       parameters: [{ name: scheduleId, in: path, required: true, schema: { type: string, format: uuid } }]
@@ -1892,9 +1887,8 @@ paths:
   /weekly-plans/{planId}/replan-options:
     post:
       tags: [weekly-plans]
-      x-implementation-status: not-implemented
       operationId: generateReplanOptions
-      summary: "[미구현] 재계획 대안 생성 (SS-07~09 — 3전략 + 기준선, NFR-029 5초, SS-13 구간 우선 반영)"
+      summary: "재계획 대안 생성 (SS-07~09 — 3전략 + 기준선, NFR-029 5초, SS-13 구간 우선 반영)"
       x-lane: BE-2
       x-user-stories: [PLAN-29, RB-PLAN-03, RB-PLAN-04, RB-PLAN-05, RB-STAT-04]
       parameters: [{ $ref: "#/components/parameters/PlanId" }]
@@ -1915,9 +1909,8 @@ paths:
                         items: { $ref: "#/components/schemas/ReplanOption" }
     get:
       tags: [weekly-plans]
-      x-implementation-status: not-implemented
       operationId: listReplanOptions
-      summary: "[미구현] 대안 재조회 (비교 화면 새로고침)"
+      summary: "대안 재조회 (비교 화면 새로고침)"
       x-lane: BE-2
       x-user-stories: [PLAN-29]
       parameters: [{ $ref: "#/components/parameters/PlanId" }]
@@ -1935,9 +1928,8 @@ paths:
   /replan-options/{optionId}/application:
     post:
       tags: [replan-options]
-      x-implementation-status: not-implemented
       operationId: applyReplanOption
-      summary: "[미구현] 대안 선택+초안 반영 (is_selected/selected_at 기록 — SC-07 대체, SS-14 입력. 초안 반영이며 확정 아님 — P2)"
+      summary: "대안 선택+초안 반영 (is_selected/selected_at 기록 — SC-07 대체, SS-14 입력. 초안 반영이며 확정 아님 — P2)"
       x-lane: BE-2
       x-user-stories: [PLAN-29, RB-FIX-01]
       parameters: [{ name: optionId, in: path, required: true, schema: { type: string, format: uuid } }]
