@@ -42,6 +42,9 @@ env:
   SHA_BUDGET: 2
   # 브랜치 누적 안전망(폭주 방지). 여기에 닿으면 사람이 들여다볼 때다.
   PR_CEILING: 20
+  # 🔴 판정 마커를 쓸 수 있는 유일한 작성자. 이 값이 게이트의 신뢰 근거다 —
+  #    바꾸면 아무나 판정을 쓸 수 있게 되는 것과 같으니 신중히.
+  REVIEW_BOT: "claude[bot]"
 
 jobs:
   review:
@@ -117,6 +120,42 @@ jobs:
         if: steps.budget.outputs.exhausted == '' || steps.budget.outputs.exhausted == 'false'
         with:
           fetch-depth: 0
+          # 🔴 workflow_dispatch 는 PR 이 아니라 **기본 브랜치**(대개 main)를 체크아웃한다
+          #    (2026-08-27 2차 리뷰). 그러면 리뷰어는 main 의 openapi.yaml·마이그레이션을
+          #    읽으면서 PR 의 diff 를 판정한다 — **엉뚱한 기준과 대조**하는 것이고,
+          #    이 저장소의 결함은 대부분 "계약과의 어긋남" 이라 그 대조가 리뷰의 핵심이다.
+          #    D-89 는 "코멘트가 안 남는" 증상만 고쳤고 "무엇을 리뷰하는가" 는 남아 있었다.
+          #    pull_request 는 빈 값 → checkout 기본 동작(머지 커밋)을 그대로 둔다.
+          ref: ${{ github.event_name == 'workflow_dispatch' && steps.dispatch_sha.outputs.sha || '' }}
+
+      # 🔴 위 ref 표현식이 옳다는 것을 **믿지 말고 증명한다.**
+      #    표현식 한 글자만 어긋나도 조용히 기본 브랜치를 보게 되고, 그 리뷰는
+      #    "돌기는 했는데 엉뚱한 것을 본" 상태가 된다 — 이 저장소가 반복해서 당한 모양이다.
+      #    기대 SHA 가 체크아웃된 이력 안에 있는지 확인한다(자기 자신도 조상으로 친다).
+      #    pull_request 의 머지 커밋에서는 head.sha 가 부모라 통과하고,
+      #    dispatch 가 잘못 main 을 잡으면 PR head 가 main 에 없어 즉시 실패한다.
+      - name: 체크아웃 검증 — 지금 보고 있는 것이 그 PR 의 코드인가
+        if: steps.budget.outputs.exhausted == '' || steps.budget.outputs.exhausted == 'false'
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || steps.dispatch_sha.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${EXPECTED_SHA}" ]; then
+            echo "::error::기대 SHA 가 비어 있습니다 — 무엇을 리뷰해야 하는지 알 수 없습니다."
+            exit 1
+          fi
+          echo "체크아웃 HEAD : $(git rev-parse HEAD)"
+          echo "기대 SHA      : ${EXPECTED_SHA}"
+          if ! git cat-file -e "${EXPECTED_SHA}^{commit}" 2>/dev/null; then
+            echo "::error::기대 SHA(${EXPECTED_SHA})가 체크아웃에 없습니다 — 다른 것을 받았습니다."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "${EXPECTED_SHA}" HEAD; then
+            echo "::error::기대 SHA(${EXPECTED_SHA})가 체크아웃 이력에 없습니다."
+            echo "리뷰가 이 PR 이 아니라 다른 코드를 보게 됩니다 — 판정이 무의미해집니다."
+            exit 1
+          fi
+          echo "✅ 이 PR 의 코드를 보고 있습니다."
 
       - uses: anthropics/claude-code-action@v1
         if: steps.budget.outputs.exhausted == '' || steps.budget.outputs.exhausted == 'false'
@@ -142,9 +181,17 @@ jobs:
           #    프롬프트가 시키는 준비(가이드·diff·openapi 2,300줄·마이그레이션 대조)만으로
           #    다 쓴다 — 2026-08-23 실측: 40줄짜리 PR #38 이 22턴, 40파일짜리 PR 4건은
           #    전부 25턴에서 잘려 $4.26 를 쓰고 코멘트 0건이었다.
+          #
+          #    🔴 2026-08-27 에 80 에서도 같은 일이 났다 — PR #33(외부 캘린더, 계약 미구현
+          #    15건 중 8건이 몰린 큰 PR)이 **82턴**을 써서 상한 80 을 2턴 넘겼다.
+          #    리뷰 자체는 정상 완료했는데(`is_error: false`) 액션이 실패로 처리해
+          #    **$5.20 을 쓰고 산출물이 0** 이었다. 25→80 때와 정확히 같은 실패다.
+          #    150 으로 올린다. 큰 PR 은 앞으로도 나오고, 잘린 리뷰는 비용만 쓰고
+          #    아무것도 남기지 않으므로 **상한이 모자란 쪽이 넉넉한 쪽보다 비싸다.**
+          #    ⚠️ 이 한도는 팀원의 대화형 사용과 같은 지갑이다 — 무한이 아니라 150 이다.
           claude_args: |
             --model claude-sonnet-5
-            --max-turns 80
+            --max-turns 150
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Read,Grep,Glob,Bash"
           # 지적을 한 코멘트로 모은다.
           use_sticky_comment: true
@@ -219,19 +266,38 @@ jobs:
               ;;
           esac
 
+          # 🔴 비교할 대상이 없으면 통과시키지 않는다.
+          #    HEAD_SHA 가 비면 아래 grep 패턴이 "sha=" 로 줄어들어 **과거의 아무 판정에나
+          #    접두어로 매칭**된다(3일 전 blocking=0 이 오늘 코드의 통과 근거가 된다).
+          #    지금은 dispatch_sha 스텝이 실패하면 GH Actions 가 잡을 실패로 떨어뜨려 주지만,
+          #    그건 우리 안전장치가 아니라 부수 동작이다 — 누가 그 스텝에 continue-on-error 를
+          #    붙이는 순간(합리적 개선으로 보인다) 구멍이 실제로 열린다. 여기서 직접 막는다.
+          if [ -z "${HEAD_SHA}" ]; then
+            echo "::error::HEAD_SHA 가 비어 있습니다 — 판정 대상을 특정할 수 없습니다."
+            echo "앞선 스텝(수동 실행의 SHA 조회)이 실패했을 것입니다. 실행 로그를 확인하십시오."
+            exit 1
+          fi
+
           # 🔴 판정은 **지금 이 커밋에 대한 것**이어야 한다 (D-90, 2026-08-26 실장애).
           #    옛 구현은 코멘트 전체에서 마지막 마커를 tail -1 로 집었다. 새 리뷰가 코멘트를
           #    못 남긴 회차에서 **하루 전 판정을 집어 고친 코드를 떨어뜨렸다.**
           #    D-86 이 "갱신 안 된 초록은 판정이 아니다" 였다면 이건 그 거울상이다 —
           #    **빨강도 갱신 안 된 판정일 수 있다.** 그래서 마커에 SHA 를 박고 그것만 인정한다.
           #    못 찾으면 옛것으로 대신하지 않는다. **판정 없음은 통과도 실패도 아닌 오류다.**
+          # 🔴 그리고 **리뷰어가 쓴 판정**이어야 한다 (2026-08-27 2차 리뷰 Blocking).
+          #    마커는 그냥 코멘트 텍스트이고 HEAD SHA 는 비밀이 아니다. 작성자를 안 보면,
+          #    실제 리뷰가 blocking=3 을 남긴 뒤라도 **누구든 코멘트 한 줄**을
+          #    `<!-- REVIEW-VERDICT blocking=0 sha=<현재SHA> -->` 로 달면 tail -1 이 그것을 집어
+          #    판정이 뒤집힌다. "Blocking 0 이면 승인 없이 머지" 규칙 아래서 이 마커는 사실상
+          #    유일한 게이트다 — 아무나 쓸 수 있으면 게이트가 아니다.
+          #    리뷰를 올리는 주체는 claude-code-action 의 봇 계정 하나뿐이다.
           VERDICT=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
-            --jq '.[].body' \
+            --jq --arg author "${REVIEW_BOT}" '.[] | select(.user.login == $author) | .body' \
             | grep -o "REVIEW-VERDICT blocking=[0-9][0-9]* sha=${HEAD_SHA}" \
             | tail -1 || true)
 
           if [ -z "${VERDICT}" ]; then
-            echo "::error::이 커밋(${HEAD_SHA:0:7})에 대한 리뷰 판정을 찾지 못했습니다."
+            echo "::error::이 커밋(${HEAD_SHA:0:7})에 대한 ${REVIEW_BOT} 의 리뷰 판정을 찾지 못했습니다."
             echo "리뷰가 도중에 끊겼거나(턴 상한·인증 실패) 코멘트를 못 올린 것입니다."
             echo "🔴 옛 커밋의 판정은 쓰지 않습니다 — 그것은 남의 코드에 대한 판정입니다."
             echo "판정이 없는 것은 통과가 아닙니다. 실행 로그를 확인하고 다시 돌리십시오."
