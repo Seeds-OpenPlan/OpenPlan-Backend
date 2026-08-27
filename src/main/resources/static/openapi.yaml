@@ -818,7 +818,7 @@ paths:
                           - { type: "null" }
         "409":
           description: >-
-            E-EXT-004 이미 반영·제외한 일정이다. 재시도·이중 클릭으로 같은 이벤트에 두 번
+            E-EXT-005 이미 반영·제외한 일정이다. 재시도·이중 클릭으로 같은 이벤트에 두 번
             들어왔을 때 고정 일정이 두 벌 생기지 않도록 여기서 막는다 — 클라이언트는 이 응답을
             "이미 처리됨"으로 읽으면 된다.
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }

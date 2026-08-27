@@ -29,8 +29,8 @@ import com.openplan.backend.externalcalendar.repository.ExternalCalendarEventRep
 import com.openplan.backend.externalcalendar.repository.ExternalCalendarSelectionRepository;
 import com.openplan.backend.externalcalendar.repository.ExternalFixedScheduleRepository;
 import com.openplan.backend.fixedschedule.domain.FixedSchedule;
-import com.openplan.backend.fixedschedule.dto.FixedScheduleResponse;
 import com.openplan.backend.fixedschedule.domain.FixedScheduleStatus;
+import com.openplan.backend.fixedschedule.dto.FixedScheduleResponse;
 import com.openplan.backend.global.error.ErrorCode;
 import com.openplan.backend.global.error.OpenPlanException;
 import com.openplan.backend.global.time.UserClock;
@@ -104,10 +104,18 @@ public class ExternalCalendarService {
         this.userClock = userClock;
     }
 
-    /** 캘린더 연동 인가 시작 (ONB-07 · FIX-14) — 제공자 인가 페이지 주소를 돌려준다. */
+    /**
+     * 캘린더 연동 인가 시작 (ONB-07 · FIX-14) — 제공자 인가 페이지 주소를 돌려준다.
+     *
+     * <p><b>{@code providerRegistry.supports}가 아니라 {@code usesOAuth}로 거른다.</b> 레지스트리는
+     * "캘린더를 읽을 수 있는가"(어댑터 등록 여부)를 보는데, 애플은 읽기 어댑터가 있어도 CalDAV Basic
+     * 이라 인가 코드 자체가 없다(openapi의 {@code provider} enum도 {@code [GOOGLE]}뿐). 레지스트리로
+     * 거르면 애플이 여기를 통과해 {@link ExternalCalendarProvider#oauthProvider()}의
+     * {@code IllegalStateException}까지 내려가 계약된 422 대신 처리되지 않은 500이 났다.
+     */
     public String authorizationUrl(String provider, String redirectUri) {
         ExternalCalendarProvider type = parseProvider(provider);
-        if (!providerRegistry.supports(type)) {
+        if (!type.usesOAuth()) {
             throw new OpenPlanException(ErrorCode.E_COM_009, Map.of("provider", type.name()));
         }
         return authorization.authorizationUrl(type, redirectUri);
@@ -350,18 +358,18 @@ public class ExternalCalendarService {
         requireConnection(userId, event.getConnectionId());
 
         // 🔴 이미 처리한 일정을 다시 반영하지 않는다. 이 검사가 없으면 네트워크 재시도나
-        //    이중 클릭으로 같은 원본 일정에서 **고정 일정이 두 벌 생긴다** — 둘 다 201 을 받고,
-        //    앞서 만든 행은 정리되지 않아 배치 불가 시간을 두 번 점유한다. FixedSchedule 쪽에
-        //    원본 이벤트를 향한 UQ 가 없어 DB 도 막아 주지 못한다.
-        //    409 로 돌려보내는 이유: 재시도한 클라이언트에게 "이미 done" 을 알려 주는 것이
-        //    조용히 복제하는 것보다 낫다. create() 의 중복 연동 처리와 같다.
+        //    이중 클릭으로 같은 원본 일정에서 **고정 일정이 두 벌 생긴다** — 둘 다 201 을
+        //    받고, fixed_schedules 에는 같은 시간대를 가리키는 행이 남아 이후 계획의
+        //    배치 불가 시간을 두 번 점유한다. FixedSchedule 쪽에는 원본 이벤트를 향한
+        //    UQ 가 없어 DB 도 막아 주지 못한다.
+        //    이 PR 은 같은 계열을 이미 두 곳에서 막았다(연동 생성 UQ+409, 동기화 경합의
+        //    DataIntegrityViolationException 흡수) — 여기만 빠져 있었다.
+        //    409 로 돌려보내는 이유: 재시도한 클라이언트에게 "이미 done 이다" 는 사실을
+        //    알려 주는 것이 조용히 복제하는 것보다 낫다. create() 의 중복 연동 처리와 같다.
         if (!event.isCandidate()) {
-            throw new OpenPlanException(ErrorCode.E_EXT_004);
+            throw new OpenPlanException(ErrorCode.E_EXT_005);
         }
 
-        // 🔴 계약(openapi applyExternalEvent 201)은 data.fixedSchedule 에 FixedSchedule **전체**를
-        //    요구한다. ID 하나만 실으면 프론트가 반영 직후 화면을 그리지 못해 별도 조회를 해야 하고,
-        //    그 자리(data.fixedSchedule.startTime 등)가 응답에 아예 없어 조용히 깨진다.
         FixedScheduleResponse fixedScheduleResponse = null;
         if (mode != ApplyMode.EXCLUDE) {
             FixedSchedule fixedSchedule = converter.convert(userId, event,
@@ -409,14 +417,30 @@ public class ExternalCalendarService {
                     stored.resync(providerEvent.title(), providerEvent.startAt(), providerEvent.endAt(),
                             providerEvent.sourceCalendar(), now);
                 } else {
-                    created.add(ExternalCalendarEvent.candidate(connection.getId(),
+                    // 방금 만든 것도 existing 에 넣는다 — 두 캘린더가 같은 원본 일정을 돌려주면
+                    // (초대받은 일정이 개인·팀 캘린더에 함께 보이는 흔한 경우) 같은 호출 안에서
+                    // 같은 external_event_id 를 두 번 insert 해 UQ 를 스스로 위반한다.
+                    ExternalCalendarEvent candidate = ExternalCalendarEvent.candidate(connection.getId(),
                             providerEvent.externalEventId(), providerEvent.title(),
                             providerEvent.startAt(), providerEvent.endAt(),
-                            providerEvent.sourceCalendar(), now));
+                            providerEvent.sourceCalendar(), now);
+                    created.add(candidate);
+                    existing.put(providerEvent.externalEventId(), candidate);
                 }
             }
         }
-        eventRepository.saveAll(created);
+        if (created.isEmpty()) {
+            return;
+        }
+        try {
+            eventRepository.saveAll(created);
+        } catch (DataIntegrityViolationException e) {
+            // 같은 connection 에 동기화가 겹치면(탭 두 개·중복 새로고침) 양쪽이 같은 일정을
+            // "신규" 로 보고 각자 insert 한다. 먼저 넣은 쪽이 이미 옳은 행을 만들었으므로
+            // 진 쪽은 근거 불명의 500 을 내는 대신 조용히 물러난다 — 다음 조회에서 그 행이 보인다.
+            log.info("외부 캘린더 동기화 경합 — 이미 저장된 일정이 있어 신규 저장을 건너뛴다. connectionId={}",
+                    connection.getId());
+        }
     }
 
     /** 부재와 타인 소유를 같은 404 로 돌린다 — 존재 여부를 알려주지 않는다(NFR-030). */
