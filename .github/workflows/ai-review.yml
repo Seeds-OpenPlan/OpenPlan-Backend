@@ -159,10 +159,13 @@ jobs:
 
       - uses: anthropics/claude-code-action@v1
         if: steps.budget.outputs.exhausted == '' || steps.budget.outputs.exhausted == 'false'
-        env:
-          # 에이전트의 Bash 가 gh 를 쓸 수 있어야 한다 — 수동 실행에서는 스티키 코멘트가
-          # 붙을 PR 엔티티가 없어 **에이전트가 직접** 코멘트를 올려야 하기 때문이다(D-89).
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # 🔴 여기에 env: GH_TOKEN 을 넣지 말 것 (2026-08-27 실장애).
+        #    #49 에서 "에이전트가 gh 를 쓸 수 있어야 한다"며 secrets.GITHUB_TOKEN 을 넣었는데,
+        #    그 뒤로 **리뷰가 코멘트를 한 건도 못 올렸다** — 네 회차 연속으로 잡은 success,
+        #    is_error: false, permission_denials_count: 0 인데 산출물만 0 이었다(약 $11 소모).
+        #    액션은 OIDC 로 자기 앱 토큰(claude[bot])을 따로 받아 코멘트를 단다("Using
+        #    GITHUB_TOKEN from OIDC"). 스텝 env 로 워크플로 토큰(github-actions[bot])을
+        #    덮어씌우면 그 경로가 어긋난다. 08-25 까지 잘 돌던 구성에는 이 블록이 없었다.
         with:
           # Max 구독 토큰으로 인증한다 — 종량 과금 대신 구독 한도를 쓴다.
           # 🔴 이 한도는 팀원의 대화형 Claude Code 사용과 **같은 지갑**이다
