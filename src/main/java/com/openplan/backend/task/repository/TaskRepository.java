@@ -88,4 +88,18 @@ public interface TaskRepository extends JpaRepository<Task, UUID> {
                and t.status = com.openplan.backend.task.domain.TaskStatus.UNASSIGNED
             """)
     List<UUID> findProjectIdsWithUnassignedTasks(@Param("userId") UUID userId);
+
+    /**
+     * 미배치 태스크 id 전량 (자동 배치 후보 — SS-05). IN_PROGRESS 프로젝트의 UNASSIGNED 태스크만
+     * (미배치 패널과 동일 필터). 결정적 정렬을 위해 id 오름차순.
+     */
+    @Query("""
+            select t.id
+              from Task t, Project p
+             where p.id = t.projectId and p.userId = :userId
+               and p.status = com.openplan.backend.project.domain.ProjectStatus.IN_PROGRESS
+               and t.status = com.openplan.backend.task.domain.TaskStatus.UNASSIGNED
+             order by t.id asc
+            """)
+    List<UUID> findUnassignedTaskIds(@Param("userId") UUID userId);
 }

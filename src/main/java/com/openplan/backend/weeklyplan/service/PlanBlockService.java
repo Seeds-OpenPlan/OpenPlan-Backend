@@ -15,13 +15,22 @@ import com.openplan.backend.task.repository.TaskRepository;
 import com.openplan.backend.weeklyplan.domain.PlanBlock;
 import com.openplan.backend.weeklyplan.domain.PlanBlockType;
 import com.openplan.backend.weeklyplan.domain.WeeklyPlan;
+import com.openplan.backend.weeklyplan.dto.BlockBatchRequest;
 import com.openplan.backend.weeklyplan.dto.PlanBlockCreateRequest;
+import com.openplan.backend.weeklyplan.dto.PlanBlockMoveRequest;
 import com.openplan.backend.weeklyplan.dto.PlanBlockResponse;
+import com.openplan.backend.weeklyplan.dto.WeeklyPlanResponse;
+import com.openplan.backend.weeklyplan.dto.WeeklyPlanView;
 import com.openplan.backend.weeklyplan.repository.PlanBlockRepository;
+import com.openplan.backend.weeklyplan.repository.PlanBlockView;
 import com.openplan.backend.weeklyplan.repository.WeeklyPlanRepository;
+import jakarta.persistence.EntityManager;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
+import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -46,11 +55,13 @@ public class PlanBlockService {
     private final WeeklyPlanTotalsRecalculator recalculator;
     private final ErrorMessages errorMessages;
     private final UserClock clock;
+    private final EntityManager entityManager;
 
     public PlanBlockService(PlanBlockRepository planBlockRepository, WeeklyPlanRepository weeklyPlanRepository,
                             TaskRepository taskRepository, ScheduleRepository scheduleRepository,
                             ScheduleValidator scheduleValidator, WeeklyPlanTotalsRecalculator recalculator,
-                            ErrorMessages errorMessages, UserClock clock) {
+                            ErrorMessages errorMessages, UserClock clock,
+                            EntityManager entityManager) {
         this.planBlockRepository = planBlockRepository;
         this.weeklyPlanRepository = weeklyPlanRepository;
         this.taskRepository = taskRepository;
@@ -59,6 +70,7 @@ public class PlanBlockService {
         this.recalculator = recalculator;
         this.errorMessages = errorMessages;
         this.clock = clock;
+        this.entityManager = entityManager;
     }
 
     /**
@@ -69,6 +81,8 @@ public class PlanBlockService {
     public PlanBlockResponse createBlock(UUID userId, UUID planId, PlanBlockCreateRequest req) {
         WeeklyPlan plan = weeklyPlanRepository.findByIdAndUserId(planId, userId)
                 .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404 (계획 부재·타인)
+
+        requireBlockInput(req); // 422 — 배치 경로엔 컨트롤러 @Valid가 없다(아래 참고)
 
         PlanBlockType type = parseBlockType(req.blockType());
         if (!req.startAt().isBefore(req.endAt())) { // 422 (ck_plan_block_range 사전 검증)
@@ -123,7 +137,234 @@ public class PlanBlockService {
         return PlanBlockResponse.of(block, title, projectId);
     }
 
-    /** blockType 문자열 → enum. 미정의값 → 422 E-COM-009. */
+    /**
+     * 블록 삭제/해제 (PLAN-16·18 / TUT-07). {@code createBlock}의 부작용을 역방향으로 대칭 처리한다:
+     * <ul>
+     *   <li><b>TASK</b>: 블록 삭제 → 그 태스크에 <b>남은 블록이 없으면</b> {@code onLastBlockRemoved()}
+     *       (IN_PROGRESS→UNASSIGNED, TT-2). 다른 블록이 남아 있으면 상태 유지(불변식 "IN_PROGRESS ⇔ 블록≥1").</li>
+     *   <li><b>SCHEDULE</b>: 블록 삭제 → 함께 만들었던 {@code schedules} 행도 연쇄 삭제(PLAN-18).</li>
+     * </ul>
+     * 공통: 확정 계획이면 DRAFT 복귀 → flush → 주 total 재계산(C1). 부재·타인 → 404(존재 은닉). 성공 204.
+     */
+    @Transactional
+    public void deleteBlock(UUID userId, UUID blockId) {
+        PlanBlock block = planBlockRepository.findByIdAndUserId(blockId, userId)
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404 (블록 부재·타인)
+
+        UUID planId = block.getWeeklyPlanId();
+        weeklyPlanRepository.findById(planId).ifPresent(WeeklyPlan::reopenToDraftIfConfirmed); // 확정 편집 재개→DRAFT
+
+        if (block.getBlockType() == PlanBlockType.TASK) {
+            UUID taskId = block.getTaskId();
+            planBlockRepository.delete(block);
+            // 자신을 뺀 뒤 남은 블록이 없으면 미배치 복귀 (TT-2 — COMPLETED·UNASSIGNED는 onLastBlockRemoved가 방어)
+            if (!planBlockRepository.existsByTaskIdAndIdNot(taskId, blockId)) {
+                taskRepository.findById(taskId).ifPresent(Task::onLastBlockRemoved);
+            }
+        } else { // SCHEDULE — 블록 + 연결 일정 연쇄 삭제 (PLAN-18)
+            UUID scheduleId = block.getScheduleId();
+            planBlockRepository.delete(block);
+            if (scheduleId != null) {
+                scheduleRepository.deleteById(scheduleId);
+            }
+        }
+
+        planBlockRepository.flush(); // C1 — 삭제·상태 변경 DB 반영 후 재계산이 새 상태를 봄
+        recalculator.recalculate(List.of(planId));
+    }
+
+    /**
+     * 블록 이동·시간 조정 (PLAN-19·20 / PLAN-09). 부분 수정 — 담겨 온 필드만 반영.
+     * <ul>
+     *   <li><b>시각(PLAN-19)</b>: startAt/endAt 병합 후 5분 단위·start&lt;end 검증(E-COM-009·E-PLAN-002).</li>
+     *   <li><b>주차 이동(PLAN-20)</b>: targetWeekStartDate가 오면 대상 주 계획을 get-or-create해 블록을 옮긴다.
+     *       원본·대상 계획 both 확정이면 DRAFT 복귀, 양쪽 주 total을 재계산한다.</li>
+     * </ul>
+     * 부재·타인 블록 → 404. 겹침·가용초과는 막지 않는다(검증 엔진 소관).
+     */
+    @Transactional
+    public PlanBlockResponse moveBlock(UUID userId, UUID blockId, PlanBlockMoveRequest req) {
+        PlanBlock block = planBlockRepository.findByIdAndUserId(blockId, userId)
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404 (블록 부재·타인)
+
+        // 시각 병합 — 안 담긴 필드는 기존 값 유지
+        Instant startAt = req.isProvided("startAt") ? req.getStartAt() : block.getStartAt();
+        Instant endAt = req.isProvided("endAt") ? req.getEndAt() : block.getEndAt();
+        if (req.isProvided("startAt") || req.isProvided("endAt")) {
+            if (startAt == null || endAt == null) {
+                throw invalidField(startAt == null ? "startAt" : "endAt", "required");
+            }
+            if (!startAt.isBefore(endAt)) { // 422 E-PLAN-002 (start >= end)
+                throw new OpenPlanException(ErrorCode.E_PLAN_002);
+            }
+            requireFiveMinuteAligned(startAt, "startAt"); // 422 E-COM-009
+            requireFiveMinuteAligned(endAt, "endAt");
+        }
+
+        UUID sourcePlanId = block.getWeeklyPlanId();
+        UUID targetPlanId = sourcePlanId;
+
+        // 주차 이동(PLAN-20) — 대상 주 계획 get-or-create
+        if (req.isProvided("targetWeekStartDate") && req.getTargetWeekStartDate() != null) {
+            WeeklyPlan targetPlan = getOrCreateWeekPlan(userId, req.getTargetWeekStartDate());
+            targetPlanId = targetPlan.getId();
+            targetPlan.reopenToDraftIfConfirmed(); // 대상 계획에 편집 발생 → DRAFT
+        }
+
+        // 원본 계획 확정 편집 재개 → DRAFT
+        weeklyPlanRepository.findById(sourcePlanId).ifPresent(WeeklyPlan::reopenToDraftIfConfirmed);
+
+        planBlockRepository.flush(); // reopen(엔티티) 반영 후 벌크 UPDATE (clearAutomatically로 컨텍스트 비움)
+        planBlockRepository.reschedule(blockId, startAt, endAt, targetPlanId);
+
+        // 재계산 — 주차 이동이면 원본·대상 both, 아니면 원본만
+        List<UUID> affected = new ArrayList<>();
+        affected.add(sourcePlanId);
+        if (!targetPlanId.equals(sourcePlanId)) {
+            affected.add(targetPlanId);
+        }
+        recalculator.recalculate(affected);
+
+        PlanBlockView view = planBlockRepository.findViewByBlockId(blockId)
+                .orElseThrow(() -> new IllegalStateException("이동 직후 블록 뷰 재조회 실패 — blockId=" + blockId));
+        return PlanBlockResponse.fromView(view);
+    }
+
+    /**
+     * 대상 주 계획 get-or-create (PLAN-20). 있으면 기존, 없으면 생성(주 total 재계산이 뒤따르므로 total=0으로 시작).
+     *
+     * <p><b>동시 요청 경합 방어</b>: 같은 사용자의 블록 여럿을 같은 신규 주로 병렬 이동하면 둘 다 "없음"을 볼 수 있다.
+     * {@code INSERT ... ON CONFLICT DO NOTHING}(예외 없음)으로 만들고 재조회해 승자 행으로 수렴한다 — {@code saveAndFlush}
+     * +catch는 위반이 tx를 rollback-only로 만들어 커밋 시 500이 되므로 쓰지 않는다(주차예외 슬라이스에서 확인된 함정).
+     */
+    private WeeklyPlan getOrCreateWeekPlan(UUID userId, LocalDate weekStartDate) {
+        return weeklyPlanRepository.findByUserIdAndWeekStartDate(userId, weekStartDate)
+                .orElseGet(() -> {
+                    weeklyPlanRepository.insertIfAbsent(
+                            UUID.randomUUID(), userId, weekStartDate, weekStartDate.plusDays(6), clock.now());
+                    return weeklyPlanRepository.findByUserIdAndWeekStartDate(userId, weekStartDate)
+                            .orElseThrow(() -> new IllegalStateException(
+                                    "insertIfAbsent 직후 주간계획 재조회 실패 — user=" + userId + " week=" + weekStartDate));
+                });
+    }
+
+    /**
+     * 블록 일괄 적용 (RB-PLAN-01·PLAN-29). {@code operations}를 순서대로 <b>한 트랜잭션</b>에서 실행한다 —
+     * 하나라도 실패하면 전체 롤백(원자적). 낱개 로직({@link #createBlock}·{@link #moveBlock}·{@link #deleteBlock})을
+     * 그대로 재사용한다(같은 빈 self-invocation이라 이 메서드의 tx에 합류). 적용 후 최신 {@link WeeklyPlanView} 반환.
+     *
+     * <p>CREATE는 경로의 {@code planId}에 배치한다. MOVE는 정본 {@code PlanBlockInput}이라 시각 조정만(주차 이동 없음).
+     * 계획 부재·타인 → 404. op별 필수 필드 누락 → 422.
+     */
+    @Transactional
+    public WeeklyPlanView applyBatch(UUID userId, UUID planId, BlockBatchRequest request) {
+        WeeklyPlan plan = weeklyPlanRepository.findByIdAndUserId(planId, userId)
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404 (계획 부재·타인)
+
+        for (BlockBatchRequest.Operation op : request.operations()) {
+            String kind = op.op() == null ? "" : op.op().trim();
+            switch (kind) {
+                case "CREATE" -> {
+                    if (op.block() == null) {
+                        throw invalidField("block", "required");
+                    }
+                    createBlock(userId, planId, op.block());
+                }
+                case "MOVE" -> {
+                    if (op.planBlockId() == null) {
+                        throw invalidField("planBlockId", "required");
+                    }
+                    if (op.block() == null) {
+                        throw invalidField("block", "required");
+                    }
+                    requireBlockInPlan(userId, op.planBlockId(), planId);
+                    moveBlock(userId, op.planBlockId(), toMoveRequest(op.block()));
+                }
+                case "DELETE" -> {
+                    if (op.planBlockId() == null) {
+                        throw invalidField("planBlockId", "required");
+                    }
+                    requireBlockInPlan(userId, op.planBlockId(), planId);
+                    deleteBlock(userId, op.planBlockId());
+                }
+                default -> throw invalidField("op", "invalid"); // 미정의 op → 422
+            }
+        }
+
+        // 적용 후 최신 뷰 조립 — 재계산은 각 op가 이미 수행했으므로 DB의 계획 total은 갱신돼 있다.
+        WeeklyPlan latest = weeklyPlanRepository.findByIdAndUserId(planId, userId)
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004));
+        entityManager.refresh(latest); // DB 값을 다시 읽는다 — 이유는 아래
+        //   recalculator는 JdbcTemplate로 weekly_plans.total_planned_minutes를 UPDATE한다(JPA 바깥).
+        //   plan은 이 메서드 진입부 404 검사에서 이미 영속성 컨텍스트에 올라가 있어, 위 재조회는 DB가 아니라
+        //   1차 캐시의 낡은 인스턴스를 돌려준다 — CREATE만 있는 배치에서 DB=180인데 응답 total=0으로 실측됨.
+        //   MOVE가 섞이면 reschedule의 clearAutomatically가 컨텍스트를 비워 우연히 가려진다(그래서 혼합
+        //   테스트는 통과했다). 우연에 기대지 않도록 여기서 명시적으로 새로 읽는다.
+        List<PlanBlockResponse> blocks = planBlockRepository.findViewsByWeeklyPlanId(planId)
+                .stream().map(PlanBlockResponse::fromView).toList();
+        return WeeklyPlanView.of(WeeklyPlanResponse.from(latest, blocks.size()), blocks);
+    }
+
+    /**
+     * 배치 대상 블록이 <b>경로의 계획에 속하는지</b> 확인한다 (404 E-COM-004).
+     *
+     * <p>낱개 API({@code PATCH/DELETE /plan-blocks/{blockId}})는 블록 id 하나로 주소가 완결되므로
+     * 사용자 소유만 보면 된다. 그러나 배치는 {@code POST /weekly-plans/{planId}/block-batches} —
+     * <b>계획 하위 리소스</b>라, 소유만 확인하고 위임하면 같은 사용자의 <b>다른 주 블록</b>을 이 경로로
+     * 조작할 수 있다. FE가 이전에 보던 주의 {@code planBlockId}를 재전송하면 그 주 블록이 삭제되고
+     * 그 주 total이 재계산되는데, 응답 {@link WeeklyPlanView}는 {@code planId}의 블록만 싣기 때문에
+     * <b>화면에 흔적이 남지 않는다</b>.
+     *
+     * <p>다른 계획의 블록은 이 경로에서 주소 지정 대상이 아니므로 404로 답한다 — 배치가 "없는·타인 계획"에
+     * 쓰는 코드와 같고, 저장소의 존재 은닉 관례와도 같다(422로 답하면 남의 블록 존재를 알려주게 된다).
+     */
+    private void requireBlockInPlan(UUID userId, UUID blockId, UUID planId) {
+        PlanBlock block = planBlockRepository.findByIdAndUserId(blockId, userId)
+                .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404 (부재·타인)
+        if (!planId.equals(block.getWeeklyPlanId())) {
+            throw new OpenPlanException(ErrorCode.E_COM_004); // 404 (이 계획의 블록이 아니다)
+        }
+    }
+
+    /** 배치 MOVE의 block(PlanBlockInput) → 이동 요청. 시각만 조정(정본상 주차 이동은 배치에 없음). */
+    private PlanBlockMoveRequest toMoveRequest(PlanBlockCreateRequest block) {
+        PlanBlockMoveRequest move = new PlanBlockMoveRequest();
+        move.setStartAt(block.startAt());
+        move.setEndAt(block.endAt());
+        return move;
+    }
+
+    /**
+     * 블록 입력 필수 3필드 검증 (422 E-COM-009).
+     *
+     * <p><b>Bean Validation에 의존할 수 없는 자리다.</b> {@link PlanBlockCreateRequest}의 세 필드에는
+     * {@code @NotNull}이 있지만, 그것을 돌리는 것은 컨트롤러의 {@code @Valid @RequestBody}다.
+     * 배치({@code POST /block-batches})는 {@code BlockBatchRequest.Operation.block}으로 같은 타입을
+     * 감싸 받는데 거기엔 {@code @Valid} 캐스케이드가 없어 검증이 통째로 건너뛰어지고, 그대로
+     * {@link #createBlock}에 흘러들면 {@code parseBlockType}의 {@code raw.trim()}이나
+     * {@code req.startAt().isBefore(...)}에서 NPE가 나 500(E-COM-005)으로 샌다.
+     *
+     * <p><b>{@code Operation.block}에 {@code @Valid}를 붙이지 않은 이유</b>: 그러면 위반이
+     * {@code MethodArgumentNotValidException} → <b>E-COM-001(400)</b>이 되는데, 배치 컨트롤러가
+     * 문서화한 계약은 "op별 필수 필드 누락 → <b>422</b>"다. {@code op} 필드를 String으로 받아
+     * 서비스가 판정하는 기존 관례와도 같은 이유다 — 파싱 계층이 아니라 도메인 계층에서 422로 답한다.
+     *
+     * <p>단건 경로({@code POST /blocks})는 컨트롤러 {@code @Valid}가 먼저 걸려 400을 내므로 여기까지
+     * 오지 않는다. 두 경로의 상태코드가 다른 것은 각자 문서화된 계약을 따른 결과다.
+     */
+    private void requireBlockInput(PlanBlockCreateRequest req) {
+        if (req.blockType() == null) {
+            throw invalidField("blockType", "required");
+        }
+        if (req.startAt() == null) {
+            throw invalidField("startAt", "required");
+        }
+        if (req.endAt() == null) {
+            throw invalidField("endAt", "required");
+        }
+    }
+
+    /** blockType 문자열 → enum. 미정의값 → 422 E-COM-009. null은 호출 전 {@link #requireBlockInput}이 거른다. */
     private PlanBlockType parseBlockType(String raw) {
         try {
             return PlanBlockType.valueOf(raw.trim());

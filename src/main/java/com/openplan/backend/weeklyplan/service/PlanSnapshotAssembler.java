@@ -61,6 +61,17 @@ public class PlanSnapshotAssembler {
      */
     public PlanSnapshot assemble(UUID userId, LocalDate weekStartDate, List<BlockView> blocks,
                                  Map<UUID, VirtualTaskEdit> taskEdits) {
+        return assemble(userId, weekStartDate, blocks, taskEdits, List.of());
+    }
+
+    /**
+     * 스냅샷 조립 (자동 배치용 오버로드 — SS-05). {@code extraTaskIds}의 태스크 사실도 {@code taskFacts}에 포함한다.
+     *
+     * <p>기본 조립은 blocks가 가리키는 태스크 사실만 모으는데, 자동 배치 후보는 <b>아직 블록이 아닌 미배치 태스크</b>라
+     * 그대로면 사실이 비어 배치 엔진이 정렬·판정을 못 한다. 그래서 후보 taskId를 합집합으로 넘겨 사실을 채운다.
+     */
+    public PlanSnapshot assemble(UUID userId, LocalDate weekStartDate, List<BlockView> blocks,
+                                 Map<UUID, VirtualTaskEdit> taskEdits, List<UUID> extraTaskIds) {
         ZoneId zone = clock.zoneOf(userId);
 
         List<AvailabilityWindow> availabilities = availabilityRepository.findByUserId(userId).stream()
@@ -69,7 +80,7 @@ public class PlanSnapshotAssembler {
 
         List<FixedWindow> activeFixed = activeFixedWindows(userId, weekStartDate);
 
-        Map<UUID, TaskFacts> taskFacts = taskFacts(blocks, taskEdits);
+        Map<UUID, TaskFacts> taskFacts = taskFacts(blocks, taskEdits, extraTaskIds);
 
         return new PlanSnapshot(weekStartDate, zone, clock.now(), blocks, activeFixed, availabilities, taskFacts);
     }
@@ -99,19 +110,23 @@ public class PlanSnapshotAssembler {
                 userId, weekStartDate);
     }
 
-    /** 블록이 가리키는 태스크의 사실. dry-run 편집(taskEdits)이 있으면 덮어쓴다. WBS는 미구현이라 null. */
-    private Map<UUID, TaskFacts> taskFacts(List<BlockView> blocks, Map<UUID, VirtualTaskEdit> taskEdits) {
-        List<UUID> taskIds = blocks.stream()
-                .map(BlockView::taskId)
-                .filter(java.util.Objects::nonNull)
+    /**
+     * 태스크 사실 — blocks가 가리키는 태스크 + {@code extraTaskIds}(자동 배치 후보)의 합집합. dry-run 편집이 있으면
+     * 덮어쓴다. WBS는 미구현이라 null. taskRepository는 소유 무관 findAllById지만 taskId 출처가 이미 사용자 스코프
+     * (blocks=사용자 계획, extraTaskIds=서비스가 사용자 미배치 태스크로 조회)라 안전하다.
+     */
+    private Map<UUID, TaskFacts> taskFacts(List<BlockView> blocks, Map<UUID, VirtualTaskEdit> taskEdits,
+                                           List<UUID> extraTaskIds) {
+        List<UUID> taskIds = java.util.stream.Stream.concat(
+                        blocks.stream().map(BlockView::taskId).filter(java.util.Objects::nonNull),
+                        extraTaskIds.stream())
                 .distinct()
                 .toList();
         if (taskIds.isEmpty()) {
             return Map.of();
         }
-        Map<UUID, TaskFacts> facts = taskRepository.findAllById(taskIds).stream()
+        return taskRepository.findAllById(taskIds).stream()
                 .collect(Collectors.toMap(Task::getId, t -> toTaskFacts(t, taskEdits.get(t.getId()))));
-        return facts;
     }
 
     private static TaskFacts toTaskFacts(Task t, VirtualTaskEdit edit) {
