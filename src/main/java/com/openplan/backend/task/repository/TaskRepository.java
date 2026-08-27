@@ -110,33 +110,32 @@ public interface TaskRepository extends JpaRepository<Task, UUID> {
     List<UUID> findUnassignedTaskIds(@Param("userId") UUID userId);
 
     /**
-     * 프로젝트의 <b>미완료</b> 태스크 수 (구조 부족 경고 — RB-PROJ-02).
+     * 구조 부족 경고 판정 입력 — 총수·미완료·예상시간 결손을 <b>한 쿼리·한 스냅샷</b>으로 센다 (RB-PROJ-02).
+     *
+     * <p><b>왜 세 번 세지 않는가</b>: 판정 문구가 세 숫자를 함께 쓴다. 따로 조회하면 그 사이에 들어온
+     * {@code POST /tasks/bulk} 하나로 "태스크가 2건입니다"와 "예상시간이 비어 있는 미완료 태스크가
+     * 3건 있습니다"가 한 응답에 담기는 자기모순이 난다 — 정본이 약속한 결정성(P1)도 함께 무너진다.
+     * 왕복 3회가 1회로 주는 것은 부수 효과일 뿐 주된 이유가 아니다.
      *
      * <p>"미완료 = status &lt;&gt; COMPLETED"는 {@link #countDeadlineSoon}이 세운 정의를 그대로 쓴다.
+     * 완료된 일의 예상시간 공백은 계획 입력이 아니라 이력 결손이라 세지 않는다.
      * 소유 판정은 하지 않는다 — 호출 전에 서비스가 {@code projectRepository.findByIdAndUserId}로
      * 프로젝트 소유를 확인하므로 projectId 자체가 이미 사용자 스코프다({@link #countByProjectId} 관례 동일).
-     */
-    @Query("""
-            select count(t)
-              from Task t
-             where t.projectId = :projectId
-               and t.status <> com.openplan.backend.task.domain.TaskStatus.COMPLETED
-            """)
-    long countRemainingByProjectId(@Param("projectId") UUID projectId);
-
-    /**
-     * 프로젝트의 미완료 태스크 중 <b>예상시간이 비어 있는</b> 수 (구조 부족 경고 — RB-PROJ-02).
      *
-     * <p>COMPLETED를 세지 않는 것이 핵심이다 — 완료된 일의 예상시간 공백은 계획 입력이 아니라 이력
-     * 결손이라 경고 대상이 아니다. estimatedMinutes는 nullable이 확정값이므로(D-6, 서버 기본값 미주입)
-     * null 자체는 합법 상태이고, 경고는 오류가 아니라 "계획 전 점검 항목"이다.
+     * <p>태스크가 0건이어도 집계 함수라 행은 하나 나온다 — Optional이 아닌 이유다. 다만 그때
+     * {@code sum}은 0이 아니라 <b>null</b>을 돌려주므로(빈 집합의 합은 정의상 null) {@code coalesce}로
+     * 0을 채운다. 없으면 빈 프로젝트에서 long 언박싱 NPE로 500이 난다(실측).
      */
     @Query("""
-            select count(t)
+            select new com.openplan.backend.task.repository.TaskStructureCounts(
+                       count(t),
+                       coalesce(sum(case when t.status <> com.openplan.backend.task.domain.TaskStatus.COMPLETED
+                                         then 1L else 0L end), 0L),
+                       coalesce(sum(case when t.status <> com.openplan.backend.task.domain.TaskStatus.COMPLETED
+                                              and t.estimatedMinutes is null
+                                         then 1L else 0L end), 0L))
               from Task t
              where t.projectId = :projectId
-               and t.status <> com.openplan.backend.task.domain.TaskStatus.COMPLETED
-               and t.estimatedMinutes is null
             """)
-    long countRemainingWithoutEstimateByProjectId(@Param("projectId") UUID projectId);
+    TaskStructureCounts countStructure(@Param("projectId") UUID projectId);
 }

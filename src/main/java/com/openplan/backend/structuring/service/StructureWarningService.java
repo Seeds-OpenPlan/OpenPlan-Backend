@@ -8,6 +8,7 @@ import com.openplan.backend.project.repository.ProjectRepository;
 import com.openplan.backend.project.service.ProjectAutoCloseEvaluator;
 import com.openplan.backend.structuring.dto.StructureWarningResponse;
 import com.openplan.backend.task.repository.TaskRepository;
+import com.openplan.backend.task.repository.TaskStructureCounts;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -54,11 +55,11 @@ public class StructureWarningService {
 
         LocalDate today = clock.todayOf(userId); // P-2 — 사용자 타임존 기준(월경계)
 
-        long totalTasks = taskRepository.countByProjectId(projectId);
-        long remainingTasks = taskRepository.countRemainingByProjectId(projectId);
-        long missingEstimates = taskRepository.countRemainingWithoutEstimateByProjectId(projectId);
+        // 세 숫자를 한 스냅샷에서 센다 — 따로 세면 그 사이 태스크 변경이 자기모순 문구를 만든다
+        // (근거는 TaskRepository.countStructure 참고).
+        TaskStructureCounts counts = taskRepository.countStructure(projectId);
 
         return StructureWarningPolicy.evaluate(project.getStatus(), project.getDueDate(), today,
-                totalTasks, remainingTasks, missingEstimates);
+                counts.total(), counts.remaining(), counts.missingEstimates());
     }
 }
