@@ -220,6 +220,54 @@ class CorrectionProposalApiTest {
     }
 
     @Test
+    @DisplayName("중단(ABORTED) 이력은 제외 — 포기한 시도가 예상값을 끌어내리지 않는다")
+    void abortedLogsExcluded() throws Exception {
+        UUID task = insertTask(project, category, 50);
+        insertLog(MAIN, task, 20, "COMPLETED");
+        insertLog(MAIN, task, 20, "COMPLETED");
+        insertLog(MAIN, task, 20, "COMPLETED"); // 근거 3건 → r=+20
+
+        // 5분 하고 세 번 포기 — 산입되면 Σactual이 75로 늘어 r=+50이 된다
+        insertLog(MAIN, task, 5, "ABORTED");
+        insertLog(MAIN, task, 5, "ABORTED");
+        insertLog(MAIN, task, 5, "ABORTED");
+
+        mockMvc.perform(req(MAIN).param("categoryId", category.toString())
+                        .param("estimatedMinutes", "60"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.proposedEstimatedMinutes").value(70)) // 산입되면 90
+                .andExpect(jsonPath("$.data.basis").value("해당 카테고리 편차율 +20% 반영"))
+                .andExpect(jsonPath("$.data.sampleSize").value(3)); // 6이 아니다
+    }
+
+    @Test
+    @DisplayName("지연(DELAYED)은 산입 — '더 걸렸다'는 예상을 늘려야 한다는 정직한 증거다")
+    void delayedLogsIncluded() throws Exception {
+        UUID task = insertTask(project, category, 50);
+        insertLog(MAIN, task, 20, "DELAYED");
+        insertLog(MAIN, task, 20, "DELAYED");
+        insertLog(MAIN, task, 20, "DELAYED"); // Σactual=60 → r=+20
+
+        mockMvc.perform(req(MAIN).param("categoryId", category.toString())
+                        .param("estimatedMinutes", "60"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.proposedEstimatedMinutes").value(70))
+                .andExpect(jsonPath("$.data.sampleSize").value(3));
+    }
+
+    @Test
+    @DisplayName("중단만 있으면 근거가 0건 → 제안 생략 (표본 하한도 중단을 세지 않는다)")
+    void onlyAbortedYieldsNoProposal() throws Exception {
+        UUID task = insertTask(project, category, 60);
+        insertLog(MAIN, task, 5, "ABORTED");
+        insertLog(MAIN, task, 5, "ABORTED");
+        insertLog(MAIN, task, 5, "ABORTED");
+
+        expectNoProposal(req(MAIN).param("categoryId", category.toString())
+                .param("estimatedMinutes", "60"));
+    }
+
+    @Test
     @DisplayName("측정 가능한 이력만으로 표본 하한을 센다 — 예상 없는 로그로는 3건을 채울 수 없다")
     void unmeasurableLogsDoNotFillSampleQuota() throws Exception {
         UUID measurable = insertTask(project, category, 50);
@@ -405,13 +453,17 @@ class CorrectionProposalApiTest {
 
     /** 시각은 아무 값이어도 된다 — 집계 창이 전체 이력이라 결과에 영향이 없다(CP-1). */
     private void insertLog(UUID userId, UUID taskId, int actualMinutes) {
+        insertLog(userId, taskId, actualMinutes, "COMPLETED");
+    }
+
+    private void insertLog(UUID userId, UUID taskId, int actualMinutes, String result) {
         jdbc.update("""
                 INSERT INTO execution_logs (execution_log_id, user_id, task_id, plan_block_id,
                                             started_at, ended_at, actual_minutes, result, memo, created_at)
-                VALUES (?, ?, ?, NULL, ?, ?, ?, 'COMPLETED', NULL, ?)
+                VALUES (?, ?, ?, NULL, ?, ?, ?, ?, NULL, ?)
                 """, UUID.randomUUID(), userId, taskId,
                 OffsetDateTime.ofInstant(T0, ZoneOffset.UTC),
                 OffsetDateTime.ofInstant(T0.plusSeconds(actualMinutes * 60L), ZoneOffset.UTC),
-                actualMinutes, OffsetDateTime.now(ZoneOffset.UTC));
+                actualMinutes, result, OffsetDateTime.now(ZoneOffset.UTC));
     }
 }
