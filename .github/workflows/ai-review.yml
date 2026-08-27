@@ -120,6 +120,42 @@ jobs:
         if: steps.budget.outputs.exhausted == '' || steps.budget.outputs.exhausted == 'false'
         with:
           fetch-depth: 0
+          # 🔴 workflow_dispatch 는 PR 이 아니라 **기본 브랜치**(대개 main)를 체크아웃한다
+          #    (2026-08-27 2차 리뷰). 그러면 리뷰어는 main 의 openapi.yaml·마이그레이션을
+          #    읽으면서 PR 의 diff 를 판정한다 — **엉뚱한 기준과 대조**하는 것이고,
+          #    이 저장소의 결함은 대부분 "계약과의 어긋남" 이라 그 대조가 리뷰의 핵심이다.
+          #    D-89 는 "코멘트가 안 남는" 증상만 고쳤고 "무엇을 리뷰하는가" 는 남아 있었다.
+          #    pull_request 는 빈 값 → checkout 기본 동작(머지 커밋)을 그대로 둔다.
+          ref: ${{ github.event_name == 'workflow_dispatch' && steps.dispatch_sha.outputs.sha || '' }}
+
+      # 🔴 위 ref 표현식이 옳다는 것을 **믿지 말고 증명한다.**
+      #    표현식 한 글자만 어긋나도 조용히 기본 브랜치를 보게 되고, 그 리뷰는
+      #    "돌기는 했는데 엉뚱한 것을 본" 상태가 된다 — 이 저장소가 반복해서 당한 모양이다.
+      #    기대 SHA 가 체크아웃된 이력 안에 있는지 확인한다(자기 자신도 조상으로 친다).
+      #    pull_request 의 머지 커밋에서는 head.sha 가 부모라 통과하고,
+      #    dispatch 가 잘못 main 을 잡으면 PR head 가 main 에 없어 즉시 실패한다.
+      - name: 체크아웃 검증 — 지금 보고 있는 것이 그 PR 의 코드인가
+        if: steps.budget.outputs.exhausted == '' || steps.budget.outputs.exhausted == 'false'
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || steps.dispatch_sha.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${EXPECTED_SHA}" ]; then
+            echo "::error::기대 SHA 가 비어 있습니다 — 무엇을 리뷰해야 하는지 알 수 없습니다."
+            exit 1
+          fi
+          echo "체크아웃 HEAD : $(git rev-parse HEAD)"
+          echo "기대 SHA      : ${EXPECTED_SHA}"
+          if ! git cat-file -e "${EXPECTED_SHA}^{commit}" 2>/dev/null; then
+            echo "::error::기대 SHA(${EXPECTED_SHA})가 체크아웃에 없습니다 — 다른 것을 받았습니다."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "${EXPECTED_SHA}" HEAD; then
+            echo "::error::기대 SHA(${EXPECTED_SHA})가 체크아웃 이력에 없습니다."
+            echo "리뷰가 이 PR 이 아니라 다른 코드를 보게 됩니다 — 판정이 무의미해집니다."
+            exit 1
+          fi
+          echo "✅ 이 PR 의 코드를 보고 있습니다."
 
       - uses: anthropics/claude-code-action@v1
         if: steps.budget.outputs.exhausted == '' || steps.budget.outputs.exhausted == 'false'
