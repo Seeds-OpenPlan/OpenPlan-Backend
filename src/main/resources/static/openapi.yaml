@@ -2686,7 +2686,11 @@ components:
           type: array
           description: 가용 슬롯 부족으로 배치 못 한 태스크
           items: { type: string, format: uuid }
-        reason: { type: string, description: "정렬 규칙 설명 (우선순위→마감일→예상시간, first-fit)" }
+        # 🔴 이 필드만 P4(사용자 노출 문구는 카탈로그에서만) 의 예외다. 제안기가 규칙(first-fit)이면
+        #    카탈로그 고정 문구가, AI 초안이면 그 초안이 동반한 근거가 담긴다 — AI 는 매번 근거가
+        #    달라 제안기만이 그 문구를 알기 때문이다(Spring↔AI 계약 §4: "reason 은 필수다 …
+        #    AI 제안도 근거를 동반한다"). grep 감사로는 이 필드를 덮을 수 없으니 여기 적어 둔다.
+        reason: { type: string, description: "배치 근거. 규칙 경로면 정렬 규칙 설명(우선순위→마감일→예상시간, first-fit), AI 경로면 초안이 동반한 근거 문구 — 이 필드는 P4 카탈로그 예외" }
     ReplanOption:
       type: object
       properties:
