@@ -159,10 +159,13 @@ jobs:
 
       - uses: anthropics/claude-code-action@v1
         if: steps.budget.outputs.exhausted == '' || steps.budget.outputs.exhausted == 'false'
-        env:
-          # 에이전트의 Bash 가 gh 를 쓸 수 있어야 한다 — 수동 실행에서는 스티키 코멘트가
-          # 붙을 PR 엔티티가 없어 **에이전트가 직접** 코멘트를 올려야 하기 때문이다(D-89).
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # 🔴 여기에 env: GH_TOKEN 을 넣지 말 것 (2026-08-27 실장애).
+        #    #49 에서 "에이전트가 gh 를 쓸 수 있어야 한다"며 secrets.GITHUB_TOKEN 을 넣었는데,
+        #    그 뒤로 **리뷰가 코멘트를 한 건도 못 올렸다** — 네 회차 연속으로 잡은 success,
+        #    is_error: false, permission_denials_count: 0 인데 산출물만 0 이었다(약 $11 소모).
+        #    액션은 OIDC 로 자기 앱 토큰(claude[bot])을 따로 받아 코멘트를 단다("Using
+        #    GITHUB_TOKEN from OIDC"). 스텝 env 로 워크플로 토큰(github-actions[bot])을
+        #    덮어씌우면 그 경로가 어긋난다. 08-25 까지 잘 돌던 구성에는 이 블록이 없었다.
         with:
           # Max 구독 토큰으로 인증한다 — 종량 과금 대신 구독 한도를 쓴다.
           # 🔴 이 한도는 팀원의 대화형 Claude Code 사용과 **같은 지갑**이다
@@ -285,8 +288,15 @@ jobs:
           #    판정이 뒤집힌다. "Blocking 0 이면 승인 없이 머지" 규칙 아래서 이 마커는 사실상
           #    유일한 게이트다 — 아무나 쓸 수 있으면 게이트가 아니다.
           #    리뷰를 올리는 주체는 claude-code-action 의 봇 계정 하나뿐이다.
+          # 🔴 `gh api` 에 `--arg` 를 붙이지 말 것 (2026-08-27 실장애).
+          #    `--arg` 는 jq 의 플래그이지 gh 의 것이 아니다. 붙이면 gh 가 `--jq` 의 값으로
+          #    `--arg` 를 먹고 남은 셋(`author` · 봇이름 · jq식)을 위치 인자로 세어
+          #    **`accepts 1 arg(s), received 4`** 로 죽는다. 뒤의 `|| true` 가 그 실패를
+          #    삼켜 VERDICT 가 비고, 리뷰 결과가 무엇이든 **모든 PR 이 무조건 빨개졌다.**
+          #    작성자 검증(2026-08-27 2차 리뷰 Blocking)은 유지하되 봇 이름을 jq 식 안에
+          #    직접 박는다. REVIEW_BOT 은 워크플로가 정하는 리터럴이라 주입 위험이 없다.
           VERDICT=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
-            --jq --arg author "${REVIEW_BOT}" '.[] | select(.user.login == $author) | .body' \
+            --jq ".[] | select(.user.login == \"${REVIEW_BOT}\") | .body" \
             | grep -o "REVIEW-VERDICT blocking=[0-9][0-9]* sha=${HEAD_SHA}" \
             | tail -1 || true)
 
