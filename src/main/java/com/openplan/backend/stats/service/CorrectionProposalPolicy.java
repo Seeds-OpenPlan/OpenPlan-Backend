@@ -47,6 +47,18 @@ public final class CorrectionProposalPolicy {
     /** 제안값 정렬 단위(분) — 태스크 예상시간이 5분 배수라는 도메인 규약({@code ck_tasks_estimated}). */
     static final int STEP_MINUTES = 5;
 
+    /**
+     * 제안값 상한 — <b>표현 한계이지 제품 상한이 아니다</b>. ASSUMPTION-CP5가 기각한 "완충·감쇠"와는
+     * 성격이 다르다: 그쪽은 "편차율을 얼마나 반영할 것인가"라는 제품 판단이고, 이것은 응답 필드가
+     * {@code int}라서 넘을 수 없는 물리적 경계다.
+     *
+     * <p>값은 int 범위 안의 최대 5의 배수다 — {@code Integer.MAX_VALUE}(…647)로 자르면 "제안값은 5의
+     * 배수"라는 계약이 깨진다. 여기에 닿으려면 입력이 수억 분이어야 해서 정상 사용에서는 도달하지 않고,
+     * 도달하더라도 <b>넘쳐서 5가 되는 것</b>보다는 큰 값이 그대로 보이는 편이 정직하다(입력이 잘못됐다는
+     * 신호가 사용자에게 남는다).
+     */
+    static final int MAX_PROPOSED_MINUTES = 2_147_483_645;
+
     private CorrectionProposalPolicy() {
     }
 
@@ -97,10 +109,13 @@ public final class CorrectionProposalPolicy {
 
         long r = Math.round(deviationRate);
         double raw = estimatedMinutes * (100 + r) / 100.0;
-        int proposed = Math.max(MIN_PROPOSED_MINUTES,
-                (int) Math.round(raw / STEP_MINUTES) * STEP_MINUTES);
 
-        return new CorrectionProposalResponse(proposed, basis(scope, r), sampleSize);
+        // 정렬·클램프를 long으로 한다 — int로 하면 곱셈이 먼저 넘쳐 음수가 되고, 뒤의 하한 클램프가
+        // 그 음수를 5로 끌어올려 "터무니없이 큰 값" 대신 "터무니없이 작은 값"이 조용히 나간다.
+        long stepped = Math.round(raw / STEP_MINUTES) * (long) STEP_MINUTES;
+        long clamped = Math.min(MAX_PROPOSED_MINUTES, Math.max(MIN_PROPOSED_MINUTES, stepped));
+
+        return new CorrectionProposalResponse((int) clamped, basis(scope, r), sampleSize);
     }
 
     /**

@@ -100,6 +100,20 @@ class CorrectionProposalPolicyTest {
         }
 
         @Test
+        @DisplayName("거대 입력에도 넘치지 않는다 — int 오버플로로 '5'가 나오면 안 된다")
+        void hugeInputDoesNotOverflow() {
+            // (int) 캐스트를 곱셈 전에 하면 440000000×5가 int를 넘어 음수가 되고,
+            // 하한 클램프가 그 음수를 5로 끌어올려 "터무니없이 작은 값"이 조용히 나간다.
+            CorrectionProposalResponse p = eval(1_000_000_000, 120.0, 3);
+
+            assertThat(p.proposedEstimatedMinutes()).isNotEqualTo(5);      // 오버플로 증상
+            assertThat(p.proposedEstimatedMinutes()).isPositive();
+            assertThat(p.proposedEstimatedMinutes() % 5).isZero();          // 상한에서도 5배수 계약 유지
+            assertThat(p.proposedEstimatedMinutes())
+                    .isEqualTo(CorrectionProposalPolicy.MAX_PROPOSED_MINUTES);
+        }
+
+        @Test
         @DisplayName("🔴 상한 없음의 실물 — est=60·r=+300 → 240 그대로 (ASSUMPTION-CP5)")
         void noUpperClamp() {
             // 이 셀이 CP-5 확정의 판단 자료다. 완충·감쇠를 도입하면 여기가 깨지는 것이 정본 갱신 신호.
