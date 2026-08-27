@@ -69,7 +69,7 @@ public class StatsController {
                     + "(DELAYED는 산입). 그런 이력이 섞여 있으면 deviations 화면의 편차율과 basis의 값이 달라진다. "
                     + "스코프 우선순위 categoryId > projectId > 전체이며 묵시 폴백은 없다 — 지정한 스코프의 "
                     + "이력이 부족하면 다른 스코프로 내려가지 않고 제안을 생략한다. "
-                    + "제안 불가 3사유(표본 3건 미만 · 예상시간 합 0 · estimatedMinutes 미제공)는 모두 data 생략(200). "
+                    + "제안 불가 2사유(근거 이력 3건 미만 · estimatedMinutes 미제공)는 모두 data 생략(200). "
                     + "상한·감쇠는 두지 않아 편차율이 크면 제안값도 그만큼 커진다. "
                     + "참조 ID 부재·타인 → 404, estimatedMinutes 5분 단위 위반 → 422.")
     public ResponseEntity<ApiResponse<CorrectionProposalResponse>> correctionProposals(

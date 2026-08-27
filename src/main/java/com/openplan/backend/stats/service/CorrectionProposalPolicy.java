@@ -108,14 +108,21 @@ public final class CorrectionProposalPolicy {
         }
 
         long r = Math.round(deviationRate);
-        double raw = estimatedMinutes * (100 + r) / 100.0;
 
-        // 정렬·클램프를 long으로 한다 — int로 하면 곱셈이 먼저 넘쳐 음수가 되고, 뒤의 하한 클램프가
-        // 그 음수를 5로 끌어올려 "터무니없이 큰 값" 대신 "터무니없이 작은 값"이 조용히 나간다.
-        long stepped = Math.round(raw / STEP_MINUTES) * (long) STEP_MINUTES;
-        long clamped = Math.min(MAX_PROPOSED_MINUTES, Math.max(MIN_PROPOSED_MINUTES, stepped));
+        // `100.0 + r`의 소수점이 핵심이다 — 정수로 두면 `100 + r`과 `estimatedMinutes × (…)`이 둘 다
+        // long 곱셈이 되고, r은 편차율에서 온 값이라 상한이 없어서(ASSUMPTION-CP5 — 감쇠 미도입) 넘친다.
+        // 넘치면 부호가 뒤집혀 "터무니없이 큰 제안"이 아니라 하한 5분이 조용히 나간다 — 사용자에게 경고가 없다.
+        // double은 넘치는 대신 큰 값을 그대로 들고 가 아래 상한 클램프가 받는다. |100+r| < 2^53 구간에서는
+        // long 산술과 결과가 비트 단위로 같으므로 정상 범위의 골든은 움직이지 않는다.
+        double raw = estimatedMinutes * ((100.0 + r) / 100.0);
 
-        return new CorrectionProposalResponse((int) clamped, basis(scope, r), sampleSize);
+        // 정렬(5분 반올림) <b>전에</b> 클램프한다 — 순서가 중요하다. 먼저 정렬하면 Infinity/5 가
+        // Long.MAX_VALUE 로 반올림되고 거기에 5를 곱하는 순간 long이 넘쳐 음수가 된다.
+        // 먼저 잘라두면 MAX_PROPOSED_MINUTES 가 5의 배수라서 정렬이 그 경계를 다시 넘지 못한다.
+        double bounded = Math.min(MAX_PROPOSED_MINUTES, Math.max(MIN_PROPOSED_MINUTES, raw));
+        long proposed = Math.round(bounded / STEP_MINUTES) * (long) STEP_MINUTES;
+
+        return new CorrectionProposalResponse((int) proposed, basis(scope, r), sampleSize);
     }
 
     /**

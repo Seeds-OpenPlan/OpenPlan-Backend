@@ -114,6 +114,21 @@ class CorrectionProposalPolicyTest {
         }
 
         @Test
+        @DisplayName("거대 편차율에도 넘치지 않는다 — 배율 쪽 long 오버플로")
+        void hugeRateDoesNotOverflow() {
+            // 위 케이스는 est가 크고 r이 작았다. 반대 축도 막혀야 한다: r이 크면 `100 + r`도,
+            // `est × (100 + r)`도 long을 넘긴다. 넘기면 부호가 뒤집혀 하한 5가 나온다 —
+            // 상한에 닿았다는 신호가 사라지고 "5분이면 된다"는 정반대 조언이 된다.
+            for (double rate : new double[]{1e10, 1e17, Long.MAX_VALUE, Double.MAX_VALUE}) {
+                CorrectionProposalResponse p = eval(1_000_000_000, rate, 3);
+
+                assertThat(p.proposedEstimatedMinutes())
+                        .as("편차율 %s", rate)
+                        .isEqualTo(CorrectionProposalPolicy.MAX_PROPOSED_MINUTES);
+            }
+        }
+
+        @Test
         @DisplayName("🔴 상한 없음의 실물 — est=60·r=+300 → 240 그대로 (ASSUMPTION-CP5)")
         void noUpperClamp() {
             // 이 셀이 CP-5 확정의 판단 자료다. 완충·감쇠를 도입하면 여기가 깨지는 것이 정본 갱신 신호.

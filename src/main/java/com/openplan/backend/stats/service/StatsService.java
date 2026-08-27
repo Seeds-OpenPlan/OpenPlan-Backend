@@ -89,7 +89,7 @@ public class StatsService {
         }
 
         Map<UUID, Task> tasksById = loadTasks(logs);
-        int totalEstimated = distinctTaskEstimatedSum(logs, tasksById);
+        int totalEstimated = (int) distinctTaskEstimatedSum(logs, tasksById);
         int totalActual = logs.stream().mapToInt(l -> nz(l.getActualMinutes())).sum();
         long completed = logs.stream().filter(l -> l.getResult() == ExecutionResult.COMPLETED).count();
 
@@ -268,11 +268,20 @@ public class StatsService {
         Map<UUID, Task> tasksById = loadTasks(all);
 
         List<ExecutionLog> measurable = measurableLogs(inScope(all, tasksById, query, scope), tasksById);
-        int estimatedSum = distinctTaskEstimatedSum(measurable, tasksById);
-        if (estimatedSum == 0) {
-            return null; // ② 비교 기준이 없다 — 편차율을 정의할 수 없다
+        if (measurable.isEmpty()) {
+            // ② 비교 기준이 없다. 정본이 "예상시간 합 0"이라 부르는 상태가 실제로는 이것이다 —
+            // ck_tasks_estimated 가 예상시간을 "NULL 또는 5의 배수 양수"로 묶어 0인 태스크를 금지하고,
+            // NULL인 태스크의 이력은 measurableLogs 가 이미 걸러내므로, 합이 0이려면 표본이 0건이어야 한다.
+            // 표본 하한(3건)이 어차피 이 경우를 막지만 여기서 먼저 끊는다 — 0으로 나누면 편차율이 NaN이 되고,
+            // NaN은 Math.round 에서 조용히 0이 되어 "편차 0%"라는 없는 사실로 둔갑한다.
+            return null;
         }
-        int actualSum = measurable.stream().mapToInt(l -> nz(l.getActualMinutes())).sum();
+
+        // 합산은 long으로 한다. actual_minutes에는 상한 제약이 없어(ck_exec_actual은 5분 배수·양수만 본다)
+        // 큰 값이 몇 건만 있어도 int 합이 넘치고, 넘치면 음수가 되어 편차율이 −100% 근처로 접힌다 —
+        // 그러면 제안이 하한 5분으로 붙어 "터무니없이 작은 값"이 조용히 나간다.
+        long estimatedSum = distinctTaskEstimatedSum(measurable, tasksById);
+        long actualSum = measurable.stream().mapToLong(l -> nz(l.getActualMinutes())).sum();
         double deviationRate = (actualSum - estimatedSum) * 100.0 / estimatedSum;
 
         // 표본 하한(①)은 Policy가 판정한다 — 여기서 미리 자르면 같은 규칙이 두 곳에 생긴다.
@@ -354,7 +363,15 @@ public class StatsService {
                 .toList();
     }
 
-    /** 제공된 참조 ID의 소유 검증 (부재·타인 → 404 E-COM-004, 구분 불가). 미제공은 검증 대상이 아니다. */
+    /**
+     * 제공된 참조 ID의 소유 검증 (부재·타인 → 404 E-COM-004, 구분 불가). 미제공은 검증 대상이 아니다.
+     *
+     * <p><b>스코프에서 진 ID도 검증한다</b>〔결정 · 2026-08-27〕 — categoryId 가 우선순위를 이기면
+     * projectId 는 집계에 한 번도 읽히지 않지만, 그래도 없거나 남의 것이면 404다. "안 읽으니 무시"를
+     * 택하면 FE가 프로젝트 화면에서 projectId 를 계속 붙여 보내는 흐름에서 그 프로젝트가 삭제돼도
+     * 아무 신호를 못 받는다. 잘못된 참조를 조용히 삼키지 않는 편이 이 API의 다른 404와도 일관된다.
+     * 고정 테스트: {@code unusedProjectIdStillValidated}.
+     */
     private void requireOwnedReferences(UUID userId, CorrectionProposalQuery query) {
         if (query.getCategoryId() != null
                 && !taskCategoryRepository.existsByIdAndUserId(query.getCategoryId(), userId)) {
@@ -366,11 +383,18 @@ public class StatsService {
         }
     }
 
-    private int distinctTaskEstimatedSum(List<ExecutionLog> logs, Map<UUID, Task> tasksById) {
+    /**
+     * 로그들이 가리키는 <b>서로 다른</b> 태스크의 예상시간 합. 같은 태스크를 여러 번 수행해도 예상은 한 번만 센다.
+     *
+     * <p>합이 {@code long}인 것은 보정 제안 때문이다 — 거기서는 이 값이 나눗셈의 분모라서, int로 넘쳐
+     * 음수가 되면 편차율의 <b>부호가 뒤집혀</b> 제안값이 조용히 하한 5분으로 붙는다. 요약(summaries)은
+     * 응답 필드가 int라 어차피 그 범위를 넘길 수 없어 호출부에서 잘라 쓴다(기존 동작과 비트 단위로 동일).
+     */
+    private long distinctTaskEstimatedSum(List<ExecutionLog> logs, Map<UUID, Task> tasksById) {
         return logs.stream().map(ExecutionLog::getTaskId).distinct()
                 .map(tasksById::get)
                 .filter(java.util.Objects::nonNull)
-                .mapToInt(t -> nz(t.getEstimatedMinutes()))
+                .mapToLong(t -> nz(t.getEstimatedMinutes()))
                 .sum();
     }
 

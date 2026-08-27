@@ -42,8 +42,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class CorrectionProposalApiTest {
 
     private static final String PATH = "/api/v1/stats/correction-proposals";
-    private static final UUID MAIN = UUID.fromString("eeee0003-0000-0000-0000-000000000001");
-    private static final UUID OTHER = UUID.fromString("eeee0003-0000-0000-0000-000000000002");
+    // 사용자 UUID 접두사는 테스트 클래스마다 하나씩 점유한다(0001 실행로그 · 0002 통계 · 0003 대시보드 ·
+    // 0012·0013 알림). 여기서 0003을 다시 쓰면 DashboardApiTest와 같은 사용자를 공유하게 되고,
+    // 한쪽이 남긴 이력이 다른 쪽 편차율에 섞여 실행 순서에 따라 깨진다 — 그래서 미사용 번호를 새로 뗀다.
+    private static final UUID MAIN = UUID.fromString("eeee0014-0000-0000-0000-000000000001");
+    private static final UUID OTHER = UUID.fromString("eeee0014-0000-0000-0000-000000000002");
     private static final Instant T0 = Instant.parse("2026-05-01T01:00:00Z");
 
     @Autowired
@@ -283,8 +286,13 @@ class CorrectionProposalApiTest {
     }
 
     @Test
-    @DisplayName("AC-7 Σestimated=0(예상시간 전부 null) → data 생략 — 편차율이 정의되지 않는다")
-    void zeroEstimatedSum() throws Exception {
+    @DisplayName("AC-7 예상시간 없는 태스크뿐이면 근거 이력이 0건 → data 생략(편차율을 정의할 수 없다)")
+    void noMeasurableLogs() throws Exception {
+        // 스토리의 AC-7은 "Σestimated=0"이라 썼지만 그 상태는 이 경로로만 도달한다 —
+        // ck_tasks_estimated 가 예상시간을 "NULL 또는 5의 배수 양수"로 묶어 두어 0인 태스크가 존재할 수 없고,
+        // 예상시간이 NULL인 태스크의 이력은 근거에서 걸러지므로 합이 0이면 표본도 반드시 0건이다.
+        // 그래서 이 테스트가 지키는 그물은 measurableLogs 의 "예상시간 있는 태스크만" 필터다:
+        // 그 필터를 빼면 표본 3건이 살아나 편차율 NaN → r=0 → 60분이 그대로 제안되며 여기서 실패한다.
         UUID task = insertTask(project, category, null);
         insertLog(MAIN, task, 30);
         insertLog(MAIN, task, 30);
@@ -292,6 +300,24 @@ class CorrectionProposalApiTest {
 
         expectNoProposal(req(MAIN).param("categoryId", category.toString())
                 .param("estimatedMinutes", "60"));
+    }
+
+    @Test
+    @DisplayName("실측 합이 int를 넘겨도 부호가 뒤집히지 않는다 — 편차율 집계는 long")
+    void hugeActualSumDoesNotOverflow() throws Exception {
+        // actual_minutes 에는 상한 제약이 없다(ck_exec_actual 은 5분 배수·양수만 본다). 10억 분짜리 이력
+        // 3건이면 합이 30억이라 int 를 넘고, 넘치면 음수가 되어 편차율이 +200% 가 아니라 -229% 로 뒤집힌다.
+        // 그러면 "3배 걸린다"는 사실이 "5분이면 된다"는 정반대 조언으로 나간다 — 경고 없이.
+        UUID task = insertTask(project, category, 1_000_000_000);
+        insertLog(MAIN, task, 1_000_000_000);
+        insertLog(MAIN, task, 1_000_000_000);
+        insertLog(MAIN, task, 1_000_000_000);
+
+        mockMvc.perform(req(MAIN).param("categoryId", category.toString())
+                        .param("estimatedMinutes", "60"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.proposedEstimatedMinutes").value(180)) // 60 × (100+200)/100
+                .andExpect(jsonPath("$.data.basis").value("해당 카테고리 편차율 +200% 반영"));
     }
 
     @Test
@@ -322,6 +348,26 @@ class CorrectionProposalApiTest {
                     .andExpect(status().isNotFound())
                     .andExpect(jsonPath("$.error.code").value("E-COM-004"));
         }
+    }
+
+    @Test
+    @DisplayName("AC-11 집계에 쓰이지 않는 projectId도 검증한다 — 카테고리가 스코프를 이겨도 404")
+    void unusedProjectIdStillValidated() throws Exception {
+        // 〔결정 · 2026-08-27〕 스코프 우선순위상 categoryId 가 이기면 projectId 는 집계에 한 번도
+        // 읽히지 않는다. 그래도 404를 낸다 — "안 읽으니 무시"를 택하면 FE가 프로젝트 화면에서
+        // projectId 를 계속 붙여 보내다 그 프로젝트가 삭제돼도 아무 신호를 못 받는다.
+        // 잘못된 참조를 조용히 삼키지 않는 쪽이 이 API의 다른 404(부재·타인 구분 불가)와도 일관된다.
+        UUID task = insertTask(project, category, 50);
+        insertLog(MAIN, task, 20);
+        insertLog(MAIN, task, 20);
+        insertLog(MAIN, task, 20); // 카테고리 스코프만으로 제안이 나오는 상태
+
+        mockMvc.perform(req(MAIN)
+                        .param("categoryId", category.toString())
+                        .param("projectId", UUID.randomUUID().toString())
+                        .param("estimatedMinutes", "60"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("E-COM-004"));
     }
 
     @Test
