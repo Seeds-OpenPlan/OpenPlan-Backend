@@ -79,6 +79,36 @@ class CorrectionProposalPolicyTest {
         void roundsDown() {
             assertThat(eval(50, 24.0, 3).proposedEstimatedMinutes()).isEqualTo(60); // 50×1.24 = 62
         }
+
+        @Test
+        @DisplayName("🔴 raw 57.5 → 60 — double 곱셈이던 시절엔 55 가 나갔다 (2026-08-27 리뷰 지적)")
+        void halfUpSurvivesBinaryFloatingPoint() {
+            // 50×1.15 는 정확히 57.5 라 half-up 이면 60 이다. 그런데 (100.0+15)/100.0 이 이진
+            // 부동소수점으로 1.1499999999999999 여서, double 로 곱하면 raw 가 57.49999… 가 되고
+            // 반내림으로 55 가 나갔다 — 계약(openapi 200 설명)·javadoc 이 명시한 half-up 위반이다.
+            assertThat(eval(50, 15.0, 3).proposedEstimatedMinutes()).isEqualTo(60);
+            // 위 두 골든(62.5→65, 62→60)은 est=50 에서 오차가 상쇄되는 조합이라 이걸 못 잡았다.
+            // 음수 축에도 같은 함정이 있다: 175×0.70 = 122.5 → 125 (옛 식은 120).
+            assertThat(eval(175, -30.0, 3).proposedEstimatedMinutes()).isEqualTo(125);
+        }
+
+        @Test
+        @DisplayName("정렬 전수 대조 — est ≤ 1000 · r ∈ [-99,500] 격자가 정확 산술과 한 칸도 어긋나지 않는다")
+        void exactAcrossGrid() {
+            // 골든 몇 개로는 부동소수점 결함이 안 잡힌다(위 두 개가 실제로 못 잡았다). 이 격자는
+            // 오차가 나는 셀을 전수로 훑는다 — 옛 double 식으로 되돌리면 117 셀에서 실패한다.
+            // 기대값은 여기서 long 으로 다시 센다(est ≤ 1000 · r ≤ 500 이라 넘치지 않는다).
+            for (int est = 5; est <= 1000; est += 5) {
+                for (int r = -99; r <= 500; r++) {
+                    long scaled = (long) est * (100 + r);          // = raw × 100
+                    int expected = scaled <= 500 ? 5 : (int) ((scaled + 250) / 500) * 5;
+
+                    assertThat(eval(est, r, 3).proposedEstimatedMinutes())
+                            .as("est=%d r=%d", est, r)
+                            .isEqualTo(expected);
+                }
+            }
+        }
     }
 
     // ═══════════════ 클램프 (CP-5) ═══════════════

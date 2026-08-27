@@ -102,7 +102,6 @@ paths:
                 type: object
                 properties:
                   data: { $ref: "#/components/schemas/SessionInfo" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
     delete:
       tags: [auth]
       operationId: logout

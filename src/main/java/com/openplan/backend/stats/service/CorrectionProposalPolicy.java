@@ -2,6 +2,8 @@ package com.openplan.backend.stats.service;
 
 import com.openplan.backend.stats.dto.CorrectionProposalResponse;
 
+import java.math.BigInteger;
+
 /**
  * 예상 시간 보정 제안 판정 (SS-11 / RB-STAT-02) — <b>순수 함수</b>.
  *
@@ -59,6 +61,22 @@ public final class CorrectionProposalPolicy {
      */
     static final int MAX_PROPOSED_MINUTES = 2_147_483_645;
 
+    /**
+     * 산출을 정확한 정수 유리수로 하기 위한 상수들 — 분모 100(백분율)을 곱해 둔 "scaled" 좌표계다.
+     * {@code scaled = estimatedMinutes × (100 + r)} 이고, 이는 {@code raw × 100} 과 같다.
+     * 부동소수점을 거치지 않으므로 .5 경계가 문서화된 half-up 대로 정확히 위로 간다.
+     */
+    private static final BigInteger HUNDRED = BigInteger.valueOf(100);
+
+    private static final BigInteger MIN_SCALED = BigInteger.valueOf(MIN_PROPOSED_MINUTES * 100L);
+
+    private static final BigInteger MAX_SCALED = BigInteger.valueOf(MAX_PROPOSED_MINUTES * 100L);
+
+    private static final BigInteger STEP_SCALED = BigInteger.valueOf(STEP_MINUTES * 100L);
+
+    /** half-up 을 정수 나눗셈으로 하기 위한 반 칸 = (5분 × 100) / 2. */
+    private static final BigInteger HALF_STEP_SCALED = BigInteger.valueOf(STEP_MINUTES * 100L / 2);
+
     private CorrectionProposalPolicy() {
     }
 
@@ -109,18 +127,37 @@ public final class CorrectionProposalPolicy {
 
         long r = Math.round(deviationRate);
 
-        // `100.0 + r`의 소수점이 핵심이다 — 정수로 두면 `100 + r`과 `estimatedMinutes × (…)`이 둘 다
-        // long 곱셈이 되고, r은 편차율에서 온 값이라 상한이 없어서(ASSUMPTION-CP5 — 감쇠 미도입) 넘친다.
-        // 넘치면 부호가 뒤집혀 "터무니없이 큰 제안"이 아니라 하한 5분이 조용히 나간다 — 사용자에게 경고가 없다.
-        // double은 넘치는 대신 큰 값을 그대로 들고 가 아래 상한 클램프가 받는다. |100+r| < 2^53 구간에서는
-        // long 산술과 결과가 비트 단위로 같으므로 정상 범위의 골든은 움직이지 않는다.
-        double raw = estimatedMinutes * ((100.0 + r) / 100.0);
+        // 🔴 여기서 double 곱셈을 쓰면 안 된다 (2026-08-27 리뷰 지적 — 재현 확인).
+        //    옛 식 `estimatedMinutes × ((100.0 + r) / 100.0)` 은 정확히 .5 경계에 오는 값을
+        //    한 칸 내려보냈다: est=50 · r=+15 는 수학적으로 57.5 라 문서화된 half-up 대로면 60 인데,
+        //    (100.0+15)/100.0 이 이진 부동소수점으로 1.1499999999999999 여서 raw 가 57.49999… 가 되고
+        //    round(57.49999…/5)=11 → **55** 가 나갔다. est ≤ 1000 · r ∈ [-99,500] 만 훑어도 117 건이
+        //    같은 방향(문서화된 값보다 항상 5분 낮음)으로 어긋난다. 기존 경계 골든 두 개(62.5→65,
+        //    62→60)는 우연히 오차가 상쇄되는 조합이라 이 결함을 못 잡았다.
+        //
+        //    정수 유리수로 정확히 센다. long 곱셈으로 돌아가지 않는 이유는 옛 주석이 적어 둔 그대로다 —
+        //    r 은 편차율에서 온 값이라 상한이 없어(ASSUMPTION-CP5 — 감쇠 미도입) long 이 넘치고,
+        //    넘치면 부호가 뒤집혀 하한 5분이 조용히 나간다. BigInteger 는 넘치지 않으므로 그 위험이
+        //    없으면서 반올림도 정확하다. 순수 함수라 비용은 문제가 되지 않는다(P1 결정성이 상위 규범).
+        //
+        //    scaled = raw × 100 (분모 100 을 곱해 둔 정수). 100 + r 도 BigInteger 로 더한다 —
+        //    r = Long.MAX_VALUE 같은 값에서 `100L + r` 자체가 넘치기 때문이다.
+        BigInteger scaled = BigInteger.valueOf(estimatedMinutes)
+                .multiply(HUNDRED.add(BigInteger.valueOf(r)));
 
-        // 정렬(5분 반올림) <b>전에</b> 클램프한다 — 순서가 중요하다. 먼저 정렬하면 Infinity/5 가
-        // Long.MAX_VALUE 로 반올림되고 거기에 5를 곱하는 순간 long이 넘쳐 음수가 된다.
-        // 먼저 잘라두면 MAX_PROPOSED_MINUTES 가 5의 배수라서 정렬이 그 경계를 다시 넘지 못한다.
-        double bounded = Math.min(MAX_PROPOSED_MINUTES, Math.max(MIN_PROPOSED_MINUTES, raw));
-        long proposed = Math.round(bounded / STEP_MINUTES) * (long) STEP_MINUTES;
+        // 정렬(5분 반올림) <b>전에</b> 클램프한다 — 순서가 중요하다. 하한 5도 상한도 5의 배수라
+        // 클램프 결과는 그 자체로 정렬돼 있고, 정렬이 경계를 다시 넘지 못한다.
+        if (scaled.compareTo(MIN_SCALED) <= 0) {
+            return new CorrectionProposalResponse(MIN_PROPOSED_MINUTES, basis(scope, r), sampleSize);
+        }
+        if (scaled.compareTo(MAX_SCALED) >= 0) {
+            return new CorrectionProposalResponse(MAX_PROPOSED_MINUTES, basis(scope, r), sampleSize);
+        }
+
+        // half-up 정렬: floor((raw×100 + 250) / 500) × 5. `Math.round` 의 자바 시맨틱(.5 는 위로,
+        // 음수 포함)과 같은 규칙이며, 이 분기의 scaled 는 항상 양수라 BigInteger 의 0 방향 절삭이
+        // floor 와 일치한다. 상·하한을 이미 잘라 둔 뒤라 결과는 int 안에 들어온다.
+        long proposed = scaled.add(HALF_STEP_SCALED).divide(STEP_SCALED).longValueExact() * STEP_MINUTES;
 
         return new CorrectionProposalResponse((int) proposed, basis(scope, r), sampleSize);
     }
