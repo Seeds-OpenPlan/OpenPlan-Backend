@@ -149,7 +149,8 @@ log "4/6 .env 확인"
 
 # 시드와 사전검사가 같은 목록을 본다 — 둘이 갈라지면 "안내는 여섯인데 검사는 넷" 이 된다.
 REQUIRED_KEYS=(DB_HOST DB_PASSWORD JWT_SECRET APP_BASE_URL API_BASE_URL
-               GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET MAIL_USERNAME MAIL_PASSWORD)
+               GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET MAIL_USERNAME MAIL_PASSWORD
+               GROQ_API_KEY)
 
 if [ ! -f "$APP_DIR/.env" ]; then
   # 🔴 .env.example 을 그대로 쓰면 안 된다. 거기엔 로컬 개발 기본값이 채워져 있어

@@ -56,9 +56,22 @@ services:
       TZ: Asia/Seoul
       # 🔴 모델 키. .env 에 GEMINI_API_KEY 가 없으면 이 서비스는 뜨지만 /plans/draft 가 503 을
       #    돌려주고, Spring 은 계약 §4 대로 규칙 폴백한다 — 기동 실패가 아니라 조용한 폴백이다.
+      # 🔴 openplan-ai 에는 env_file 이 없다(backend 에만 있다). 그래서 여기 **적힌 키만**
+      #    컨테이너로 간다 — GROQ_API_KEY 줄이 없으면 .env 에 값이 있어도 전달되지 않는다.
+      #    반면 ${COMPLEX_MODEL} 같은 보간은 compose 가 .env 를 읽어 잘 채운다.
+      #    그 조합이 만드는 것: **AI 는 "Groq 를 써라" 는 지시는 받고 Groq 키는 못 받는다.**
+      #    → 인증 실패 → /plans/draft 503 → Spring 이 계약 §4 대로 규칙 폴백.
+      #    기동 실패가 아니라 **조용한 폴백**이라 화면은 멀쩡하고 AI 기능만 사라진다.
+      #    (2026-08-27 리뷰 실측 지적)
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      COMPLEX_MODEL: ${COMPLEX_MODEL:-gemini/gemini-3.6-flash}
-      LIGHT_MODEL: ${LIGHT_MODEL:-gemini/gemini-3.5-flash-lite}
+      COMPLEX_MODEL: ${COMPLEX_MODEL:-groq/openai/gpt-oss-120b}
+      LIGHT_MODEL: ${LIGHT_MODEL:-groq/openai/gpt-oss-20b}
+      # 🔴 허용값이 제공자마다 다르다 — Groq gpt-oss 는 low|medium|high 만 받고 minimal 은
+      #    무효라, 안 맞으면 매 호출이 거부되는데 화면은 멀쩡하다(D-87).
+      REASONING_EFFORT: ${REASONING_EFFORT:-low}
+      # 🔴 1024 면 replan 응답이 char 2062 에서 잘린다(08-24 에 원인 불명으로 하루를 썼다).
+      MAX_TOKENS: ${MAX_TOKENS:-2048}
     expose:
       - "8000"
     # ports 를 두지 않는다. 8000 을 호스트에 열면 인증 없이 모델을 호출할 수 있는 구멍이 된다 —
