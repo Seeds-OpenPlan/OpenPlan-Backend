@@ -8,6 +8,7 @@ import com.openplan.backend.global.error.OpenPlanException;
 import com.openplan.backend.global.security.JwtProperties;
 import com.openplan.backend.global.security.JwtService;
 import com.openplan.backend.global.time.UserClock;
+import com.openplan.backend.common.Weekday;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
@@ -48,6 +49,7 @@ class ExternalCalendarAuthorizationTest {
         public ZoneId zoneOf(UUID userId) {
             return ZoneId.of("Asia/Seoul");
         }
+
 
         @Override
         public Weekday weekStartDayOf(UUID userId) {

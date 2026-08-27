@@ -150,6 +150,25 @@ class AppleCalDavProviderTest {
     }
 
     @Test
+    @DisplayName("DTEND 없이 DURATION 만 쓴 일정도 사라지지 않는다 — 둘 다 RFC5545 표준 표기다")
+    void DURATION_만_있어도_후보가_된다() {
+        server.expect(once(), requestTo(BASE + CAL))
+                .andRespond(withSuccess(queryResponseWithoutData(), MediaType.APPLICATION_XML));
+        server.expect(once(), requestTo(BASE + CAL))
+                .andRespond(withSuccess(multigetDurationResponse(), MediaType.APPLICATION_XML));
+
+        List<ProviderEvent> events = provider.listEvents(CREDENTIAL, CAL, "내 캘린더",
+                Instant.parse("2026-08-17T00:00:00Z"), Instant.parse("2026-08-31T00:00:00Z"));
+
+        // 옛 구현은 DTEND 만 읽었다. 그러면 길이가 0 이 되고 발생 필터가 걸러 이 일정은
+        // **로그 한 줄 없이** 후보 목록에서 사라졌다 — 사용자는 없는 일정으로 보고 그 위에 계획을 얹는다.
+        server.verify();
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().startAt()).isEqualTo(Instant.parse("2026-08-20T01:00:00Z"));
+        assertThat(events.getFirst().endAt()).isEqualTo(Instant.parse("2026-08-20T02:30:00Z"));
+    }
+
+    @Test
     @DisplayName("401 은 502 가 아니라 422 다 — 사용자가 고칠 수 있는 오류이기 때문")
     void 자격증명_거부는_422() {
         server.expect(once(), requestTo(BASE + "/"))
@@ -257,6 +276,19 @@ class AppleCalDavProviderTest {
                 SUMMARY:팀 점검
                 DTSTART;TZID=Asia/Seoul:20260820T100000
                 DTEND;TZID=Asia/Seoul:20260820T110000
+                END:VEVENT
+                END:VCALENDAR""");
+    }
+
+    private static String multigetDurationResponse() {
+        return multiget("""
+                BEGIN:VCALENDAR
+                VERSION:2.0
+                BEGIN:VEVENT
+                UID:duration-only@icloud.com
+                SUMMARY:길이로 적힌 일정
+                DTSTART;TZID=Asia/Seoul:20260820T100000
+                DURATION:PT1H30M
                 END:VEVENT
                 END:VCALENDAR""");
     }

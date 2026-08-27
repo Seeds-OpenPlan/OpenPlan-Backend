@@ -32,3 +32,9 @@ Thumbs.db
 /modules/
 /.agent-team/
 /core/
+# 배포 서버 런타임 상태 — 저장소 안에 생기지만 소스가 아니다.
+# certbot 컨테이너가 root 로 만들기 때문에 미추적으로 두면 bootstrap.sh 의
+# `git stash push -u` 가 지우지 못해 exit 1 을 내고, set -euo pipefail 아래에서
+# 배포 전체가 3단계에서 즉사한다(2026-08-24 실측 — 08-23 HTTPS 전환 이후 모든 배포가
+# 여기서 죽어 있었다). 무시 목록에 두면 stash 대상 자체가 되지 않는다.
+/certbot/

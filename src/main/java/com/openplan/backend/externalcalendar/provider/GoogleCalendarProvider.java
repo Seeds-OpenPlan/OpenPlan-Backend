@@ -126,15 +126,23 @@ public class GoogleCalendarProvider implements CalendarProvider {
         return events;
     }
 
-    /** {@code start}/{@code end} 노드에서 시각을 읽는다. {@code date}만 있으면(종일) null 을 돌려 걸러지게 한다. */
+    /**
+     * {@code start}/{@code end} 노드에서 시각을 읽는다. {@code date}만 있으면(종일) null 을 돌려 걸러지게 한다.
+     *
+     * <p>🔴 <b>파싱 실패와 종일을 구별해 로그를 남긴다</b>(2026-08-27 리뷰 지적). 둘 다 null 을 돌려주지만
+     * 뜻이 다르다 — 종일은 의도된 제외이고, 파싱 실패는 <b>있는 일정이 조용히 사라지는 것</b>이다.
+     * 바로 아래 {@code MAX_RESULTS} 초과 케이스는 경고를 남기는데 여기만 무음이면 관측 수단이 없다.
+     */
     private static Instant dateTime(JsonNode node) {
         String value = text(node, "dateTime");
         if (value == null) {
-            return null;
+            return null;   // 종일 일정(date 만 있음) — 의도된 제외.
         }
         try {
             return java.time.OffsetDateTime.parse(value).toInstant();
         } catch (Exception e) {
+            log.warn("구글 캘린더 시각을 해석하지 못해 일정 한 건을 건너뛴다 — value={} ({})",
+                    value, e.getClass().getSimpleName());
             return null;
         }
     }

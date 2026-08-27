@@ -4,6 +4,7 @@ import com.openplan.backend.common.Weekday;
 import com.openplan.backend.externalcalendar.domain.ExternalCalendarEvent;
 import com.openplan.backend.externalcalendar.dto.ApplyEventRequest;
 import com.openplan.backend.fixedschedule.domain.FixedSchedule;
+import com.openplan.backend.fixedschedule.service.FixedScheduleValidator;
 import com.openplan.backend.global.error.ErrorCode;
 import com.openplan.backend.global.error.OpenPlanException;
 import com.openplan.backend.global.time.UserClock;
@@ -26,6 +27,9 @@ import java.util.UUID;
  *       실제 약속 위에 계획이 얹히지 않는다. 좁히면 그 반대가 된다.</li>
  *   <li><b>반복의 성격</b> — 제공자 일정은 특정 날짜의 1회, 고정 일정은 요일 반복이다.
  *       {@code startDate=endDate=그 날짜}로 반복을 하루에 가둔다.</li>
+ *   <li><b>사용자가 준 재정의 값</b> — {@code edited} 의 시각은 격자 보정을 거치지 않으므로
+ *       {@link FixedScheduleValidator#validateTimes} 로 생성·편집과 같은 규칙을 적용한다.
+ *       안 하면 5분 단위가 아닌 값이 DB CHECK 까지 내려가 422 대신 500 이 된다.</li>
  *   <li><b>날짜를 넘기는 일정</b> — 고정 일정은 하루 안에서 시작&lt;종료여야 한다(ck_fixed_range).
  *       자정을 넘는 일정은 그대로 옮길 수 없어 <b>422로 되돌리고 사용자가 EDITED 로 정하게</b> 한다.
  *       임의로 자정까지 잘라 넣으면 남은 시간이 비어 보여 그 위에 계획이 얹힌다.</li>
@@ -41,8 +45,17 @@ public class ExternalEventToFixedSchedule {
 
     private final UserClock userClock;
 
-    public ExternalEventToFixedSchedule(UserClock userClock) {
+    /**
+     * 🔴 고정 일정 값 검증의 정본이다 — 생성(FIX-05)·편집(FIX-06)이 이미 재사용하고 있다.
+     * ONB-09 경로만 이것을 안 부르고 있었고, 그래서 {@code edited} 로 들어온 5분 단위 아닌 시각이
+     * 검증 없이 DB 까지 내려가 {@code ck_fixed_step} 위반 → 처리되지 않는 500 이 됐다
+     * (2026-08-27 리뷰 지적). 계약이 이 자리에서 기대하는 것은 422 E-COM-009 다.
+     */
+    private final FixedScheduleValidator validator;
+
+    public ExternalEventToFixedSchedule(UserClock userClock, FixedScheduleValidator validator) {
         this.userClock = userClock;
+        this.validator = validator;
     }
 
     /**
@@ -94,6 +107,11 @@ public class ExternalEventToFixedSchedule {
         if (!startTime.isBefore(endTime)) {
             throw invalid("시작이 종료보다 늦거나 같습니다");
         }
+        // 🔴 원본 시각은 위에서 floor/ceil 로 5분 격자에 맞췄지만 `edited` 는 사용자가 준 값 그대로다.
+        //    여기서 걸러 주지 않으면 09:07 같은 값이 그대로 내려가 ck_fixed_step 에서 터지고,
+        //    이 경로엔 DataIntegrityViolationException 을 잡는 곳이 없어 500 이 나간다.
+        //    검증은 새로 짜지 않고 정본(FIX-05/06 이 쓰는 것)을 그대로 재사용한다.
+        validator.validateTimes(startTime, endTime);
 
         String title = (edited != null && edited.title() != null && !edited.title().isBlank())
                 ? edited.title().trim()
