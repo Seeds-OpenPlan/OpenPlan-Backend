@@ -3,11 +3,14 @@ package com.openplan.backend.user.controller;
 import com.openplan.backend.global.response.ApiResponse;
 import com.openplan.backend.global.security.CurrentUser;
 import com.openplan.backend.user.dto.UpdateProfileRequest;
+import com.openplan.backend.user.dto.DeactivationResponse;
 import com.openplan.backend.user.dto.UserProfileResponse;
+import com.openplan.backend.user.service.AccountDeactivationService;
 import com.openplan.backend.user.service.UserProfileService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -29,15 +32,27 @@ import java.util.UUID;
 public class UserController {
 
     private final UserProfileService userProfileService;
+    private final AccountDeactivationService deactivationService;
 
-    public UserController(UserProfileService userProfileService) {
+    public UserController(UserProfileService userProfileService,
+                          AccountDeactivationService deactivationService) {
         this.userProfileService = userProfileService;
+        this.deactivationService = deactivationService;
     }
 
     @GetMapping
     @Operation(summary = "내 계정+프로필 조회 (ACCT-01)")
     public ApiResponse<UserProfileResponse> getMe(@CurrentUser UUID userId) {
         return ApiResponse.ok(userProfileService.getMyProfile(userId));
+    }
+
+    @DeleteMapping
+    @Operation(summary = "계정 비활성화 (ACCT-04·06)",
+            description = "상태를 DEACTIVATED 로 두고 전 세션을 종료한다. 30일 복구창 안에는 "
+                    + "POST /auth/reactivations 로 되살릴 수 있고, 이후 배치가 삭제한다(NFR-007). "
+                    + "이미 비활성화된 계정은 복구창을 늘리지 않는다(멱등).")
+    public ApiResponse<DeactivationResponse> deactivate(@CurrentUser UUID userId) {
+        return ApiResponse.ok(deactivationService.deactivate(userId));
     }
 
     @PatchMapping("/profile")

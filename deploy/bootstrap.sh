@@ -23,13 +23,8 @@ FE_REPO="${FE_REPO:-https://github.com/Seeds-OpenPlan/OpenPlan-Frontend.git}"
 # 기본값으로 두면 재배포해도 두 주 묵은 코드가 다시 올라간다(서버가 안 바뀌는 원인).
 BE_BRANCH="${BE_BRANCH:-main}"
 FE_BRANCH="${FE_BRANCH:-main}"
-# AI 서비스는 별도 저장소다(파이썬). docker-compose.prod.yml 이 ../openplan-ai 를 빌드 컨텍스트로
-# 참조하므로 APP_DIR 의 형제 자리에 받아야 한다 — 경로가 어긋나면 compose 가 빈 곳을 굽는다.
-AI_REPO="${AI_REPO:-https://github.com/Seeds-OpenPlan/OpenPlan-AI.git}"
-AI_BRANCH="${AI_BRANCH:-main}"
 APP_DIR="${APP_DIR:-$HOME/openplan}"
 FE_DIR="$HOME/openplan-fe"
-AI_DIR="$HOME/openplan-ai"
 
 log() { printf '\n\033[1;34m== %s\033[0m\n' "$*"; }
 
@@ -105,17 +100,8 @@ log "3/6 저장소 클론/갱신"
 #    이뤄졌으므로, 브랜치를 갈아타는 재배포가 반드시 필요하다. fetch → switch 로
 #    BE_BRANCH 를 매번 실제로 따르게 한다(얕은 클론이라 FETCH_HEAD 를 시작점으로 쓴다).
 #    .env 는 추적 대상이 아니라 브랜치를 갈아타도 그대로 남는다.
-#
-# 🔴 로컬 수정이 있으면 switch 가 거부하고 배포가 그 자리에서 멈춘다(2026-08-23 실측 — 08-17 에
-#    서버에서 손으로 때운 FE 파일 하나 때문에 재배포가 중단됐다). 그렇다고 --force 로 밀면
-#    살아 있는 핫픽스가 조용히 사라진다. 그래서 지우지 않고 stash 로 옮긴 뒤 진행한다 —
-#    사라지지 않고, 멈추지도 않는다. `git -C <dir> stash list` 로 확인할 수 있다.
 sync_repo() {  # $1=디렉터리 $2=저장소 $3=브랜치
   if [ -d "$1/.git" ]; then
-    if [ -n "$(git -C "$1" status --porcelain)" ]; then
-      echo "  ⚠️  $1 에 로컬 수정이 있어 stash 로 옮긴다 (git -C $1 stash list 로 확인)"
-      git -C "$1" stash push -u -m "bootstrap $(date -u +%Y-%m-%dT%H:%M:%SZ) 자동 보관"
-    fi
     git -C "$1" fetch --depth 1 origin "$3"
     git -C "$1" switch -C "$3" FETCH_HEAD
   else
@@ -124,20 +110,13 @@ sync_repo() {  # $1=디렉터리 $2=저장소 $3=브랜치
 }
 sync_repo "$APP_DIR" "$BE_REPO" "$BE_BRANCH"
 sync_repo "$FE_DIR"  "$FE_REPO" "$FE_BRANCH"
-# 🔴 AI 만 실패를 허용한다. set -euo pipefail 아래에서 이 줄이 그냥 실패하면 FE 빌드도
-#    backend 기동도 못 간다 — AI 저장소 장애 하나로 서비스 전체 배포가 막힌다. AI 는
-#    없어도 서비스가 도는(규칙 폴백) 부품이므로, 실패를 기록하고 넘어간다.
-AI_READY=1
-sync_repo "$AI_DIR" "$AI_REPO" "$AI_BRANCH" || {
-  echo "  ⚠️  AI 저장소 동기화 실패 — AI 없이 계속한다(Spring 이 규칙 first-fit 으로 폴백)"
-  AI_READY=0
-}
 
 # ── 4. .env 확인 ─────────────────────────────────────────────────────────────
 log "4/6 .env 확인"
 
 # 시드와 사전검사가 같은 목록을 본다 — 둘이 갈라지면 "안내는 여섯인데 검사는 넷" 이 된다.
-REQUIRED_KEYS=(DB_HOST DB_PASSWORD JWT_SECRET APP_BASE_URL MAIL_USERNAME MAIL_PASSWORD)
+REQUIRED_KEYS=(DB_HOST DB_PASSWORD JWT_SECRET APP_BASE_URL API_BASE_URL
+               GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET MAIL_USERNAME MAIL_PASSWORD)
 
 if [ ! -f "$APP_DIR/.env" ]; then
   # 🔴 .env.example 을 그대로 쓰면 안 된다. 거기엔 로컬 개발 기본값이 채워져 있어
@@ -156,16 +135,26 @@ if [ ! -f "$APP_DIR/.env" ]; then
 
      nano ~/openplan/.env
 
-  아래 여섯을 채워야 뜹니다(4단계 사전검사가 같은 목록을 봅니다):
+  아래 아홉을 채워야 뜹니다(4단계 사전검사가 같은 목록을 봅니다):
      DB_HOST         RDS 엔드포인트
      DB_PASSWORD     RDS 마스터 비밀번호
      JWT_SECRET      openssl rand -base64 48
-     APP_BASE_URL / API_BASE_URL   http://<이 서버 공인 IP>
+     APP_BASE_URL    브라우저가 여는 프론트 주소   https://<도메인>
+     API_BASE_URL    이 서버 주소                  https://<도메인>
+     GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET   구글 클라우드 콘솔 발급값
      MAIL_USERNAME   Gmail 주소
      MAIL_PASSWORD   Gmail 앱 비밀번호 16자 (계정 비밀번호 아님)
 
   MAIL_* 이 없으면 가입 메일이 안 나가고, 이메일 미인증 계정은 로그인이
   403 으로 막혀 "떴지만 아무도 못 쓰는" 서버가 됩니다.
+
+  GOOGLE_* 이 없으면 소셜 로그인 버튼이 눌리기는 하는데 항상
+  /login?error=E-AUTH-010 으로 되돌아옵니다 — 서버는 멀쩡히 뜹니다.
+
+  🔴 API_BASE_URL 에 구글 콘솔 등록값과 한 글자라도 다른 값을 넣으면 콜백이
+     redirect_uri_mismatch 로 막힙니다. 구글은 HTTPS 만 받고 raw IP 는 등록조차
+     안 되므로, 도메인 없이는 http://<공인 IP> 를 넣어도 소셜 로그인이 안 섭니다.
+     카카오·네이버 키는 필수가 아닙니다(포기 순서에 있는 값이라 배포를 막지 않습니다).
 
   🔴 .env.example 의 예시값을 그대로 두면 미입력으로 봅니다. 특히 JWT_SECRET 은
      저장소에 박힌 값이라 그대로 쓰면 토큰을 누구나 위조할 수 있습니다.
@@ -185,6 +174,17 @@ fi
 #    MAIL_PASSWORD 는 구글 계정 비밀번호가 아니라 앱 비밀번호(16자)다.
 #    MAIL_FROM 은 넣지 않는다 — MailConfig.resolveFrom 이 비어 있으면 SMTP 계정으로
 #    대체하므로 선택값이다. 여기에 넣으면 안 채워도 되는 값 때문에 배포가 막힌다.
+#
+# 🔴 GOOGLE_* · API_BASE_URL 이 목록에 든 이유(2026-08-23 실측): 배포 서버의
+#    /auth/oauth/{google,naver,kakao} 가 셋 다 302 /login?error=E-AUTH-010 이었다.
+#    OAuthProperties.configured() 는 client-id/secret 이 비면 그 제공자를 막는데,
+#    .env.example 의 GOOGLE_CLIENT_ID= 가 빈 값이라 "비어 있는가" 검사를 그대로
+#    통과했다. 서버는 정상 기동하고 소셜 로그인만 죽어 있다 — MAIL_* 과 같은 종류의
+#    "떴지만 못 쓰는" 상태다.
+#    API_BASE_URL 은 redirect_uri 가 붙는 자리인데 목록에 없어 example 의
+#    http://localhost:8080 이 살아남았다. 키를 채워도 콜백이 localhost 로 나간다.
+#    🔴 카카오·네이버 키는 넣지 않는다 — 구글 최우선·둘은 포기 순서(6주차 문서
+#    "인증 범위 결정")라, 필수로 걸면 놓기로 한 것 때문에 배포가 막힌다.
 #
 # 🔴 "비어 있는가" 만으로는 부족하다. .env.example 의 값을 그대로 둔 것도 미입력으로 본다 —
 #    블록리스트를 쓰지 않고 example 과 대조하므로, 앞으로 예시 기본값이 늘어도 저절로 잡힌다.
@@ -225,25 +225,7 @@ sudo cp -r dist/. "$APP_DIR/web"/
 # ── 6. 기동 ──────────────────────────────────────────────────────────────────
 log "6/6 컨테이너 빌드·기동"
 cd "$APP_DIR"
-
-# 🔴 `up -d --build` 를 통째로 걸면 안 된다. 한 서비스의 빌드가 실패하면 up 이 통째로
-#    실패해 **아무 컨테이너도 뜨지 않는다**(backend·nginx 포함). depends_on 의
-#    required:false 는 헬스체크 대기만 우회할 뿐 빌드 실패는 막지 못한다.
-#    AI 는 없어도 서비스가 도는 부품이므로 따로 빌드하고, 실패하면 빼고 올린다.
-if [ "$AI_READY" = 1 ]; then
-  if ! $DOCKER compose -f docker-compose.prod.yml build openplan-ai; then
-    log "⚠️ AI 이미지 빌드 실패 — AI 없이 계속한다(Spring 이 규칙 first-fit 으로 폴백)"
-    AI_READY=0
-  fi
-fi
-
-if [ "$AI_READY" = 1 ]; then
-  $DOCKER compose -f docker-compose.prod.yml up -d --build
-else
-  # --no-deps 로 AI 의존을 명시적으로 끊는다. 이 경로에서도 화면과 API 는 정상이고,
-  # AI 초안만 규칙 first-fit 으로 대체된다.
-  $DOCKER compose -f docker-compose.prod.yml up -d --build --no-deps backend nginx
-fi
+$DOCKER compose -f docker-compose.prod.yml up -d --build
 
 log "상태"
 $DOCKER compose -f docker-compose.prod.yml ps

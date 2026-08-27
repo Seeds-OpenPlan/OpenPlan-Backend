@@ -1,0 +1,15 @@
+# OpenPlan — CD 타이머
+[Unit]
+Description=OpenPlan CD 를 주기적으로 깨운다
+
+[Timer]
+# 부팅 3분 뒤 첫 회차, 이후 5분 간격.
+# 변경이 없으면 git ls-remote 3번(1초 남짓)으로 끝나므로 5분은 부담이 아니다.
+OnBootSec=3min
+OnUnitActiveSec=5min
+# 재부팅 사이에 놓친 회차를 즉시 한 번 돌린다.
+Persistent=true
+Unit=openplan-cd.service
+
+[Install]
+WantedBy=timers.target

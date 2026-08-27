@@ -174,6 +174,25 @@ public class User {
         return status;
     }
 
+    /**
+     * 계정 비활성화 (ACCT-04·06 / {@code DELETE /users/me}). 상태를 DEACTIVATED 로 두고 복구창 끝을 못박는다.
+     *
+     * <p><b>지우지 않는다.</b> 복구창(30일) 안에는 {@code POST /auth/reactivations} 로 되살릴 수 있고,
+     * 그 판정을 {@code AuthService.assertLoginAllowed} 가 {@code scheduledDeletionAt} 으로 한다 —
+     * 그래서 그 값을 여기서 반드시 세워야 한다. 세우지 않으면 로그인 차단이 복구창을 영원으로 읽는다.
+     *
+     * <p>이미 비활성화된 계정에 다시 요청해도 <b>복구창을 늘리지 않는다</b>. 늘려 주면 반복 호출로
+     * 삭제를 무한히 미룰 수 있고, 그건 NFR-007(30일 뒤 배치 삭제)을 무력화한다.
+     */
+    public void deactivate(Instant now, java.time.Duration recoveryWindow) {
+        if (this.status == UserStatus.DEACTIVATED) {
+            return; // 멱등 — 복구창은 첫 요청 시점 기준으로 고정한다
+        }
+        this.status = UserStatus.DEACTIVATED;
+        this.deactivationRequestedAt = now;
+        this.scheduledDeletionAt = now.plus(recoveryWindow);
+    }
+
     public Instant getDeactivationRequestedAt() {
         return deactivationRequestedAt;
     }
