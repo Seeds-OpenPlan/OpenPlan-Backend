@@ -433,7 +433,15 @@ public class ExternalCalendarService {
             return;
         }
         try {
-            eventRepository.saveAll(created);
+            // 🔴 saveAll 이 아니라 saveAllAndFlush 다. ExternalCalendarEvent 는 UUID 를 앱이
+            //    직접 채워 @GeneratedValue 가 없으므로, Hibernate 가 INSERT 를 즉시 내보내지
+            //    않고 미룬다. saveAll 만 쓰면 실제 INSERT 는 synchronize() 가 끝난 뒤
+            //    listEvents() 의 findByConnectionIdOrderByStartAtAsc 가 일으키는 auto-flush 때
+            //    나가고, 그건 **이 catch 밖**이다 — UQ 위반이 GlobalExceptionHandler 의
+            //    캐치올로 떨어져 E-COM-005 500 이 된다. 아래 주석이 말하는 "조용히 물러난다"
+            //    와 정반대다. flush 를 여기서 강제해 위반을 이 블록 안에서 받는다.
+            //    (2026-08-27 리뷰 지적 — Testcontainers 로 재현됨)
+            eventRepository.saveAllAndFlush(created);
         } catch (DataIntegrityViolationException e) {
             // 같은 connection 에 동기화가 겹치면(탭 두 개·중복 새로고침) 양쪽이 같은 일정을
             // "신규" 로 보고 각자 insert 한다. 먼저 넣은 쪽이 이미 옳은 행을 만들었으므로
