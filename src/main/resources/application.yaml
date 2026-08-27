@@ -109,6 +109,11 @@ op:
       kakao:
         client-id: ${KAKAO_CLIENT_ID:}
         client-secret: ${KAKAO_CLIENT_SECRET:}
+  # 외부 캘린더 (ST-B1-11). 제공자 access/refresh 토큰을 AES-GCM 으로 저장할 때 쓰는 대칭키.
+  # base64(32바이트). 비어 있으면 기동은 하되 연동 시점에 실패한다 — 자동 생성하지 않는 이유는
+  # 재기동마다 키가 바뀌어 저장된 토큰이 조용히 복호 불가가 되기 때문(ExternalTokenCipher).
+  external-calendar:
+    token-key: ${EXT_TOKEN_KEY:}
 
 logging:
   pattern:

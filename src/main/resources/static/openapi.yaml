@@ -590,9 +590,8 @@ paths:
   /external-calendar-connections:
     get:
       tags: [external-calendar-connections]
-      x-implementation-status: not-implemented
       operationId: listConnections
-      summary: "[미구현] 연동 목록·상태"
+      summary: "연동 목록·상태"
       x-lane: BE-1
       x-user-stories: [FIX-13]
       responses:
@@ -608,9 +607,22 @@ paths:
                     items: { $ref: "#/components/schemas/ExternalConnection" }
     post:
       tags: [external-calendar-connections]
-      x-implementation-status: not-implemented
       operationId: createConnection
-      summary: "[미구현] 연동 추가 (제공자 authCode 교환)"
+      summary: "연동 추가 (구글은 authCode 교환, 애플은 CalDAV 자격증명)"
+      description: |
+        제공자에 따라 인증 모델이 다르다. 하나의 요청으로 합친 것은 편의가 아니라, 연동 목록·해제·
+        캘린더 선택이 전부 제공자와 무관하게 같은 자원을 쓰기 때문이다.
+
+        구글: startCalendarAuthorization 이 302로 보낸 인가가 끝나면 제공자가 redirectUri 로
+        code 와 state 를 돌려준다. 그 둘을 그대로 싣는다.
+
+        애플: 캘린더용 공개 REST API 가 없다. iCloud 캘린더에 접근하는 문서화된 경로는
+        CalDAV(caldav.icloud.com, Basic 인증)뿐이라 그쪽으로 붙는다. 그래서 애플은 authCode 가
+        아니라 Apple ID 와 앱 암호(app-specific password)를 싣는다.
+
+        애플이 startCalendarAuthorization 의 provider 목록에 없는 것은 누락이 아니다 — 인가 단계
+        자체가 없다. 앱 암호는 사용자가 appleid.apple.com 에서 직접 발급하며, 일반 로그인
+        비밀번호로는 CalDAV 가 인증되지 않는다(2단계 인증 계정 필수).
       x-lane: BE-1
       x-user-stories: [ONB-07, FIX-14]
       requestBody:
@@ -618,12 +630,14 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              required: [provider, authCode, redirectUri]
-              properties:
-                provider: { type: string, enum: [GOOGLE] }
-                authCode: { type: string }
-                redirectUri: { type: string }
+              oneOf:
+                - $ref: "#/components/schemas/OAuthCalendarConnectionRequest"
+                - $ref: "#/components/schemas/AppleCalendarConnectionRequest"
+              discriminator:
+                propertyName: provider
+                mapping:
+                  GOOGLE: "#/components/schemas/OAuthCalendarConnectionRequest"
+                  APPLE: "#/components/schemas/AppleCalendarConnectionRequest"
       responses:
         "201":
           description: 연결 완료
@@ -634,13 +648,13 @@ paths:
                 properties:
                   data: { $ref: "#/components/schemas/ExternalConnection" }
         "409": { description: E-EXT-004 이미 연결된 계정, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "422": { description: "E-EXT-002 제공자가 자격증명을 거부 (애플 — ID·앱 암호 오류). 사용자가 고칠 수 있는 입력 오류라 502 와 구분한다", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
         "502": { description: E-EXT-001 제공자 오류, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
   /external-calendar-connections/{connectionId}:
     patch:
       tags: [external-calendar-connections]
-      x-implementation-status: not-implemented
       operationId: updateConnection
-      summary: "[미구현] 연동 활성/비활성 (FIX-16)"
+      summary: "연동 활성/비활성 (FIX-16)"
       x-lane: BE-1
       x-user-stories: [FIX-16]
       parameters: [{ $ref: "#/components/parameters/ConnectionId" }]
@@ -660,9 +674,8 @@ paths:
                   data: { $ref: "#/components/schemas/ExternalConnection" }
     delete:
       tags: [external-calendar-connections]
-      x-implementation-status: not-implemented
       operationId: deleteConnection
-      summary: "[미구현] 연동 해제 (이후 해당 캘린더 일정 미반영 — FIX-17)"
+      summary: "연동 해제 (이후 해당 캘린더 일정 미반영 — FIX-17)"
       x-lane: BE-1
       x-user-stories: [FIX-17]
       parameters: [{ $ref: "#/components/parameters/ConnectionId" }]
@@ -671,9 +684,8 @@ paths:
   /external-calendar-connections/{connectionId}/calendars:
     get:
       tags: [external-calendar-connections]
-      x-implementation-status: not-implemented
       operationId: listProviderCalendars
-      summary: "[미구현] 제공자 캘린더 목록 (ONB-08)"
+      summary: "제공자 캘린더 목록 (ONB-08)"
       x-lane: BE-1
       x-user-stories: [ONB-08]
       parameters: [{ $ref: "#/components/parameters/ConnectionId" }]
@@ -696,9 +708,8 @@ paths:
   /external-calendar-connections/{connectionId}/calendar-selections:
     put:
       tags: [external-calendar-connections]
-      x-implementation-status: not-implemented
       operationId: saveCalendarSelections
-      summary: "[미구현] 가져올 캘린더 선택 전체 교체 (목록에서 제거 = 미포함 — FIX-15)"
+      summary: "가져올 캘린더 선택 전체 교체 (목록에서 제거 = 미포함 — FIX-15)"
       x-lane: BE-1
       x-user-stories: [ONB-08, FIX-15]
       parameters: [{ $ref: "#/components/parameters/ConnectionId" }]
@@ -723,9 +734,8 @@ paths:
   /external-calendar-connections/{connectionId}/events:
     get:
       tags: [external-calendar-connections]
-      x-implementation-status: not-implemented
       operationId: listExternalEvents
-      summary: "[미구현] 가져온 일정 후보 목록 (선택 캘린더 기준 동기화 수행 후 반환)"
+      summary: "가져온 일정 후보 목록 (선택 캘린더 기준 동기화 수행 후 반환)"
       x-lane: BE-1
       x-user-stories: [ONB-08, ONB-09]
       parameters:
@@ -742,12 +752,38 @@ paths:
                   data:
                     type: array
                     items: { $ref: "#/components/schemas/ExternalEvent" }
+  /external-calendar-authorization:
+    get:
+      tags: [external-calendar-connections]
+      operationId: startCalendarAuthorization
+      summary: "캘린더 연동 인가 시작 (302 → 제공자)"
+      description: |
+        캘린더 연동에 쓸 인가 코드를 받기 위해 제공자 인가 페이지로 보낸다. 로그인 인가(oauthStart)와
+        다른 요청이다 — 요구하는 권한과 파라미터가 다르다.
+
+        서버가 조립하는 이유: 구글은 access_type=offline 없이는 refresh 토큰을 주지 않는다. 그것이
+        없으면 access 토큰이 만료되는 순간(약 1시간) 연동이 영구히 죽고 재연동 외 복구 수단이 없다.
+        게다가 재연동해도 두 번째부터는 prompt=consent 없이 refresh 토큰을 주지 않아 같은 일이
+        반복된다. 이 두 파라미터를 클라이언트가 기억하게 두면 언젠가 빠진다.
+
+        서버가 싣는 것: 캘린더 읽기 scope · access_type=offline · prompt=consent · 서명된 state.
+      x-lane: BE-1
+      x-user-stories: [ONB-07, FIX-14]
+      parameters:
+        - { name: provider, in: query, required: true, schema: { type: string, enum: [GOOGLE] } }
+        - name: redirectUri
+          in: query
+          required: true
+          description: 제공자가 code·state 를 돌려줄 화면 주소. 제공자 콘솔에 등록된 값이어야 한다.
+          schema: { type: string }
+      responses:
+        "302": { description: 제공자 인가 페이지로 리다이렉트 (state 발급) }
+        "422": { description: E-COM-009 지원하지 않는 제공자·허용되지 않은 redirectUri, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
   /external-calendar-events/{eventId}/application:
     post:
       tags: [external-calendar-events]
-      x-implementation-status: not-implemented
       operationId: applyExternalEvent
-      summary: "[미구현] 반영 방식 적용 — AS_IS/EDITED → 고정 일정(source=EXTERNAL) 생성, EXCLUDE → 제외 (ONB-09)"
+      summary: "반영 방식 적용 — AS_IS/EDITED → 고정 일정(source=EXTERNAL) 생성, EXCLUDE → 제외 (ONB-09)"
       x-lane: BE-1
       x-user-stories: [ONB-09]
       parameters: [{ name: eventId, in: path, required: true, schema: { type: string, format: uuid } }]
@@ -784,6 +820,12 @@ paths:
                         oneOf:
                           - { $ref: "#/components/schemas/FixedSchedule" }
                           - { type: "null" }
+        "409":
+          description: >-
+            E-EXT-005 이미 반영·제외한 일정이다. 재시도·이중 클릭으로 같은 이벤트에 두 번
+            들어왔을 때 고정 일정이 두 벌 생기지 않도록 여기서 막는다 — 클라이언트는 이 응답을
+            "이미 처리됨"으로 읽으면 된다.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
 
   # ───────────────────────────────────────────── NOTIFICATIONS / SUPPORT / ANNOUNCEMENTS (BE-1)
   /users/me/notification-settings:
@@ -2381,6 +2423,37 @@ components:
           type: array
           items: { $ref: "#/components/schemas/AvailabilityPattern" }
         reason: { type: string, description: "예: '최근 4주 실제 시간 중앙값 기준' — AI 표현 금지 (P4)" }
+    OAuthCalendarConnectionRequest:
+      type: object
+      description: "구글 — startCalendarAuthorization 인가 결과를 교환한다."
+      required: [provider, authCode, redirectUri, state]
+      properties:
+        provider: { type: string, enum: [GOOGLE] }
+        authCode: { type: string }
+        redirectUri:
+          type: string
+          description: |
+            제공자가 인가 때 쓴 값과 대조한다 — 한 글자만 달라도 교환이 거부된다. 형식이 아니라
+            검증 대상이다.
+        state: { type: string, description: "startCalendarAuthorization 이 발급한 값 그대로" }
+    AppleCalendarConnectionRequest:
+      type: object
+      description: |
+        애플 — CalDAV Basic 자격증명. authCode·state 가 없는 것은 인가 단계가 없기 때문이다.
+      required: [provider, appleId, appPassword]
+      properties:
+        provider: { type: string, enum: [APPLE] }
+        appleId:
+          type: string
+          format: email
+          description: "Apple ID. 이메일 전체를 그대로 싣는다."
+        appPassword:
+          type: string
+          format: password
+          description: |
+            appleid.apple.com > 로그인 및 보안 > 앱 암호에서 발급한 값(2단계 인증 계정에만 있다).
+            일반 로그인 비밀번호로는 CalDAV 가 인증되지 않는다. 서버는 이 값을 암호화해 보관하며
+            응답에 싣지 않는다.
     ExternalConnection:
       type: object
       properties:

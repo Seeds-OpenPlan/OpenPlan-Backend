@@ -106,6 +106,34 @@ public class FixedSchedule {
     }
 
     /**
+     * 외부 캘린더 유래 고정 일정 생성 (ONB-09 · ST-B1-11 AC2): source=EXTERNAL, connectionId 필수
+     * (ck_fixed_origin), status=ACTIVE.
+     *
+     * <p><b>일회성 일정을 요일 반복 테이블에 담는 방법</b>: 제공자 일정은 특정 날짜의 1회 일정인데
+     * 이 테이블은 요일 + 시분 반복이다. 그래서 {@code startDate}와 {@code endDate}를 <b>그 일정의
+     * 날짜로 같게</b> 두어 반복을 하루로 가둔다 — 그렇게 하지 않으면 매주 같은 요일이 영구히 막힌다.
+     */
+    public static FixedSchedule createExternal(UUID userId, UUID connectionId, String title, Weekday weekday,
+                                               LocalTime startTime, LocalTime endTime,
+                                               LocalDate startDate, LocalDate endDate, Instant createdAt) {
+        FixedSchedule fs = new FixedSchedule();
+        fs.id = UUID.randomUUID();
+        fs.userId = userId;
+        fs.connectionId = connectionId;
+        fs.title = title;
+        fs.weekday = weekday;
+        fs.startTime = startTime;
+        fs.endTime = endTime;
+        fs.startDate = startDate;
+        fs.endDate = endDate;
+        fs.recurrenceRule = null;
+        fs.source = FixedScheduleSource.EXTERNAL;
+        fs.status = FixedScheduleStatus.ACTIVE;
+        fs.createdAt = createdAt;
+        return fs;
+    }
+
+    /**
      * 편집 (FIX-06) — 전체 교체. 검증 통과값으로 편집 가능 필드를 갈아끼운다. source·status·connectionId는
      * 편집으로 못 바꾼다(서버 관리·출처 불변). version은 flush 시 @Version이 증가시킨다(낙관락).
      */

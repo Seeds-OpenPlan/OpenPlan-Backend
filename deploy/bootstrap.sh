@@ -117,7 +117,8 @@ log "4/8 .env 확인"
 
 # 시드와 사전검사가 같은 목록을 본다 — 둘이 갈라지면 "안내는 여섯인데 검사는 넷" 이 된다.
 REQUIRED_KEYS=(DB_HOST DB_PASSWORD JWT_SECRET APP_BASE_URL API_BASE_URL
-               GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET MAIL_USERNAME MAIL_PASSWORD)
+               GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET MAIL_USERNAME MAIL_PASSWORD
+               EXT_TOKEN_KEY)
 
 if [ ! -f "$APP_DIR/.env" ]; then
   # 🔴 .env.example 을 그대로 쓰면 안 된다. 거기엔 로컬 개발 기본값이 채워져 있어
@@ -136,7 +137,7 @@ if [ ! -f "$APP_DIR/.env" ]; then
 
      nano ~/openplan/.env
 
-  아래 아홉을 채워야 뜹니다(4단계 사전검사가 같은 목록을 봅니다):
+  아래 열을 채워야 뜹니다(4단계 사전검사가 같은 목록을 봅니다):
      DB_HOST         RDS 엔드포인트
      DB_PASSWORD     RDS 마스터 비밀번호
      JWT_SECRET      openssl rand -base64 48
@@ -145,6 +146,7 @@ if [ ! -f "$APP_DIR/.env" ]; then
      GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET   구글 클라우드 콘솔 발급값
      MAIL_USERNAME   Gmail 주소
      MAIL_PASSWORD   Gmail 앱 비밀번호 16자 (계정 비밀번호 아님)
+     EXT_TOKEN_KEY   외부 캘린더 토큰 암호화 키   openssl rand -base64 32
 
   MAIL_* 이 없으면 가입 메일이 안 나가고, 이메일 미인증 계정은 로그인이
   403 으로 막혀 "떴지만 아무도 못 쓰는" 서버가 됩니다.
@@ -186,6 +188,12 @@ fi
 #    http://localhost:8080 이 살아남았다. 키를 채워도 콜백이 localhost 로 나간다.
 #    🔴 카카오·네이버 키는 넣지 않는다 — 구글 최우선·둘은 포기 순서(6주차 문서
 #    "인증 범위 결정")라, 필수로 걸면 놓기로 한 것 때문에 배포가 막힌다.
+#
+# 🔴 EXT_TOKEN_KEY 가 목록에 든 이유(ST-B1-11): ExternalTokenCipher 는 키가 비어 있어도
+#    기동을 통과시킨다(의도된 설계 — 외부 캘린더를 안 쓰는 배포까지 막지 않기 위함).
+#    그래서 이 값이 없으면 서버는 멀쩡히 뜬 뒤 POST /external-calendar-connections 마다
+#    조용히 E-COM-005 500 을 낸다. MAIL_* · GOOGLE_* 과 같은 "떴지만 못 쓰는" 상태다.
+#    openssl rand -base64 32 로 만든다.
 #
 # 🔴 "비어 있는가" 만으로는 부족하다. .env.example 의 값을 그대로 둔 것도 미입력으로 본다 —
 #    블록리스트를 쓰지 않고 example 과 대조하므로, 앞으로 예시 기본값이 늘어도 저절로 잡힌다.
