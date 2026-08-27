@@ -357,6 +357,19 @@ public class ExternalCalendarService {
         // 소유자 확인은 연결을 거쳐서 한다 — 후보 일정 자체에는 user_id 가 없다.
         requireConnection(userId, event.getConnectionId());
 
+        // 🔴 이미 처리한 일정을 다시 반영하지 않는다. 이 검사가 없으면 네트워크 재시도나
+        //    이중 클릭으로 같은 원본 일정에서 **고정 일정이 두 벌 생긴다** — 둘 다 201 을
+        //    받고, fixed_schedules 에는 같은 시간대를 가리키는 행이 남아 이후 계획의
+        //    배치 불가 시간을 두 번 점유한다. FixedSchedule 쪽에는 원본 이벤트를 향한
+        //    UQ 가 없어 DB 도 막아 주지 못한다.
+        //    이 PR 은 같은 계열을 이미 두 곳에서 막았다(연동 생성 UQ+409, 동기화 경합의
+        //    DataIntegrityViolationException 흡수) — 여기만 빠져 있었다.
+        //    409 로 돌려보내는 이유: 재시도한 클라이언트에게 "이미 done 이다" 는 사실을
+        //    알려 주는 것이 조용히 복제하는 것보다 낫다. create() 의 중복 연동 처리와 같다.
+        if (!event.isCandidate()) {
+            throw new OpenPlanException(ErrorCode.E_EXT_004);
+        }
+
         FixedScheduleResponse fixedScheduleResponse = null;
         if (mode != ApplyMode.EXCLUDE) {
             FixedSchedule fixedSchedule = converter.convert(userId, event,

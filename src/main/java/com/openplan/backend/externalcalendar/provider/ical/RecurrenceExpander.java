@@ -93,8 +93,15 @@ public final class RecurrenceExpander {
         List<ZonedDateTime> candidates = switch (freq) {
             case "DAILY" -> byPeriod(origin, interval, ChronoStep.DAY, count, until, to);
             case "WEEKLY" -> weekly(origin, interval, parts.get("BYDAY"), parts.get("WKST"), count, until, to);
-            case "MONTHLY" -> byPeriod(origin, interval, ChronoStep.MONTH, count, until, to);
-            case "YEARLY" -> byPeriod(origin, interval, ChronoStep.YEAR, count, until, to);
+            // 🔴 월·년 주기의 BYDAY 는 아직 해석하지 못한다 — 그래서 **틀린 날짜를 만드는 대신
+            //    해석 실패로 떨어뜨린다.** byPeriod 는 원점의 "일(day-of-month)"만 반복하므로
+            //    FREQ=MONTHLY;BYDAY=1MO("매월 첫째 월요일")를 주면 매달 그 "일"을 반복해
+            //    전혀 다른 요일에 일정을 만든다(2026-01-05 시작 → 2/5 목 · 3/5 목 · 4/5 일).
+            //    FREQ 자체는 이 스위치가 알아보므로 폴백을 안 타고 **경고도 없이 조용히 틀린다.**
+            //    없던 일정을 만드는 것보다 한 건만 두고 경고를 남기는 쪽이 낫다 —
+            //    자정을 넘는 일정을 임의로 자르지 않고 422 로 돌려보내는 것과 같은 판단이다.
+            case "MONTHLY" -> hasByDay(parts) ? null : byPeriod(origin, interval, ChronoStep.MONTH, count, until, to);
+            case "YEARLY" -> hasByDay(parts) ? null : byPeriod(origin, interval, ChronoStep.YEAR, count, until, to);
             default -> null;
         };
 
@@ -120,6 +127,12 @@ public final class RecurrenceExpander {
             }
         }
         return out;
+    }
+
+    /** {@code BYDAY} 가 실제로 값을 갖고 있는가 — 빈 문자열은 없는 것으로 본다. */
+    private static boolean hasByDay(Map<String, String> parts) {
+        String byDay = parts.get("BYDAY");
+        return byDay != null && !byDay.isBlank();
     }
 
     private enum ChronoStep { DAY, MONTH, YEAR }

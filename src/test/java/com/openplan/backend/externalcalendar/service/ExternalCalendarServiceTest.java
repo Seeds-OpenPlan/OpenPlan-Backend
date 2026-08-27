@@ -2,6 +2,8 @@ package com.openplan.backend.externalcalendar.service;
 
 import com.openplan.backend.auth.oauth.OAuthClient;
 import com.openplan.backend.auth.oauth.OAuthProperties;
+import com.openplan.backend.externalcalendar.domain.ApplyMode;
+import com.openplan.backend.externalcalendar.dto.ApplyEventRequest;
 import com.openplan.backend.externalcalendar.domain.ExternalCalendarConnection;
 import com.openplan.backend.externalcalendar.domain.ExternalCalendarEvent;
 import com.openplan.backend.externalcalendar.domain.ExternalCalendarProvider;
@@ -152,6 +154,28 @@ class ExternalCalendarServiceTest {
         doThrow(new DataIntegrityViolationException("uq_external_event")).when(eventRepository).saveAll(any());
 
         assertThatCode(() -> service.listEvents(USER, connection.getId(), null)).doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("이미 반영한 일정을 다시 반영하면 409 — 재시도·이중 클릭에 고정 일정이 두 벌 생기면 안 된다")
+    void apply_이미_처리한_일정은_409() {
+        ExternalCalendarConnection connection = ExternalCalendarConnection.connect(
+                USER, ExternalCalendarProvider.GOOGLE, "me@example.com", "enc", "renc", NOW, NOW);
+        ExternalCalendarEvent event = ExternalCalendarEvent.candidate(connection.getId(),
+                "evt-1", "팀 회의", Instant.parse("2026-08-20T01:00:00Z"),
+                Instant.parse("2026-08-20T02:00:00Z"), "내 캘린더", NOW);
+        event.apply(ApplyMode.AS_IS);   // 첫 번째 호출이 이미 끝난 상태
+
+        when(eventRepository.findById(event.getId())).thenReturn(Optional.of(event));
+        when(connectionRepository.findByIdAndUserId(connection.getId(), USER))
+                .thenReturn(Optional.of(connection));
+
+        assertThatThrownBy(() -> service.apply(USER, event.getId(), new ApplyEventRequest("AS_IS", null)))
+                .isInstanceOf(OpenPlanException.class)
+                .extracting("errorCode").isEqualTo(ErrorCode.E_EXT_004);
+
+        // 두 번째 호출은 고정 일정을 만들지 않는다 — 이게 이 검사의 목적이다.
+        verifyNoInteractions(converter);
     }
 
     /** 동기화 경로가 도는 데 필요한 최소 스텁. 반환값은 활성 연결. */

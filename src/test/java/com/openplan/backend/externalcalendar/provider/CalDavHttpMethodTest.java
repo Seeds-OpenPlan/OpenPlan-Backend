@@ -12,6 +12,7 @@ import org.springframework.web.client.RestClient;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -36,12 +37,14 @@ class CalDavHttpMethodTest {
     private HttpServer server;
     private String baseUrl;
     private final AtomicReference<String> observedMethod = new AtomicReference<>();
+    private final AtomicReference<String> observedPath = new AtomicReference<>();
 
     @BeforeEach
     void startServer() throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", exchange -> {
             observedMethod.set(exchange.getRequestMethod());
+            observedPath.set(exchange.getRequestURI().getRawPath());
             byte[] body = "<D:multistatus xmlns:D=\"DAV:\"/>".getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/xml");
             exchange.sendResponseHeaders(207, body.length);
@@ -90,6 +93,36 @@ class CalDavHttpMethodTest {
                 .body(String.class);
 
         assertThat(observedMethod.get()).isEqualTo("REPORT");
+    }
+
+    /**
+     * 이미 인코딩된 href 를 되읽을 때 <b>이중 인코딩되지 않는다</b>는 것을 실행으로 고정한다.
+     *
+     * <p>CalDAV 의 두 번째 왕복은 서버가 준 {@code href} 원문을 그대로 다시 부르는 구조다.
+     * iCloud 는 그 값을 <b>이미 퍼센트 인코딩된 형태</b>로 줄 수 있는데, {@code uri(String)}
+     * 오버로드에 넘기면 내부 {@code UriBuilderFactory} 가 유효한 {@code %XX} 까지 다시
+     * 인코딩해 {@code %20} 이 {@code %2520} 이 된다. 그러면 실제 리소스와 어긋나 404 가
+     * 나고 사용자에게는 "애플 연동 실패"(502)만 보인다.
+     * {@code GoogleCalendarProvider} 가 캘린더 ID 의 {@code '#'} 에서 겪고 이미 우회한 것과
+     * 같은 결함이라, 여기서도 {@code uri(URI)} 로 넘긴다.
+     */
+    @Test
+    @DisplayName("이미 인코딩된 경로는 다시 인코딩되지 않는다 — %20 이 %2520 이 되면 애플 연동이 죽는다")
+    void 이미_인코딩된_경로는_이중_인코딩되지_않는다() {
+        RestClient client = RestClient.builder()
+                .requestFactory(new JdkClientHttpRequestFactory())
+                .build();
+        String encoded = baseUrl + "/cal/already%20encoded/";
+
+        client.method(PROPFIND)
+                .uri(URI.create(encoded))
+                .header("Depth", "0")
+                .body("<d:propfind xmlns:d=\"DAV:\"><d:prop/></d:propfind>")
+                .retrieve()
+                .body(String.class);
+
+        assertThat(observedPath.get()).isEqualTo("/cal/already%20encoded/");
+        assertThat(observedPath.get()).doesNotContain("%2520");
     }
 
     /**

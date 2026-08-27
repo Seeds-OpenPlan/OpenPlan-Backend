@@ -279,6 +279,49 @@ class ICalParsingTest {
         }
 
         @Test
+        @DisplayName("월 단위 BYDAY 는 틀린 날짜를 만드는 대신 한 건으로 떨어진다")
+        void 월단위_BYDAY_는_조용히_틀리지_않는다() {
+            // FREQ=MONTHLY;BYDAY=1MO 는 "매월 첫째 월요일" 이다. byPeriod 는 원점의 "일" 만
+            // 반복하므로 그대로 두면 2/5(목)·3/5(목)·4/5(일) 처럼 전혀 다른 요일에 일정이 생긴다.
+            // FREQ 를 스위치가 알아보기 때문에 폴백도 안 타고 경고 없이 틀린다 —
+            // 없던 일정을 만드느니 한 건만 두고 경고를 남긴다.
+            String ics = wrap("""
+                    UID:monthly-byday@test
+                    DTSTART:20260105T010000Z
+                    DTEND:20260105T020000Z
+                    RRULE:FREQ=MONTHLY;BYDAY=1MO
+                    SUMMARY:매월 첫째 월요일 회의
+                    """);
+            ICalParser.Component event = ICalParser.parseEvents(ics).getFirst();
+
+            List<RecurrenceExpander.Occurrence> occurrences = RecurrenceExpander.expand(
+                    event, Instant.parse("2026-01-05T01:00:00Z"), Instant.parse("2026-01-05T02:00:00Z"),
+                    SEOUL, Instant.parse("2026-01-01T00:00:00Z"), Instant.parse("2026-05-01T00:00:00Z"));
+
+            // 원본 한 건만. 2/5·3/5·4/5 같은 엉뚱한 날짜가 섞이면 안 된다.
+            assertThat(occurrences).hasSize(1);
+            assertThat(occurrences.getFirst().startAt()).isEqualTo(Instant.parse("2026-01-05T01:00:00Z"));
+        }
+
+        @Test
+        @DisplayName("BYDAY 없는 월 단위 반복은 그대로 매달 같은 날에 선다")
+        void 월단위_BYDAY_없으면_정상_전개() {
+            String ics = wrap("""
+                    UID:monthly-plain@test
+                    DTSTART:20260105T010000Z
+                    DTEND:20260105T020000Z
+                    RRULE:FREQ=MONTHLY
+                    """);
+            ICalParser.Component event = ICalParser.parseEvents(ics).getFirst();
+
+            List<RecurrenceExpander.Occurrence> occurrences = RecurrenceExpander.expand(
+                    event, Instant.parse("2026-01-05T01:00:00Z"), Instant.parse("2026-01-05T02:00:00Z"),
+                    SEOUL, Instant.parse("2026-01-01T00:00:00Z"), Instant.parse("2026-04-01T00:00:00Z"));
+
+            assertThat(occurrences).hasSize(3);   // 1/5 · 2/5 · 3/5
+        }
+
+        @Test
         @DisplayName("반복이 없으면 원본 한 건 — 창과 겹칠 때만")
         void 단발은_그대로() {
             ICalParser.Component event = ICalParser.parseEvents(APPLE_SINGLE_EVENT).getFirst();
