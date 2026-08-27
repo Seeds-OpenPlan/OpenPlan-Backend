@@ -1,6 +1,7 @@
 package com.openplan.backend.auth.controller;
 
 import com.openplan.backend.auth.dto.LoginRequest;
+import com.openplan.backend.auth.dto.ReactivationRequest;
 import com.openplan.backend.auth.dto.SessionInfo;
 import com.openplan.backend.auth.dto.TokenRefreshResponse;
 import com.openplan.backend.auth.service.AuthService;
@@ -26,7 +27,7 @@ import java.util.UUID;
 /**
  * 인증 컨트롤러 (ST-B1-02 · AUTH-01/07/08 · ACCT-03) — 로그인·세션·로그아웃·토큰 회전 실구현.
  *
- * <p>D-16의 4주차 교체 지점이다. 이 네 EP는 {@link AuthStubController}에서 여기로 승격됐고,
+ * <p>D-16의 4주차 교체 지점이다. 이 EP들은 4주차 스텁 컨트롤러에서 여기로 승격됐고(그 클래스는 재활성화 구현과 함께 삭제됐다),
  * 그쪽에는 아직 실구현 전인 것(OAuth·이메일 인증·비밀번호 재설정·재활성화)만 501로 남아 있다.
  * {@code exceptions.md §5-5}가 "E-AUTH-011이 4주차 이후 응답에서 0건"을 검증 항목으로 두고 있어,
  * 나머지도 각 스토리에서 승격되면 스텁 컨트롤러 자체가 사라진다.
@@ -52,6 +53,20 @@ public class AuthController {
                     + "비활성 409 E-AUTH-008 · 삭제됨 410 E-AUTH-009.")
     public ResponseEntity<ApiResponse<SessionInfo>> login(@Valid @RequestBody LoginRequest request) {
         AuthService.LoginResult result = authService.login(request);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.SET_COOKIE, result.accessCookie().toString())
+                .header(HttpHeaders.SET_COOKIE, result.refreshCookie().toString())
+                .body(ApiResponse.ok(result.session()));
+    }
+
+    @PostMapping("/reactivations")
+    @Operation(summary = "계정 재활성화 (ACCT-05)",
+            description = "복구창(30일) 안의 비활성 계정을 되살리고 그 자리에서 로그인시킨다 — "
+                    + "성공 시 로그인과 동일하게 op_at·op_rt 쿠키를 발급한다. "
+                    + "자격 불일치 401 E-AUTH-001 · 잠금 401 E-AUTH-002 · 미인증 403 E-AUTH-005 · "
+                    + "복구창 경과 410 E-AUTH-009. 이미 활성인 계정은 그대로 로그인된다(멱등).")
+    public ResponseEntity<ApiResponse<SessionInfo>> reactivate(@Valid @RequestBody ReactivationRequest request) {
+        AuthService.LoginResult result = authService.reactivate(request);
         return ResponseEntity.ok()
                 .header(HttpHeaders.SET_COOKIE, result.accessCookie().toString())
                 .header(HttpHeaders.SET_COOKIE, result.refreshCookie().toString())

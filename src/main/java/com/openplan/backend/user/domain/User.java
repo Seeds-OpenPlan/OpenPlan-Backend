@@ -193,6 +193,21 @@ public class User {
         this.scheduledDeletionAt = now.plus(recoveryWindow);
     }
 
+    /**
+     * 계정 재활성화 (ACCT-05 / {@code POST /auth/reactivations}). 복구창 안에서만 부른다.
+     *
+     * <p><b>복구창 판정은 호출자 몫이라 시각을 받지 않는다.</b> 여기서 다시 판정하면 "언제가 지금인가"를
+     * 엔티티가 알아야 하고, 그러면 {@link #deactivate}와 시계가 둘로 갈라진다. 되돌리는 일만 한다.
+     *
+     * <p><b>복구창 흔적을 지운다.</b> {@code scheduledDeletionAt}을 남겨 두면 삭제 배치(NFR-007)가
+     * 되살아난 계정을 예정대로 지운다 — 사용자는 복구에 성공했는데 30일 뒤에 사라진다.
+     */
+    public void reactivate() {
+        this.status = UserStatus.ACTIVE;
+        this.deactivationRequestedAt = null;
+        this.scheduledDeletionAt = null;
+    }
+
     public Instant getDeactivationRequestedAt() {
         return deactivationRequestedAt;
     }

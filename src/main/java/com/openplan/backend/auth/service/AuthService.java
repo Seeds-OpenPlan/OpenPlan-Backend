@@ -3,6 +3,7 @@ package com.openplan.backend.auth.service;
 import com.openplan.backend.auth.domain.AuthSession;
 import com.openplan.backend.auth.domain.AuthSessionStatus;
 import com.openplan.backend.auth.dto.LoginRequest;
+import com.openplan.backend.auth.dto.ReactivationRequest;
 import com.openplan.backend.auth.dto.SessionInfo;
 import com.openplan.backend.auth.dto.TokenRefreshResponse;
 import com.openplan.backend.auth.repository.AuthSessionRepository;
@@ -16,6 +17,8 @@ import com.openplan.backend.onboarding.repository.OnboardingProgressRepository;
 import com.openplan.backend.user.domain.User;
 import com.openplan.backend.user.domain.UserProfile;
 import com.openplan.backend.user.domain.UserStatus;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import com.openplan.backend.user.repository.UserProfileRepository;
 import com.openplan.backend.user.repository.UserRepository;
 import com.openplan.backend.user.service.UserRegistrationService;
@@ -44,6 +47,8 @@ import java.util.UUID;
  */
 @Service
 public class AuthService {
+
+    private static final Logger log = LoggerFactory.getLogger(AuthService.class);
 
     private final UserRepository userRepository;
     private final UserProfileRepository userProfileRepository;
@@ -103,6 +108,53 @@ public class AuthService {
     }
 
     /**
+     * POST /auth/reactivations (ACCT-05) — 복구창 안의 비활성 계정을 되살리고 그 자리에서 로그인시킨다.
+     *
+     * <p><b>자격 확인을 먼저 한다.</b> 상태를 먼저 보면 "이 이메일은 비활성 계정" 이라는 사실이
+     * 비밀번호를 모르는 사람에게도 드러난다 — 로그인과 같은 열거 방지 규칙({@code authenticate})을 공유한다.
+     *
+     * <p><b>복구창이 지났으면 410 E-AUTH-009.</b> 삭제 배치(NFR-007)가 아직 안 돌았더라도 사용자에겐
+     * 삭제된 계정이다 — {@code assertLoginAllowed} 와 같은 판정이라 기준이 갈라지면 안 된다.
+     *
+     * <p><b>이미 ACTIVE 면 그대로 로그인시킨다.</b> 되살리라는 요청의 목적은 "쓸 수 있는 상태" 이고
+     * 이미 그 상태다. 오류로 답하면 재시도·창 두 개 같은 정상 상황이 실패로 보인다({@code deactivate}
+     * 의 멱등성과 같은 방향).
+     *
+     * <p><b>되살린 것은 예외가 나도 남긴다({@code noRollbackFor}).</b> 이메일 미인증이면 403 으로
+     * 돌려보내지만 <b>계정은 이미 복구창에서 건져낸 상태</b>다. 기본 롤백 규칙대로면 그 복구가
+     * 함께 지워져 계정이 {@code DEACTIVATED} · {@code scheduledDeletionAt} 그대로 남고, 사용자가
+     * 메일을 인증하는 동안 삭제 배치(NFR-007)가 먼저 돌면 <b>되살리려던 계정이 그대로 삭제된다.</b>
+     *
+     * <p>억제 범위를 이 메서드로 한정해도 안전하다 — {@code authenticate} 는 읽기 전용이고,
+     * E-AUTH-001 · 002 · 009 는 전부 {@code user.reactivate()} <b>앞에서</b> 던진다. 즉 이 메서드에서
+     * 쓰기는 그 한 줄뿐이고, 그 뒤에 나오는 예외는 "되살리기는 끝났으나 로그인은 못 시킨다" 뿐이다.
+     */
+    @Transactional(noRollbackFor = OpenPlanException.class)
+    public LoginResult reactivate(ReactivationRequest request) {
+        User user = authenticate(request.email(), request.password());
+        Instant now = clock.now();
+
+        if (user.getStatus() == UserStatus.LOCKED) {
+            throw new OpenPlanException(ErrorCode.E_AUTH_002);
+        }
+
+        if (user.getStatus() == UserStatus.DEACTIVATED) {
+            Instant deletionAt = user.getScheduledDeletionAt();
+            if (deletionAt != null && !now.isBefore(deletionAt)) {
+                throw new OpenPlanException(ErrorCode.E_AUTH_009);
+            }
+            user.reactivate();
+            log.info("계정 재활성화: userId={}", user.getUserId());
+        }
+
+        if (!user.isEmailVerified()) {
+            throw new OpenPlanException(ErrorCode.E_AUTH_005, Map.of("resendAvailable", true));
+        }
+
+        return establishSession(user);
+    }
+
+    /**
      * 인증을 마친 사용자에게 세션을 개설한다 — <b>로컬 로그인과 소셜 로그인이 공유</b>한다(ST-B1-03).
      *
      * <p>"어떻게 본인임을 확인했는가"는 경로마다 다르지만(비밀번호 대조 vs 제공자 콜백),
@@ -131,14 +183,18 @@ public class AuthService {
      * 가입돼 있다"는 응답은 친절해 보이지만 계정 존재를 확인해 주는 것과 같다.
      */
     private User authenticate(LoginRequest request) {
-        String email = UserRegistrationService.normalizeEmail(request.email());
+        return authenticate(request.email(), request.password());
+    }
+
+    private User authenticate(String rawEmail, String rawPassword) {
+        String email = UserRegistrationService.normalizeEmail(rawEmail);
         Optional<User> found = userRepository.findByEmail(email);
         if (found.isEmpty()) {
             throw new OpenPlanException(ErrorCode.E_AUTH_001);
         }
         User user = found.get();
         String hash = user.getPasswordHash();
-        if (hash == null || !passwordEncoder.matches(request.password(), hash)) {
+        if (hash == null || !passwordEncoder.matches(rawPassword, hash)) {
             throw new OpenPlanException(ErrorCode.E_AUTH_001);
         }
         return user;

@@ -18,6 +18,21 @@ public interface ReplanOptionRepository extends JpaRepository<ReplanOption, UUID
     /** 재생성 = 전면 교체: 기존 대안 제거 후 새로 삽입. @return 삭제 행 수. */
     long deleteByWeeklyPlanId(UUID weeklyPlanId);
 
+    /**
+     * 소유자 스코프로 <b>실제 선택된</b> 대안을 기간 조회 — SS-14 기본값 제안의 유일한 근거다.
+     * 선택되지 않은 대안은 "보여준 것"일 뿐이라 선호로 셀 수 없다.
+     */
+    @org.springframework.data.jpa.repository.Query("""
+            SELECT o FROM ReplanOption o
+             WHERE o.selected = true
+               AND o.selectedAt >= :from AND o.selectedAt < :to
+               AND o.weeklyPlanId IN (SELECT wp.id FROM WeeklyPlan wp WHERE wp.userId = :userId)
+            """)
+    List<ReplanOption> findSelectedByUserIdAndSelectedAtRange(
+            @org.springframework.data.repository.query.Param("userId") UUID userId,
+            @org.springframework.data.repository.query.Param("from") java.time.Instant from,
+            @org.springframework.data.repository.query.Param("to") java.time.Instant to);
+
     /** 소유자 스코프 단건(optionId) — 적용(PLAN-29) 공용. weekly_plans.user_id로 소유 판정. */
     @org.springframework.data.jpa.repository.Query("""
             SELECT o FROM ReplanOption o

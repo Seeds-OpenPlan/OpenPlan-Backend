@@ -65,7 +65,10 @@ op:
       secret: ${JWT_SECRET:}
       access-ttl: PT30M      # 짧게 — 무상태라 폐기가 안 되는 것을 수명으로 상쇄
       refresh-ttl: P14D
-      cookie-secure: false   # 🔴 W5 배포(HTTPS) 시 true — 배포 체크리스트 항목
+      # 🔴 HTTPS 로 넘어가면 반드시 true 여야 한다 — false 로 두면 인증 쿠키가 평문으로도
+      #    전송된다. 기본값을 false 로 둔 것은 로컬 개발이 http 이기 때문이고, 배포는
+      #    .env 의 COOKIE_SECURE 로 덮는다(deploy/enable-https.sh 가 세운다).
+      cookie-secure: ${COOKIE_SECURE:false}
       issuer: openplan
     # 메일 링크 토큰 (ST-B1-04/05). dev 스텁 여부와 무관하게 바인딩된다.
     token:
@@ -109,6 +112,11 @@ op:
       kakao:
         client-id: ${KAKAO_CLIENT_ID:}
         client-secret: ${KAKAO_CLIENT_SECRET:}
+  # 외부 캘린더 (ST-B1-11). 제공자 access/refresh 토큰을 AES-GCM 으로 저장할 때 쓰는 대칭키.
+  # base64(32바이트). 비어 있으면 기동은 하되 연동 시점에 실패한다 — 자동 생성하지 않는 이유는
+  # 재기동마다 키가 바뀌어 저장된 토큰이 조용히 복호 불가가 되기 때문(ExternalTokenCipher).
+  external-calendar:
+    token-key: ${EXT_TOKEN_KEY:}
 
 logging:
   pattern:

@@ -3,7 +3,10 @@
 # 개발용 docker-compose.yml 과 별개 파일이다. 여기엔 postgres 서비스가 없다 — 운영 DB는 RDS다.
 #
 #   브라우저 :80 → nginx ┬→ /        → ./web (FE 빌드 산출물)
-#                        └→ /api/**  → backend:8080
+#                        └→ /api/**  → backend:8080 ─(내부망)→ ai:8000
+#
+# 🔴 ai 는 nginx 에 라우트가 없다 — 브라우저가 AI 서비스를 직접 부르는 경로는 만들지 않는다
+#    (Spring↔AI 계약 §2). 내부 네트워크 신뢰가 MVP1 의 인증 모델이다(계약 §7 #4).
 #
 # 사용:
 #   docker compose -f docker-compose.prod.yml up -d --build
@@ -25,11 +28,41 @@ services:
       # dev 시드 사용자와 인증 우회 필터(dev-stub)를 켠다.
       SPRING_PROFILES_ACTIVE: prod
       TZ: Asia/Seoul
+      # 🔴 이 값이 비어 있으면 AI 접합(AiConfig)이 안 올라가고 규칙 first-fit 이 그대로 돈다.
+      #    "AI 를 켰는데 왜 규칙이 도나"의 첫 확인 지점이다. 서비스명은 compose 내부 DNS 로 풀린다.
+      AI_BASE_URL: http://openplan-ai:8000
+    depends_on:
+      # 헬스체크 통과까지 기다린다 — ai 가 뜨는 20초 남짓 동안 들어온 요청이 폴백으로
+      # 새는 것을 막는다. ai 가 끝내 못 뜨면 backend 도 안 뜬다는 뜻이므로 required: false 로 둔다.
+      openplan-ai:
+        condition: service_healthy
+        required: false
     expose:
       - "8080"
     # ports 를 두지 않는다. 8080을 호스트에 열면 nginx를 우회해 직접 호출할 수 있고,
     # 그 경로는 X-Forwarded-Proto 가 없어 쿠키 Secure 판정이 어긋난다.
     # 보안그룹이 80만 열려 있어도 이중으로 막아 둔다.
+
+  openplan-ai:
+    build:
+      # 🔴 AI 는 별도 저장소다. bootstrap.sh 가 ~/openplan-ai 에 클론해 두고 여기서 참조한다 —
+      #    BE 이미지에 파이썬을 함께 굽지 않는다(런타임·의존성이 완전히 다르다).
+      context: ../openplan-ai
+      dockerfile: Dockerfile
+    image: openplan-ai:latest
+    container_name: openplan-ai
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Seoul
+      # 🔴 모델 키. .env 에 GEMINI_API_KEY 가 없으면 이 서비스는 뜨지만 /plans/draft 가 503 을
+      #    돌려주고, Spring 은 계약 §4 대로 규칙 폴백한다 — 기동 실패가 아니라 조용한 폴백이다.
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      COMPLEX_MODEL: ${COMPLEX_MODEL:-gemini/gemini-3.6-flash}
+      LIGHT_MODEL: ${LIGHT_MODEL:-gemini/gemini-3.5-flash-lite}
+    expose:
+      - "8000"
+    # ports 를 두지 않는다. 8000 을 호스트에 열면 인증 없이 모델을 호출할 수 있는 구멍이 된다 —
+    # 이 서비스에는 인증이 없고(계약 §7 #4 내부망 신뢰), 남의 키로 한도를 태울 수 있다.
 
   nginx:
     image: nginx:1.27-alpine
@@ -39,9 +72,20 @@ services:
       - backend
     ports:
       - "80:80"
+      # 🔴 443 을 열어도 보안그룹에서 막혀 있으면 밖에서 못 닿는다 — EC2 인바운드에
+      #    HTTPS(443) 0.0.0.0/0 을 함께 추가해야 한다.
+      - "443:443"
     volumes:
       # nginx.conf 는 server 블록만 담고 있어 conf.d 에 넣어야 한다(파일 주석 참조).
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      #
+      # 🔴 인증서 발급 전에는 80 전용(nginx.conf), 발급 뒤에는 nginx-https.conf 다.
+      #    HTTPS 설정을 인증서 없이 올리면 nginx 가 "cannot load certificate" 로 기동에
+      #    실패하고, 그러면 FE 정적 서빙까지 함께 멈춘다. 그래서 파일을 바꿔 끼운다 —
+      #    deploy/enable-https.sh 가 발급에 성공한 뒤 .env 의 NGINX_CONF 를 갱신한다.
+      - ${NGINX_CONF:-./nginx.conf}:/etc/nginx/conf.d/default.conf:ro
+      # Let's Encrypt 인증서와 갱신 통로. 발급 전에는 빈 디렉터리라 마운트만 되고 안 쓰인다.
+      - ./certbot/conf:/etc/letsencrypt:ro
+      - ./certbot/www:/var/www/certbot:ro
       # FE 빌드 산출물(vite build → dist)을 web/ 으로 복사해 둔다.
       - ./web:/usr/share/nginx/html:ro
     environment:

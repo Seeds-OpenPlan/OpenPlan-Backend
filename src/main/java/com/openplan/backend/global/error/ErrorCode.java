@@ -57,6 +57,15 @@ public enum ErrorCode {
 
     // 2.5 외부 연동 (E-EXT) — BE-1
     E_EXT_001("E-EXT-001", HttpStatus.BAD_GATEWAY),
+    /**
+     * 제공자가 자격증명을 거부 — 네이버 CalDAV Basic 인증 실패(ID·애플리케이션 비밀번호 오류).
+     *
+     * <p><b>E-EXT-001(502)과 나누는 이유가 형식이 아니다.</b> 502 는 "제공자가 죽었으니 재시도하라"는
+     * 뜻이고 사용자가 할 수 있는 일이 없다. 앱 비밀번호 오타는 <b>사용자가 고칠 수 있는 입력 오류</b>라
+     * 화면이 재시도 버튼이 아니라 입력 폼을 다시 보여줘야 한다. 둘을 한 코드로 묶으면 오타를 낸
+     * 사용자가 "네이버 장애"라는 안내를 보고 기다리게 된다.
+     */
+    E_EXT_002("E-EXT-002", HttpStatus.UNPROCESSABLE_ENTITY),
     E_EXT_004("E-EXT-004", HttpStatus.CONFLICT);
 
     private final String code;

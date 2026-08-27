@@ -41,6 +41,19 @@ public class OAuthClient {
      */
     public String exchangeCodeForAccessToken(OAuthProviderType provider, OAuthProperties.Client client,
                                              String code, String redirectUri) {
+        return exchangeCodeForTokens(provider, client, code, redirectUri).accessToken();
+    }
+
+    /**
+     * 인가 코드 → 토큰 전량(access·refresh·만료).
+     *
+     * <p>로그인(ST-B1-03)은 access 하나면 끝나지만 외부 캘린더(ST-B1-11)는 연동이 유지되는 동안
+     * 제공자를 계속 호출해야 해서 refresh 토큰이 필요하다. 교환 절차 자체는 같으므로
+     * {@link #exchangeCodeForAccessToken}이 이 메서드에 얹혀 있다 — 요청 조립이 갈라지면
+     * 한쪽만 고쳐지는 경로가 생긴다.
+     */
+    public OAuthTokenSet exchangeCodeForTokens(OAuthProviderType provider, OAuthProperties.Client client,
+                                               String code, String redirectUri) {
         MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
         form.add("grant_type", "authorization_code");
         form.add("client_id", client.clientId());
@@ -56,7 +69,52 @@ public class OAuthClient {
                     provider, OAuthProviderType.text(body, "error"));
             throw new OAuthException(ErrorCode.E_AUTH_010.code(), "토큰 교환 실패: " + provider);
         }
-        return accessToken;
+        return new OAuthTokenSet(
+                accessToken,
+                OAuthProviderType.text(body, "refresh_token"),
+                expiresIn(body));
+    }
+
+    /** {@code expires_in}은 초 단위 정수지만 문자열로 주는 제공자가 있어 텍스트로 읽고 변환한다. */
+    private static Long expiresIn(JsonNode body) {
+        String raw = OAuthProviderType.text(body, "expires_in");
+        if (raw == null) {
+            return null;
+        }
+        try {
+            return Long.parseLong(raw.trim());
+        } catch (NumberFormatException e) {
+            return null;   // 만료를 모르면 갱신 판단을 호출 실패에 맡긴다 — 교환 자체를 깨뜨리지 않는다.
+        }
+    }
+
+    /**
+     * refresh 토큰 → 새 access 토큰 (ST-B1-11).
+     *
+     * <p>연동은 <b>연결된 채로 오래 산다</b> — 첫 교환에서 받은 access 토큰은 대개 몇 시간이면 만료되므로
+     * 조회 때마다 유효성을 확인하고 필요하면 여기서 갱신한다. 제공자는 새 refresh 토큰을 주기도 하고
+     * 주지 않기도 하는데, 주지 않았다고 기존 것을 지우면 <b>다음 갱신이 영영 불가능</b>해진다
+     * (그 처리는 {@code ExternalCalendarConnection.refreshTokens}).
+     */
+    public OAuthTokenSet refreshAccessToken(OAuthProviderType provider, OAuthProperties.Client client,
+                                            String refreshToken) {
+        MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
+        form.add("grant_type", "refresh_token");
+        form.add("client_id", client.clientId());
+        form.add("client_secret", client.clientSecret());
+        form.add("refresh_token", refreshToken);
+
+        JsonNode body = post(provider, form);
+        String accessToken = OAuthProviderType.text(body, "access_token");
+        if (accessToken == null) {
+            log.warn("소셜 토큰 갱신 응답에 access_token 없음: provider={} error={}",
+                    provider, OAuthProviderType.text(body, "error"));
+            throw new OAuthException(ErrorCode.E_AUTH_010.code(), "토큰 갱신 실패: " + provider);
+        }
+        return new OAuthTokenSet(
+                accessToken,
+                OAuthProviderType.text(body, "refresh_token"),
+                expiresIn(body));
     }
 
     /** access 토큰 → 사용자 식별 정보. 제공자별 응답 차이는 {@link OAuthProviderType#parse}가 흡수한다. */
