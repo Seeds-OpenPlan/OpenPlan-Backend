@@ -1,6 +1,7 @@
 package com.openplan.backend.externalcalendar.service;
 
 import com.openplan.backend.auth.oauth.OAuthProperties;
+import com.openplan.backend.common.Weekday;
 import com.openplan.backend.externalcalendar.domain.ExternalCalendarProvider;
 import com.openplan.backend.global.config.AppProperties;
 import com.openplan.backend.global.error.OpenPlanException;
@@ -49,8 +50,7 @@ class ExternalCalendarAuthorizationTest {
             return ZoneId.of("Asia/Seoul");
         }
 
-        // #37 이 UserClock 에 추가한 메서드 — 이 스텁은 그 이전에 쓰였다. 외부 캘린더는
-        // 주 시작 요일을 쓰지 않으므로 기본값(MON)으로 둔다.
+
         @Override
         public Weekday weekStartDayOf(UUID userId) {
             return Weekday.MON;

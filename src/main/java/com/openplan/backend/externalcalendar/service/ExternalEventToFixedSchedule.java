@@ -71,7 +71,12 @@ public class ExternalEventToFixedSchedule {
         LocalTime startTime = floorToStep(start.toLocalTime());
         LocalTime endTime = ceilToStep(end.toLocalTime());
 
-        boolean crossesMidnight = !end.toLocalDate().equals(date);
+        // 종료가 다음 날 정각 자정인 것은 자정을 "넘은" 것이 아니라 그 날의 끝이다.
+        // 구글은 23:00~24:00 을 다음날 00:00:00 으로 표현하므로, 이것까지 거부하면
+        // 하루 안에 온전히 들어가는 정상 일정이 422 로 막힌다.
+        boolean endsAtDayBoundary = end.toLocalTime().equals(LocalTime.MIDNIGHT)
+                && end.toLocalDate().equals(date.plusDays(1));
+        boolean crossesMidnight = !end.toLocalDate().equals(date) && !endsAtDayBoundary;
         if (crossesMidnight) {
             // 종료가 다음 날이면 하루 안의 구간으로 옮길 방법이 없다.
             requireEditedTimes(edited, "자정을 넘는 일정입니다");
@@ -92,6 +97,12 @@ public class ExternalEventToFixedSchedule {
         // 종료가 자정으로 올림된 경우(예: 23:58 → 24:00)는 하루의 마지막 경계로 붙인다.
         if (endTime.equals(LocalTime.MIDNIGHT) && !startTime.equals(LocalTime.MIDNIGHT)) {
             endTime = LAST_STEP_OF_DAY;
+            // 시작도 같은 칸으로 내림되면(예: 23:57~23:59 → 23:55~23:55) 빈 구간이 된다.
+            // 5분 격자가 하루의 마지막 5분을 "종료"로 표현하지 못해 생기는 것이지 일정의 결함이
+            // 아니므로, 사용자가 시각을 직접 지정하지 않았다면 한 칸 당겨 유효한 마지막 칸으로 만든다.
+            if (!startTime.isBefore(endTime) && (edited == null || edited.startTime() == null)) {
+                startTime = endTime.minusMinutes(STEP_MINUTES);
+            }
         }
         if (!startTime.isBefore(endTime)) {
             throw invalid("시작이 종료보다 늦거나 같습니다");

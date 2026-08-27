@@ -11,7 +11,11 @@ import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
 import java.io.IOException;
+import com.openplan.backend.global.error.OpenPlanException;
+import com.openplan.backend.externalcalendar.provider.ProviderCredential;
 import java.net.InetSocketAddress;
+import java.time.Instant;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -36,12 +40,14 @@ class CalDavHttpMethodTest {
     private HttpServer server;
     private String baseUrl;
     private final AtomicReference<String> observedMethod = new AtomicReference<>();
+    private final AtomicReference<String> observedPath = new AtomicReference<>();
 
     @BeforeEach
     void startServer() throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", exchange -> {
             observedMethod.set(exchange.getRequestMethod());
+            observedPath.set(exchange.getRequestURI().getRawPath());
             byte[] body = "<D:multistatus xmlns:D=\"DAV:\"/>".getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/xml");
             exchange.sendResponseHeaders(207, body.length);
@@ -90,6 +96,41 @@ class CalDavHttpMethodTest {
                 .body(String.class);
 
         assertThat(observedMethod.get()).isEqualTo("REPORT");
+    }
+
+    /**
+     * 이미 인코딩된 {@code href} 를 되읽을 때 <b>이중 인코딩되지 않는다</b>는 것을
+     * <b>프로덕션 코드로</b> 고정한다.
+     *
+     * <p>🔴 <b>이 테스트의 앞 판본은 결함을 못 잡았다.</b> {@code RestClient} 를 테스트 안에서
+     * 새로 만들어 {@code uri(URI)} 를 직접 부르는 모양이라, Spring API 의 사실만 고정하고
+     * {@link AppleCalDavProvider#dav} 가 그 오버로드를 실제로 쓰는지는 검증하지 않았다 —
+     * 프로덕션 코드를 {@code uri(String)} 으로 되돌려도 그대로 통과했다(2026-08-27 재검증에서
+     * 실증). 그래서 <b>프로바이더를 실제로 인스턴스화해 {@code listCalendars} 를 부른다.</b>
+     *
+     * <p>CalDAV 의 두 번째 왕복은 서버가 준 {@code href} 원문을 그대로 다시 부르는 구조다.
+     * iCloud 는 그 값을 <b>이미 퍼센트 인코딩된 형태</b>로 줄 수 있는데, {@code uri(String)}
+     * 오버로드는 유효한 {@code %XX} 까지 다시 인코딩해 {@code %20} 이 {@code %2520} 이 된다.
+     * 그러면 실제 리소스와 어긋나 404 가 나고 사용자에게는 "애플 연동 실패"(502)만 보인다.
+     */
+    @Test
+    @DisplayName("프로바이더가 이미 인코딩된 캘린더 경로를 이중 인코딩하지 않는다")
+    void 프로바이더가_이미_인코딩된_경로를_이중_인코딩하지_않는다() {
+        // listEvents 는 externalCalendarId 를 첫 왕복에 그대로 넘긴다. 절대 URL 이면
+        // BASE 를 안 붙이므로(dav 의 startsWith("http") 분기) 로컬 서버로 나간다 —
+        // 그래서 이 경로가 **프로덕션 코드의 uri 오버로드**를 실제로 통과한다.
+        String encodedCalendarId = baseUrl + "/cal/already%20encoded/";
+
+        AppleCalDavProvider provider = new AppleCalDavProvider(RestClient.builder()
+                .requestFactory(new JdkClientHttpRequestFactory())
+                .build());
+
+        provider.listEvents(ProviderCredential.basic("id", "pw"), encodedCalendarId, "내 캘린더",
+                Instant.parse("2026-08-01T00:00:00Z"), Instant.parse("2026-09-01T00:00:00Z"));
+
+        assertThat(observedMethod.get()).isEqualTo("REPORT");
+        assertThat(observedPath.get()).isEqualTo("/cal/already%20encoded/");
+        assertThat(observedPath.get()).doesNotContain("%2520");
     }
 
     /**

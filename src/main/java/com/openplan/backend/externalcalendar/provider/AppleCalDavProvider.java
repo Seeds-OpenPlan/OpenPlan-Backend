@@ -23,6 +23,7 @@ import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
+import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -309,8 +310,16 @@ public class AppleCalDavProvider implements CalendarProvider {
     private Element dav(ProviderCredential credential, String path, int depth, HttpMethod method, String body) {
         byte[] xml;
         try {
+            // 🔴 uri(String) 이 아니라 uri(URI) 로 넘긴다. 문자열 오버로드는 내부
+            //    UriBuilderFactory(TEMPLATE_AND_VALUES)가 값을 **다시** 인코딩하는데,
+            //    이미 유효한 %XX 시퀀스까지 재인코딩한다 — already%20encoded 가
+            //    already%2520encoded 가 된다(직접 실행 확인). CalDAV 의 href 는 서버가
+            //    주는 원문이고 iCloud 는 이미 인코딩된 형태로 줄 수 있으므로, 그대로
+            //    문자열로 넘기면 두 번째 왕복이 실제 리소스와 어긋나 404 → 502 가 된다.
+            //    GoogleCalendarProvider 가 캘린더 ID 의 '#'(%23 → %2523)에서 겪고
+            //    이미 uri(URI) 로 우회한 것과 같은 결함이다.
             xml = restClient.method(method)
-                    .uri(path.startsWith("http") ? path : BASE + path)
+                    .uri(URI.create(path.startsWith("http") ? path : BASE + path))
                     .header(HttpHeaders.AUTHORIZATION, basic(credential))
                     .header("Depth", String.valueOf(depth))
                     .contentType(MediaType.APPLICATION_XML)

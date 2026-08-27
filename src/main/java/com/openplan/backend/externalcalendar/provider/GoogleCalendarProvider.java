@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import java.net.URI;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -65,7 +66,7 @@ public class GoogleCalendarProvider implements CalendarProvider {
     @Override
     public List<ProviderCalendar> listCalendars(ProviderCredential credential) {
         String accessToken = credential.secret();
-        JsonNode body = get(CALENDAR_LIST_URI, accessToken, Map.of());
+        JsonNode body = get(URI.create(CALENDAR_LIST_URI), accessToken);
 
         List<ProviderCalendar> calendars = new ArrayList<>();
         for (JsonNode item : body.path("items")) {
@@ -83,7 +84,16 @@ public class GoogleCalendarProvider implements CalendarProvider {
     public List<ProviderEvent> listEvents(ProviderCredential credential, String externalCalendarId, String calendarName,
                                           Instant from, Instant to) {
         String accessToken = credential.secret();
-        String uri = UriComponentsBuilder.fromUriString(EVENTS_URI)
+        // .encode() 는 필수다 — 구글의 흔한 구독 캘린더(예: 한국 공휴일 ko.south_korea#holiday@...)는
+        // ID 에 '#' 을 담는다. 인코딩 없이 조립하면 그 뒤가 URI fragment 로 분류돼 /events 경로와
+        // timeMin/timeMax/singleEvents 쿼리가 통째로 요청에서 사라진다. build().encode() 관례는
+        // ExternalCalendarAuthorization·OAuthLoginService 와 동일.
+        //
+        // 여기서 .toUri() 로 URI 객체를 바로 만드는 이유: 문자열로 만들어 RestClient.uri(String, Map)
+        // 에 넘기면 그 내부 UriBuilderFactory 가 문자열을 다시 파싱·재인코딩해 이미 인코딩된 '%23'을
+        // '%2523'으로 이중 인코딩한다(직접 재현 확인). URI 객체를 uri(URI) 로 바로 넘기면 절대경로
+        // URI 는 재해석 없이 그대로 쓰인다.
+        URI uri = UriComponentsBuilder.fromUriString(EVENTS_URI)
                 .queryParam("timeMin", DateTimeFormatter.ISO_INSTANT.format(from))
                 .queryParam("timeMax", DateTimeFormatter.ISO_INSTANT.format(to))
                 // 반복 일정을 규칙이 아니라 개별 발생으로 펼쳐 받는다 — 고정 일정은 발생 단위로 만든다.
@@ -91,9 +101,10 @@ public class GoogleCalendarProvider implements CalendarProvider {
                 .queryParam("orderBy", "startTime")
                 .queryParam("maxResults", MAX_RESULTS)
                 .buildAndExpand(externalCalendarId)
-                .toUriString();
+                .encode()
+                .toUri();
 
-        JsonNode body = get(uri, accessToken, Map.of());
+        JsonNode body = get(uri, accessToken);
 
         List<ProviderEvent> events = new ArrayList<>();
         for (JsonNode item : body.path("items")) {
@@ -136,10 +147,10 @@ public class GoogleCalendarProvider implements CalendarProvider {
         }
     }
 
-    private JsonNode get(String uri, String accessToken, Map<String, ?> variables) {
+    private JsonNode get(URI uri, String accessToken) {
         try {
             JsonNode body = restClient.get()
-                    .uri(uri, variables)
+                    .uri(uri)
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken)
                     .accept(MediaType.APPLICATION_JSON)
                     .retrieve()

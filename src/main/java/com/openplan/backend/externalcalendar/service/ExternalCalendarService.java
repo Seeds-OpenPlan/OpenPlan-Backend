@@ -71,6 +71,7 @@ public class ExternalCalendarService {
     private final ExternalCalendarConnectionRepository connectionRepository;
     private final ExternalCalendarSelectionRepository selectionRepository;
     private final ExternalCalendarEventRepository eventRepository;
+    private final ExternalCalendarEventWriter eventWriter;
     private final ExternalFixedScheduleRepository fixedScheduleRepository;
     private final CalendarProviderRegistry providerRegistry;
     private final ExternalCalendarTokens tokens;
@@ -83,6 +84,7 @@ public class ExternalCalendarService {
     public ExternalCalendarService(ExternalCalendarConnectionRepository connectionRepository,
                                    ExternalCalendarSelectionRepository selectionRepository,
                                    ExternalCalendarEventRepository eventRepository,
+                                   ExternalCalendarEventWriter eventWriter,
                                    ExternalFixedScheduleRepository fixedScheduleRepository,
                                    CalendarProviderRegistry providerRegistry,
                                    ExternalCalendarTokens tokens,
@@ -94,6 +96,7 @@ public class ExternalCalendarService {
         this.connectionRepository = connectionRepository;
         this.selectionRepository = selectionRepository;
         this.eventRepository = eventRepository;
+        this.eventWriter = eventWriter;
         this.fixedScheduleRepository = fixedScheduleRepository;
         this.providerRegistry = providerRegistry;
         this.tokens = tokens;
@@ -433,13 +436,27 @@ public class ExternalCalendarService {
             return;
         }
         try {
-            eventRepository.saveAll(created);
+            // 🔴 이 insert 는 **바깥 트랜잭션 밖에서** 돈다(ExternalCalendarEventWriter 참조).
+            //    같은 트랜잭션에서 넣으면 UQ 위반을 잡아도 소용이 없다 — 실패한 flush 가 세션을
+            //    못 쓰게 만들고, 참여 트랜잭션 실패가 바깥을 rollback-only 로 표시해 커밋에서
+            //    UnexpectedRollbackException 이 다시 터진다. 즉 "조용히 물러난다" 고 적힌 이
+            //    catch 가 실제로는 500 을 다른 얼굴로 바꿀 뿐이었다.
+            //    (2026-08-27 재현 — ExternalCalendarApiTest.동기화_경합은_500이_아니다)
+            eventWriter.insertAll(created);
         } catch (DataIntegrityViolationException e) {
             // 같은 connection 에 동기화가 겹치면(탭 두 개·중복 새로고침) 양쪽이 같은 일정을
-            // "신규" 로 보고 각자 insert 한다. 먼저 넣은 쪽이 이미 옳은 행을 만들었으므로
-            // 진 쪽은 근거 불명의 500 을 내는 대신 조용히 물러난다 — 다음 조회에서 그 행이 보인다.
-            log.info("외부 캘린더 동기화 경합 — 이미 저장된 일정이 있어 신규 저장을 건너뛴다. connectionId={}",
-                    connection.getId());
+            // "신규" 로 보고 각자 insert 한다. 진 쪽은 근거 불명의 500 을 내는 대신 조용히 물러난다.
+            // 다만 배치 전체가 되돌아갔으므로, 겹치지 않은 신규까지 잃지 않도록 한 건씩 다시 넣는다.
+            int skipped = 0;
+            for (ExternalCalendarEvent candidate : created) {
+                try {
+                    eventWriter.insertOne(candidate);
+                } catch (DataIntegrityViolationException conflict) {
+                    skipped++;   // 이긴 쪽이 이미 옳은 행을 만들었다 — 다음 조회에서 그 행이 보인다.
+                }
+            }
+            log.info("외부 캘린더 동기화 경합 — 이미 저장된 일정 {}건을 건너뛴다. connectionId={}",
+                    skipped, connection.getId());
         }
     }
 

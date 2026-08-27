@@ -10,6 +10,7 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -92,8 +93,15 @@ public final class RecurrenceExpander {
         List<ZonedDateTime> candidates = switch (freq) {
             case "DAILY" -> byPeriod(origin, interval, ChronoStep.DAY, count, until, to);
             case "WEEKLY" -> weekly(origin, interval, parts.get("BYDAY"), parts.get("WKST"), count, until, to);
-            case "MONTHLY" -> byPeriod(origin, interval, ChronoStep.MONTH, count, until, to);
-            case "YEARLY" -> byPeriod(origin, interval, ChronoStep.YEAR, count, until, to);
+            // 🔴 월·년 주기의 BYDAY 는 아직 해석하지 못한다 — 그래서 **틀린 날짜를 만드는 대신
+            //    해석 실패로 떨어뜨린다.** byPeriod 는 원점의 "일(day-of-month)"만 반복하므로
+            //    FREQ=MONTHLY;BYDAY=1MO("매월 첫째 월요일")를 주면 매달 그 "일"을 반복해
+            //    전혀 다른 요일에 일정을 만든다(2026-01-05 시작 → 2/5 목 · 3/5 목 · 4/5 일).
+            //    FREQ 자체는 이 스위치가 알아보므로 폴백을 안 타고 **경고도 없이 조용히 틀린다.**
+            //    없던 일정을 만드는 것보다 한 건만 두고 경고를 남기는 쪽이 낫다 —
+            //    자정을 넘는 일정을 임의로 자르지 않고 422 로 돌려보내는 것과 같은 판단이다.
+            case "MONTHLY" -> hasByDay(parts) ? null : byPeriod(origin, interval, ChronoStep.MONTH, count, until, to);
+            case "YEARLY" -> hasByDay(parts) ? null : byPeriod(origin, interval, ChronoStep.YEAR, count, until, to);
             default -> null;
         };
 
@@ -119,6 +127,12 @@ public final class RecurrenceExpander {
             }
         }
         return out;
+    }
+
+    /** {@code BYDAY} 가 실제로 값을 갖고 있는가 — 빈 문자열은 없는 것으로 본다. */
+    private static boolean hasByDay(Map<String, String> parts) {
+        String byDay = parts.get("BYDAY");
+        return byDay != null && !byDay.isBlank();
     }
 
     private enum ChronoStep { DAY, MONTH, YEAR }
@@ -169,22 +183,29 @@ public final class RecurrenceExpander {
      */
     private static List<ZonedDateTime> weekly(ZonedDateTime origin, int interval, String byDay, String weekStart,
                                               Integer count, Instant until, Instant to) {
-        Set<DayOfWeek> days = new LinkedHashSet<>();
+        Set<DayOfWeek> parsedDays = new LinkedHashSet<>();
         if (byDay != null && !byDay.isBlank()) {
             for (String token : byDay.split(",")) {
                 DayOfWeek day = dayOfWeek(token);
                 if (day != null) {
-                    days.add(day);
+                    parsedDays.add(day);
                 }
             }
         }
-        if (days.isEmpty()) {
-            days.add(origin.getDayOfWeek());
+        if (parsedDays.isEmpty()) {
+            parsedDays.add(origin.getDayOfWeek());
         }
 
-        DayOfWeek wkst = weekStart == null ? DayOfWeek.MONDAY : dayOfWeek(weekStart);
-        ZonedDateTime anchor = origin.with(TemporalAdjusters.previousOrSame(
-                wkst == null ? DayOfWeek.MONDAY : wkst));
+        DayOfWeek parsedWkst = weekStart == null ? null : dayOfWeek(weekStart);
+        DayOfWeek wkst = parsedWkst == null ? DayOfWeek.MONDAY : parsedWkst;
+        ZonedDateTime anchor = origin.with(TemporalAdjusters.previousOrSame(wkst));
+
+        // BYDAY 토큰 순서는 시간 순서가 아니다 — BYDAY=FR,MO 는 금요일을 먼저 준다.
+        // 아래 루프는 경계를 넘으면 그 주가 아니라 전체를 끊으므로, 주 안에서 시간 오름차순으로
+        // 세워 두지 않으면 아직 안 본 더 이른 요일이 예외도 로그도 없이 유실된다.
+        // COUNT 도 발생 순서대로 세야 하므로 같은 정렬이 필요하다.
+        List<DayOfWeek> days = new ArrayList<>(parsedDays);
+        days.sort(Comparator.comparingInt(day -> Math.floorMod(day.getValue() - wkst.getValue(), 7)));
 
         List<ZonedDateTime> out = new ArrayList<>();
         int produced = 0;

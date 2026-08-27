@@ -235,6 +235,93 @@ class ICalParsingTest {
         }
 
         @Test
+        @DisplayName("BYDAY 토큰 순서가 시간 역순이어도 이른 요일이 유실되지 않는다")
+        void 요일_토큰_순서가_역순이어도_유실되지_않는다() {
+            // BYDAY=FR,MO — 토큰은 금요일이 먼저지만 그 주에서 시간상 먼저 오는 것은 월요일이다.
+            // 조회 창을 그 주 수요일에서 끊으면, 토큰 순서대로 도는 구현은 금요일 후보가 창을
+            // 넘는 순간 전체를 끊어 버려 창 안에 있는 월요일(원점 자신)을 평가조차 하지 않았다.
+            String ics = wrap("""
+                    UID:weekly-byday-order@test
+                    DTSTART:20260817T010000Z
+                    DTEND:20260817T020000Z
+                    RRULE:FREQ=WEEKLY;BYDAY=FR,MO
+                    SUMMARY:월금 스터디
+                    """);
+            ICalParser.Component event = ICalParser.parseEvents(ics).getFirst();
+
+            List<RecurrenceExpander.Occurrence> occurrences = RecurrenceExpander.expand(
+                    event, Instant.parse("2026-08-17T01:00:00Z"), Instant.parse("2026-08-17T02:00:00Z"),
+                    SEOUL, Instant.parse("2026-08-17T00:00:00Z"), Instant.parse("2026-08-19T00:00:00Z"));
+
+            assertThat(occurrences).hasSize(1);
+            assertThat(occurrences.getFirst().startAt()).isEqualTo(Instant.parse("2026-08-17T01:00:00Z"));
+        }
+
+        @Test
+        @DisplayName("여러 요일 반복은 토큰 순서가 아니라 시간 순으로 나온다")
+        void 여러_요일은_시간순으로_나온다() {
+            String ics = wrap("""
+                    UID:weekly-byday-multi@test
+                    DTSTART:20260817T010000Z
+                    DTEND:20260817T020000Z
+                    RRULE:FREQ=WEEKLY;BYDAY=FR,MO
+                    """);
+            ICalParser.Component event = ICalParser.parseEvents(ics).getFirst();
+
+            List<RecurrenceExpander.Occurrence> occurrences = RecurrenceExpander.expand(
+                    event, Instant.parse("2026-08-17T01:00:00Z"), Instant.parse("2026-08-17T02:00:00Z"),
+                    SEOUL, Instant.parse("2026-08-17T00:00:00Z"), Instant.parse("2026-08-24T00:00:00Z"));
+
+            // 월(8/17) → 금(8/21). 토큰 순서(FR,MO)를 그대로 따르면 순서가 뒤집힌다.
+            assertThat(occurrences).hasSize(2);
+            assertThat(occurrences.get(0).startAt()).isEqualTo(Instant.parse("2026-08-17T01:00:00Z"));
+            assertThat(occurrences.get(1).startAt()).isEqualTo(Instant.parse("2026-08-21T01:00:00Z"));
+        }
+
+        @Test
+        @DisplayName("월 단위 BYDAY 는 틀린 날짜를 만드는 대신 한 건으로 떨어진다")
+        void 월단위_BYDAY_는_조용히_틀리지_않는다() {
+            // FREQ=MONTHLY;BYDAY=1MO 는 "매월 첫째 월요일" 이다. byPeriod 는 원점의 "일" 만
+            // 반복하므로 그대로 두면 2/5(목)·3/5(목)·4/5(일) 처럼 전혀 다른 요일에 일정이 생긴다.
+            // FREQ 를 스위치가 알아보기 때문에 폴백도 안 타고 경고 없이 틀린다 —
+            // 없던 일정을 만드느니 한 건만 두고 경고를 남긴다.
+            String ics = wrap("""
+                    UID:monthly-byday@test
+                    DTSTART:20260105T010000Z
+                    DTEND:20260105T020000Z
+                    RRULE:FREQ=MONTHLY;BYDAY=1MO
+                    SUMMARY:매월 첫째 월요일 회의
+                    """);
+            ICalParser.Component event = ICalParser.parseEvents(ics).getFirst();
+
+            List<RecurrenceExpander.Occurrence> occurrences = RecurrenceExpander.expand(
+                    event, Instant.parse("2026-01-05T01:00:00Z"), Instant.parse("2026-01-05T02:00:00Z"),
+                    SEOUL, Instant.parse("2026-01-01T00:00:00Z"), Instant.parse("2026-05-01T00:00:00Z"));
+
+            // 원본 한 건만. 2/5·3/5·4/5 같은 엉뚱한 날짜가 섞이면 안 된다.
+            assertThat(occurrences).hasSize(1);
+            assertThat(occurrences.getFirst().startAt()).isEqualTo(Instant.parse("2026-01-05T01:00:00Z"));
+        }
+
+        @Test
+        @DisplayName("BYDAY 없는 월 단위 반복은 그대로 매달 같은 날에 선다")
+        void 월단위_BYDAY_없으면_정상_전개() {
+            String ics = wrap("""
+                    UID:monthly-plain@test
+                    DTSTART:20260105T010000Z
+                    DTEND:20260105T020000Z
+                    RRULE:FREQ=MONTHLY
+                    """);
+            ICalParser.Component event = ICalParser.parseEvents(ics).getFirst();
+
+            List<RecurrenceExpander.Occurrence> occurrences = RecurrenceExpander.expand(
+                    event, Instant.parse("2026-01-05T01:00:00Z"), Instant.parse("2026-01-05T02:00:00Z"),
+                    SEOUL, Instant.parse("2026-01-01T00:00:00Z"), Instant.parse("2026-04-01T00:00:00Z"));
+
+            assertThat(occurrences).hasSize(3);   // 1/5 · 2/5 · 3/5
+        }
+
+        @Test
         @DisplayName("반복이 없으면 원본 한 건 — 창과 겹칠 때만")
         void 단발은_그대로() {
             ICalParser.Component event = ICalParser.parseEvents(APPLE_SINGLE_EVENT).getFirst();

@@ -26,8 +26,12 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 import java.util.Map;
 import java.util.UUID;
 
@@ -371,6 +375,51 @@ class ExternalCalendarApiTest {
     }
 
     /** 연결 + 캘린더 1개 선택까지 마친 상태. */
+    @Test
+    @DisplayName("동기화가 겹쳐도 500 이 아니다 — 진 쪽은 조용히 물러나고 이긴 쪽의 행을 본다")
+    void 동기화_경합은_500이_아니다() throws Exception {
+        UUID connectionId = connectionWithCalendar();
+
+        // 제공자 호출은 synchronize() 가 기존 행을 **읽은 뒤** 일어난다. 정확히 그 틈에서
+        // 다른 요청(탭 두 개·중복 새로고침)이 같은 (connection_id, external_event_id) 를 먼저
+        // 커밋한 상태를 만든다. 별도 커넥션 + autoCommit 이라 이 요청의 트랜잭션 밖에서 커밋된다 —
+        // JdbcTemplate 을 그대로 쓰면 같은 트랜잭션에 참여해 "다른 요청" 이 되지 않는다.
+        given(googleProvider.listEvents(any(), eq("cal-1"), anyString(), any(), any()))
+                .willAnswer(invocation -> {
+                    insertOutOfBand(connectionId, "ext-race", "먼저 들어온 회의");
+                    return List.of(providerEvent("ext-race", "나중에 온 회의"));
+                });
+
+        // 옛 구현은 여기서 500 이었다. saveAll 만 쓰면 UQ 위반이 catch 밖(다음 조회의 auto-flush)에서
+        // 터지고, saveAllAndFlush 로 안에서 받아도 실패한 flush 가 트랜잭션을 rollback-only 로 표시해
+        // 커밋에서 다시 터진다 — 두 경우 모두 사용자에게는 근거 없는 500 이다.
+        mockMvc.perform(get(CONNECTIONS + "/" + connectionId + "/events").header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1))
+                .andExpect(jsonPath("$.data[0].title").value("먼저 들어온 회의"));
+    }
+
+    /** 이 요청의 트랜잭션 <b>밖에서</b> 커밋한다 — 경합 상대를 흉내 내려면 별도 커넥션이어야 한다. */
+    private void insertOutOfBand(UUID connectionId, String externalEventId, String title) throws Exception {
+        try (Connection connection = Objects.requireNonNull(jdbc.getDataSource()).getConnection()) {
+            connection.setAutoCommit(true);
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    INSERT INTO external_calendar_events
+                        (external_calendar_event_id, external_event_id, connection_id, title,
+                         start_at, end_at, source_calendar, apply_status, synced_at)
+                    VALUES (?, ?, ?, ?, ?, ?, '내 캘린더', 'CANDIDATE', now())
+                    """)) {
+                statement.setObject(1, UUID.randomUUID());
+                statement.setString(2, externalEventId);
+                statement.setObject(3, connectionId);
+                statement.setString(4, title);
+                statement.setTimestamp(5, Timestamp.from(Instant.parse("2026-08-20T01:00:00Z")));
+                statement.setTimestamp(6, Timestamp.from(Instant.parse("2026-08-20T02:00:00Z")));
+                statement.executeUpdate();
+            }
+        }
+    }
+
     private UUID connectionWithCalendar() throws Exception {
         UUID connectionId = createConnection(MAIN);
         saveSelections(connectionId, """
