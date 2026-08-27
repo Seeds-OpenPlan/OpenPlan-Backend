@@ -108,4 +108,35 @@ public interface TaskRepository extends JpaRepository<Task, UUID> {
              order by t.id asc
             """)
     List<UUID> findUnassignedTaskIds(@Param("userId") UUID userId);
+
+    /**
+     * 프로젝트의 <b>미완료</b> 태스크 수 (구조 부족 경고 — RB-PROJ-02).
+     *
+     * <p>"미완료 = status &lt;&gt; COMPLETED"는 {@link #countDeadlineSoon}이 세운 정의를 그대로 쓴다.
+     * 소유 판정은 하지 않는다 — 호출 전에 서비스가 {@code projectRepository.findByIdAndUserId}로
+     * 프로젝트 소유를 확인하므로 projectId 자체가 이미 사용자 스코프다({@link #countByProjectId} 관례 동일).
+     */
+    @Query("""
+            select count(t)
+              from Task t
+             where t.projectId = :projectId
+               and t.status <> com.openplan.backend.task.domain.TaskStatus.COMPLETED
+            """)
+    long countRemainingByProjectId(@Param("projectId") UUID projectId);
+
+    /**
+     * 프로젝트의 미완료 태스크 중 <b>예상시간이 비어 있는</b> 수 (구조 부족 경고 — RB-PROJ-02).
+     *
+     * <p>COMPLETED를 세지 않는 것이 핵심이다 — 완료된 일의 예상시간 공백은 계획 입력이 아니라 이력
+     * 결손이라 경고 대상이 아니다. estimatedMinutes는 nullable이 확정값이므로(D-6, 서버 기본값 미주입)
+     * null 자체는 합법 상태이고, 경고는 오류가 아니라 "계획 전 점검 항목"이다.
+     */
+    @Query("""
+            select count(t)
+              from Task t
+             where t.projectId = :projectId
+               and t.status <> com.openplan.backend.task.domain.TaskStatus.COMPLETED
+               and t.estimatedMinutes is null
+            """)
+    long countRemainingWithoutEstimateByProjectId(@Param("projectId") UUID projectId);
 }
