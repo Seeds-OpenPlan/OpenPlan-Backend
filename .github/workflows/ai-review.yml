@@ -222,15 +222,9 @@ jobs:
             🔴 **SHA 를 바꾸거나 줄이지 않는다.** 판정은 "지금 이 커밋"에 대한 것임을 그 값으로 증명한다 —
             값이 틀리면 판정이 없는 것으로 처리돼 리뷰가 헛돈다.
 
-            🔴 **이 실행의 이벤트는 `${{ github.event_name }}` 이다.**
-            그것이 `workflow_dispatch` 라면 **스티키 코멘트가 붙을 PR 맥락이 없다** —
-            네가 남기는 요약이 자동으로 올라가지 않는다(2026-08-26 에 이것으로 리뷰 하나가
-            통째로 증발했다). 그 경우 **작업의 마지막에 반드시 직접 올려라**:
-
-                gh pr comment ${{ github.event.pull_request.number || inputs.pr_number }} \
-                  --body-file <요약을 쓴 파일>
-
-            `pull_request` 이벤트라면 올리지 마라 — 스티키 코멘트와 **중복**된다.
+            🔴 **요약은 언제나 네 최종 메시지로 남긴다.** 그 최종 메시지가 곧 리뷰 코멘트다.
+            어떤 경우에도 요약 없이 끝내지 마라 — 요약이 없으면 판정이 없고, 리뷰가 헛돈 것이 된다.
+            ${{ github.event_name == 'workflow_dispatch' && format('추가로, 이 실행은 workflow_dispatch 라 최종 메시지가 자동으로 코멘트에 올라가지 않는다(2026-08-26 에 이것으로 리뷰 하나가 통째로 증발했다). 그러므로 작업 마지막에 같은 요약을 `gh pr comment {0} --body-file <요약을 쓴 파일>` 로 **직접 한 번 더** 올려라.', github.event.pull_request.number || inputs.pr_number) || '' }}
 
             지켜야 할 것:
             - **승인(Approve)하지 않는다. 머지하지 않는다.** 코멘트만 단다.
