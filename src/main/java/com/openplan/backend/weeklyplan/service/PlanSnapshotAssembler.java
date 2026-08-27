@@ -19,6 +19,7 @@ import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -61,7 +62,7 @@ public class PlanSnapshotAssembler {
      */
     public PlanSnapshot assemble(UUID userId, LocalDate weekStartDate, List<BlockView> blocks,
                                  Map<UUID, VirtualTaskEdit> taskEdits) {
-        return assemble(userId, weekStartDate, blocks, taskEdits, List.of());
+        return assemble(userId, weekStartDate, blocks, taskEdits, List.of(), List.of(), null);
     }
 
     /**
@@ -72,17 +73,54 @@ public class PlanSnapshotAssembler {
      */
     public PlanSnapshot assemble(UUID userId, LocalDate weekStartDate, List<BlockView> blocks,
                                  Map<UUID, VirtualTaskEdit> taskEdits, List<UUID> extraTaskIds) {
+        return assemble(userId, weekStartDate, blocks, taskEdits, extraTaskIds, List.of(), null);
+    }
+
+    /**
+     * 스냅샷 조립 — 고정 일정 후보 주입/제외판 (FIX-07 충돌 미리보기).
+     *
+     * <p>저장 전 후보를 "있는 셈 치고" 판정하려면 그 주 유효 목록에 후보를 끼워 넣어야 하고, 편집이면
+     * 같은 id의 <b>기존 창을 먼저 빼야</b> 한다 — 안 빼면 시각을 10분 옮긴 편집이 "옛날 자신과 충돌"로
+     * 잡힌다. 두 조작이 모두 "그 주 유효 고정일정 목록"을 만드는 일이라 여기서 처리한다(호출자가
+     * 조립 결과를 후처리하면 같은 지식이 두 군데로 갈라진다).
+     *
+     * @param extraFixed             유효 목록에 추가할 미저장 창(후보). 비어 있으면 기존 동작과 동일
+     * @param excludeFixedScheduleId 유효 목록에서 뺄 기존 고정 일정 id(편집 시 자기 자신). null이면 제외 없음
+     */
+    public PlanSnapshot assemble(UUID userId, LocalDate weekStartDate, List<BlockView> blocks,
+                                 Map<UUID, VirtualTaskEdit> taskEdits,
+                                 List<FixedWindow> extraFixed, UUID excludeFixedScheduleId) {
+        return assemble(userId, weekStartDate, blocks, taskEdits, List.of(), extraFixed, excludeFixedScheduleId);
+    }
+
+    /**
+     * 공통 본체 — 위 오버로드들이 모두 여기로 위임한다.
+     *
+     * <p>두 확장축이 <b>서로 독립</b>이라 한 본체에서 함께 처리한다: {@code extraTaskIds}는 태스크 사실을
+     * 보강하고(자동 배치 — 아직 블록이 아닌 후보), {@code extraFixed}/{@code excludeFixedScheduleId}는
+     * 그 주 유효 고정 일정 목록을 조작한다(충돌 미리보기 — 미저장 후보 주입·자기 제외).
+     * 지금은 두 축을 동시에 쓰는 호출자가 없어 public 오버로드를 축별로 하나씩만 노출한다 —
+     * 필요해지면 이 메서드를 public으로 올리면 된다.
+     */
+    private PlanSnapshot assemble(UUID userId, LocalDate weekStartDate, List<BlockView> blocks,
+                                  Map<UUID, VirtualTaskEdit> taskEdits, List<UUID> extraTaskIds,
+                                  List<FixedWindow> extraFixed, UUID excludeFixedScheduleId) {
         ZoneId zone = clock.zoneOf(userId);
 
         List<AvailabilityWindow> availabilities = availabilityRepository.findByUserId(userId).stream()
                 .map(PlanSnapshotAssembler::toAvailabilityWindow)
                 .toList();
 
-        List<FixedWindow> activeFixed = activeFixedWindows(userId, weekStartDate);
+        List<FixedWindow> activeFixed = new ArrayList<>(activeFixedWindows(userId, weekStartDate));
+        if (excludeFixedScheduleId != null) {
+            activeFixed.removeIf(w -> excludeFixedScheduleId.equals(w.fixedScheduleId()));
+        }
+        activeFixed.addAll(extraFixed);
 
         Map<UUID, TaskFacts> taskFacts = taskFacts(blocks, taskEdits, extraTaskIds);
 
-        return new PlanSnapshot(weekStartDate, zone, clock.now(), blocks, activeFixed, availabilities, taskFacts);
+        return new PlanSnapshot(weekStartDate, zone, clock.now(), blocks,
+                List.copyOf(activeFixed), availabilities, taskFacts);
     }
 
     private static AvailabilityWindow toAvailabilityWindow(AvailabilityPattern p) {

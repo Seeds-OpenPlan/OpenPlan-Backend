@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -36,4 +37,11 @@ public interface FixedScheduleWeekExceptionRepository extends JpaRepository<Fixe
 
     /** 멱등 삭제(PLAN-34) — 예외 부재여도 무해(0건 삭제). @return 삭제된 행 수. */
     long deleteByFixedScheduleIdAndWeekStartDate(UUID fixedScheduleId, LocalDate weekStartDate);
+
+    /**
+     * 한 고정 일정의 예외 주차 전량 (FIX-07 충돌 미리보기). 미리보기는 여러 주를 훑으므로 주마다
+     * 존재 여부를 묻지 않고 한 번에 읽어 집합으로 쓴다(주 수만큼 쿼리가 늘지 않게).
+     */
+    @Query("select e.weekStartDate from FixedScheduleWeekException e where e.fixedScheduleId = :fixedScheduleId")
+    List<LocalDate> findWeekStartDatesByFixedScheduleId(@Param("fixedScheduleId") UUID fixedScheduleId);
 }

@@ -52,6 +52,24 @@ public class WbsItem {
     protected WbsItem() {
     }
 
+    /**
+     * 신규 WBS 행 생성 — <b>프로젝트 복제(PROJ-12)</b> 전용. 편집 경로({@code saveWbsRange})는 동시성 때문에
+     * upsert 원자 SQL을 쓰지만, 복제는 새 태스크에 대응하는 새 행들을 <b>한 tx에서 일괄 생성</b>하는 맥락이라
+     * (경합 없음) 엔티티 save가 맞다 — native upsert를 루프로 돌리면 clearAutomatically가 미flush 엔티티를
+     * detach시켜 FK 순서가 꼬인다. id는 앱 부여, createdAt은 UserClock 주입(P-2).
+     */
+    public static WbsItem create(UUID projectId, UUID taskId, LocalDate startDate, LocalDate endDate,
+                                 Instant createdAt) {
+        WbsItem w = new WbsItem();
+        w.id = UUID.randomUUID();
+        w.projectId = projectId;
+        w.taskId = taskId;
+        w.startDate = startDate;
+        w.endDate = endDate;
+        w.createdAt = createdAt;
+        return w;
+    }
+
     public UUID getId() {
         return id;
     }
