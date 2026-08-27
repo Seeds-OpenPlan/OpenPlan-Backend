@@ -29,6 +29,7 @@ import com.openplan.backend.externalcalendar.repository.ExternalCalendarEventRep
 import com.openplan.backend.externalcalendar.repository.ExternalCalendarSelectionRepository;
 import com.openplan.backend.externalcalendar.repository.ExternalFixedScheduleRepository;
 import com.openplan.backend.fixedschedule.domain.FixedSchedule;
+import com.openplan.backend.fixedschedule.dto.FixedScheduleResponse;
 import com.openplan.backend.fixedschedule.domain.FixedScheduleStatus;
 import com.openplan.backend.global.error.ErrorCode;
 import com.openplan.backend.global.error.OpenPlanException;
@@ -348,16 +349,29 @@ public class ExternalCalendarService {
         // 소유자 확인은 연결을 거쳐서 한다 — 후보 일정 자체에는 user_id 가 없다.
         requireConnection(userId, event.getConnectionId());
 
-        UUID fixedScheduleId = null;
+        // 🔴 이미 처리한 일정을 다시 반영하지 않는다. 이 검사가 없으면 네트워크 재시도나
+        //    이중 클릭으로 같은 원본 일정에서 **고정 일정이 두 벌 생긴다** — 둘 다 201 을 받고,
+        //    앞서 만든 행은 정리되지 않아 배치 불가 시간을 두 번 점유한다. FixedSchedule 쪽에
+        //    원본 이벤트를 향한 UQ 가 없어 DB 도 막아 주지 못한다.
+        //    409 로 돌려보내는 이유: 재시도한 클라이언트에게 "이미 done" 을 알려 주는 것이
+        //    조용히 복제하는 것보다 낫다. create() 의 중복 연동 처리와 같다.
+        if (!event.isCandidate()) {
+            throw new OpenPlanException(ErrorCode.E_EXT_004);
+        }
+
+        // 🔴 계약(openapi applyExternalEvent 201)은 data.fixedSchedule 에 FixedSchedule **전체**를
+        //    요구한다. ID 하나만 실으면 프론트가 반영 직후 화면을 그리지 못해 별도 조회를 해야 하고,
+        //    그 자리(data.fixedSchedule.startTime 등)가 응답에 아예 없어 조용히 깨진다.
+        FixedScheduleResponse fixedScheduleResponse = null;
         if (mode != ApplyMode.EXCLUDE) {
             FixedSchedule fixedSchedule = converter.convert(userId, event,
                     mode == ApplyMode.EDITED ? request.edited() : null);
             fixedScheduleRepository.save(fixedSchedule);
-            fixedScheduleId = fixedSchedule.getId();
+            fixedScheduleResponse = FixedScheduleResponse.from(fixedSchedule);
         }
         event.apply(mode);
 
-        return new ApplyEventResponse(event.getId(), event.getApplyStatus().name(), fixedScheduleId);
+        return new ApplyEventResponse(event.getApplyStatus().name(), fixedScheduleResponse);
     }
 
     /**

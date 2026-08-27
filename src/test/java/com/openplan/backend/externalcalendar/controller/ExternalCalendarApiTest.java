@@ -270,7 +270,9 @@ class ExternalCalendarApiTest {
                 {"mode":"AS_IS"}""")
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.data.applyStatus").value("APPLIED"))
-                .andExpect(jsonPath("$.data.fixedScheduleId").exists());
+                .andExpect(jsonPath("$.data.fixedSchedule.fixedScheduleId").exists())
+                .andExpect(jsonPath("$.data.fixedSchedule.title").value("회의"))
+                .andExpect(jsonPath("$.data.fixedSchedule.source").value("EXTERNAL"));
 
         Map<String, Object> row = jdbc.queryForMap(
                 "SELECT title, source, connection_id FROM fixed_schedules WHERE connection_id = ?", connectionId);
@@ -289,7 +291,7 @@ class ExternalCalendarApiTest {
                 {"mode":"EXCLUDE"}""")
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.data.applyStatus").value("EXCLUDED"))
-                .andExpect(jsonPath("$.data.fixedScheduleId").doesNotExist());
+                .andExpect(jsonPath("$.data.fixedSchedule").doesNotExist());
 
         Integer count = jdbc.queryForObject(
                 "SELECT count(*) FROM fixed_schedules WHERE connection_id = ?", Integer.class, connectionId);
