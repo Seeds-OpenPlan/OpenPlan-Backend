@@ -172,7 +172,7 @@ class ExternalCalendarServiceTest {
 
         assertThatThrownBy(() -> service.apply(USER, event.getId(), new ApplyEventRequest("AS_IS", null)))
                 .isInstanceOf(OpenPlanException.class)
-                .extracting("errorCode").isEqualTo(ErrorCode.E_EXT_004);
+                .extracting("errorCode").isEqualTo(ErrorCode.E_EXT_005);
 
         // 두 번째 호출은 고정 일정을 만들지 않는다 — 이게 이 검사의 목적이다.
         verifyNoInteractions(converter);

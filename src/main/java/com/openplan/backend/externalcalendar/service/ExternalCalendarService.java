@@ -367,7 +367,7 @@ public class ExternalCalendarService {
         //    409 로 돌려보내는 이유: 재시도한 클라이언트에게 "이미 done 이다" 는 사실을
         //    알려 주는 것이 조용히 복제하는 것보다 낫다. create() 의 중복 연동 처리와 같다.
         if (!event.isCandidate()) {
-            throw new OpenPlanException(ErrorCode.E_EXT_004);
+            throw new OpenPlanException(ErrorCode.E_EXT_005);
         }
 
         FixedScheduleResponse fixedScheduleResponse = null;

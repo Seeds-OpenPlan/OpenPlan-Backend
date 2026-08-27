@@ -66,7 +66,16 @@ public enum ErrorCode {
      * 사용자가 "애플 장애"라는 안내를 보고 기다리게 된다.
      */
     E_EXT_002("E-EXT-002", HttpStatus.UNPROCESSABLE_ENTITY),
-    E_EXT_004("E-EXT-004", HttpStatus.CONFLICT);
+    E_EXT_004("E-EXT-004", HttpStatus.CONFLICT),
+    /**
+     * 이미 반영·제외한 후보 일정에 다시 반영을 요청 — 재시도·이중 클릭.
+     *
+     * <p><b>E-EXT-004 를 재사용하지 않는 이유</b>: 그쪽은 <b>연동(계정) 중복</b>이라
+     * 메시지가 "이미 연결된 외부 계정입니다" 다. 일정 재반영에 그 문구가 나가면 사용자는
+     * 자기가 하지도 않은 계정 연결을 의심한다 — 같은 409 라도 <b>무엇이 중복인지</b>가
+     * 다르면 사용자가 할 일도 다르다(2026-08-27 리뷰 지적).
+     */
+    E_EXT_005("E-EXT-005", HttpStatus.CONFLICT);
 
     private final String code;
     private final HttpStatus status;
