@@ -196,7 +196,15 @@ jobs:
             --model claude-sonnet-5
             --max-turns 150
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Read,Grep,Glob,Bash"
-          # 지적을 한 코멘트로 모은다.
+          # ⚠️ 이 옵션은 **agent 모드에서는 아무 일도 하지 않는다** (2026-08-27 규명).
+          #    액션은 `prompt:` 가 있으면 agent 모드로 도는데(로그: "Auto-detected mode: agent"),
+          #    그 모드는 tag 모드의 comment tracking 을 통째로 우회한다
+          #    (`src/modes/agent/index.ts`: `claudeCommentId: undefined, // No tracking comment
+          #    in agent mode`). 붙일 코멘트가 없으니 스티키도 성립하지 않는다.
+          #    전용 MCP 도구(`mcp__github_comment__update_claude_comment`)도 답이 아니다 —
+          #    허용 목록에 넣어 서버를 띄워도 `CLAUDE_COMMENT_ID` 가 없어 호출 즉시 던진다
+          #    (`src/mcp/github-comment-server.ts`). 그래서 요약은 프롬프트에서 지시하는
+          #    `gh pr comment` 로만 올라간다. 이 줄은 오해를 낳지 않도록 남겨 두되, 믿지 말 것.
           use_sticky_comment: true
           prompt: |
             PR #${{ github.event.pull_request.number || inputs.pr_number }} 를 리뷰한다.
@@ -225,9 +233,19 @@ jobs:
             🔴 **SHA 를 바꾸거나 줄이지 않는다.** 판정은 "지금 이 커밋"에 대한 것임을 그 값으로 증명한다 —
             값이 틀리면 판정이 없는 것으로 처리돼 리뷰가 헛돈다.
 
-            🔴 **요약은 언제나 네 최종 메시지로 남긴다.** 그 최종 메시지가 곧 리뷰 코멘트다.
-            어떤 경우에도 요약 없이 끝내지 마라 — 요약이 없으면 판정이 없고, 리뷰가 헛돈 것이 된다.
-            ${{ github.event_name == 'workflow_dispatch' && format('추가로, 이 실행은 workflow_dispatch 라 최종 메시지가 자동으로 코멘트에 올라가지 않는다(2026-08-26 에 이것으로 리뷰 하나가 통째로 증발했다). 그러므로 작업 마지막에 같은 요약을 `gh pr comment {0} --body-file <요약을 쓴 파일>` 로 **직접 한 번 더** 올려라.', github.event.pull_request.number || inputs.pr_number) || '' }}
+            🔴 **요약은 네가 직접 올려야 한다. 최종 메시지로 남기면 아무 데도 안 간다.**
+            이 워크플로는 `prompt:` 를 직접 주므로 액션이 **agent 모드**로 돈다. agent 모드에는
+            네 메시지를 대신 게시해 주는 주체가 **없다**(액션 소스: `claudeCommentId: undefined,
+            // No tracking comment in agent mode`). 그러므로 작업의 **마지막에 반드시** 이렇게 올려라:
+
+                gh pr comment ${{ github.event.pull_request.number || inputs.pr_number }} \
+                  --body-file <요약을 쓴 파일>
+
+            `gh` 는 이미 인증돼 있다(액션이 `GH_TOKEN` 을 넘겨준다). 이벤트 종류와 무관하게
+            **언제나** 이 명령을 한 번 실행한다 — `pull_request` 든 `workflow_dispatch` 든 같다.
+
+            인라인 지적을 아무리 많이 달아도 **이 요약 코멘트가 없으면 판정이 없다.**
+            어떤 경우에도 요약 없이 끝내지 마라 — 리뷰가 통째로 헛돈 것이 된다.
 
             지켜야 할 것:
             - **승인(Approve)하지 않는다. 머지하지 않는다.** 코멘트만 단다.
