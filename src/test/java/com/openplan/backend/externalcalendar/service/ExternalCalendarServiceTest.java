@@ -40,6 +40,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -204,6 +205,33 @@ class ExternalCalendarServiceTest {
     }
 
     /** 동기화 경로가 도는 데 필요한 최소 스텁. 반환값은 활성 연결. */
+    @Test
+    @DisplayName("동기화 구간은 과거 30일 · 미래 56일 — 이 값을 고정하는 것이 아무 데도 없었다")
+    void listEvents_동기화_구간을_고정한다() {
+        // 🔴 이 테스트가 존재하는 이유: SYNC_PAST_DAYS/SYNC_FUTURE_DAYS 를 검증하는 것이
+        //    저장소에 하나도 없었다. 그래서 구간이 조용히 바뀌어도 아무도 모른다 —
+        //    가져오는 일정의 범위가 바뀌는 것은 사용자에게 바로 보이는 동작 변화다.
+        //    사용자 요청으로 과거를 7일 → 30일로 넓히면서 그 값을 여기에 못 박는다.
+        ExternalCalendarConnection connection = stubSync();
+        when(calendarProvider.listEvents(any(), any(), any(), any(), any())).thenReturn(List.of());
+
+        service.listEvents(USER, connection.getId(), null);
+
+        ArgumentCaptor<Instant> from = ArgumentCaptor.forClass(Instant.class);
+        ArgumentCaptor<Instant> to = ArgumentCaptor.forClass(Instant.class);
+        verify(calendarProvider, atLeastOnce())
+                .listEvents(any(), any(), any(), from.capture(), to.capture());
+
+        // stubSync: today=2026-08-20, zone=Asia/Seoul(UTC+9). 구간은 사용자 시간대의
+        // 하루 경계에 붙으므로 UTC 로는 15:00 이 된다.
+        assertThat(from.getValue())
+                .as("과거 30일 — 2026-07-21 00:00 KST")
+                .isEqualTo(Instant.parse("2026-07-20T15:00:00Z"));
+        assertThat(to.getValue())
+                .as("미래 56일 — 2026-10-15 00:00 KST")
+                .isEqualTo(Instant.parse("2026-10-14T15:00:00Z"));
+    }
+
     private ExternalCalendarConnection stubSync() {
         ExternalCalendarConnection connection = ExternalCalendarConnection.connect(
                 USER, ExternalCalendarProvider.GOOGLE, "me@example.com", "enc", "renc", NOW, NOW);

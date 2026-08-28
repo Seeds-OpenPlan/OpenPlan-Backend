@@ -64,8 +64,23 @@ public class ExternalCalendarService {
 
     private static final Logger log = LoggerFactory.getLogger(ExternalCalendarService.class);
 
-    /** 동기화 구간 — 지난 주(회고 화면이 지난 일정을 참조한다)부터 8주 뒤까지. */
-    private static final int SYNC_PAST_DAYS = 7;
+    /**
+     * 동기화 구간 — 지난 30일부터 8주 뒤까지.
+     *
+     * <p>과거 쪽은 원래 7일이었다(회고 화면이 지난 주를 참조한다는 근거). 사용자 요청으로
+     * 30일로 넓힌다 — 연동 직후 화면이 거의 비어 보이는 것이 가장 큰 불만이었고, 지난 한 달은
+     * 회고에서 실제로 들춰 보는 범위다.
+     *
+     * <p>🔴 더 크게(1년 등) 잡지 않는 이유는 이 상수만의 문제가 아니다. 후보를 일괄 반영하는
+     * 지금 화면에는 개별 제외 UI 가 없어 가져온 것이 **전부** 고정 일정이 되고, 반영은 건당
+     * POST 를 순차로 돈다. 그리고 {@link #listEvents} 가 {@code @Transactional} 안에서
+     * 제공자를 호출하므로 구간이 길수록 트랜잭션이 오래 열려 있는다 — 이 저장소가 이미 한 번
+     * 겪은 결함이다(PR #39: 트랜잭션 안 장시간 외부 호출 → 커넥션 풀 고갈). 구간을 더 넓히려면
+     * 그 셋을 먼저 손봐야 한다.
+     *
+     * <p>미래 쪽은 그대로 둔다. 8주는 계획 지평이라 늘려도 쓰이지 않는다.
+     */
+    private static final int SYNC_PAST_DAYS = 30;
     private static final int SYNC_FUTURE_DAYS = 56;
 
     private final ExternalCalendarConnectionRepository connectionRepository;
