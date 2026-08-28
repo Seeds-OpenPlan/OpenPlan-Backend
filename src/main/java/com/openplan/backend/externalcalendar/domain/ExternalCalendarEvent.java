@@ -55,6 +55,27 @@ public class ExternalCalendarEvent {
     @Column(name = "apply_status", nullable = false, length = 20)
     private ApplyStatus applyStatus;
 
+    /** 제공자 캘린더 식별자 — 구글 calendarId · 애플 캘린더 href. 쓰기 주소의 앞부분(#69). */
+    @Column(name = "external_calendar_id", length = 512)
+    private String externalCalendarId;
+
+    /** 애플 CalDAV .ics 리소스 주소(PUT·DELETE 대상). 구글은 null. */
+    @Column(name = "resource_href", length = 1024)
+    private String resourceHref;
+
+    /** If-Match 용. 🔴 없으면 그 사이 남이 고친 것을 말없이 덮는다. */
+    @Column(name = "etag", length = 255)
+    private String etag;
+
+    /**
+     * 원본이 반복 일정인가.
+     *
+     * <p>🔴 쓰기를 막는 근거다. 읽기는 회차 단위인데 쓰기는 파일 단위라, 회차 하나를 고치려고
+     * PUT 하면 반복 일정 전체가 덮인다(마이그레이션 V202608290200 주석 참조).
+     */
+    @Column(name = "recurring", nullable = false)
+    private boolean recurring;
+
     @Column(name = "synced_at", nullable = false)
     private Instant syncedAt;
 
@@ -89,6 +110,37 @@ public class ExternalCalendarEvent {
      * <p><b>applyStatus 는 건드리지 않는다.</b> 사용자가 이미 제외했거나 반영한 일정을 후보로 되돌리면
      * 제외가 무의미해진다. 제목·시각이 바뀌었더라도 판단 자체는 사용자의 것이다.
      */
+    /**
+     * 쓰기 참조를 최신으로 맞춘다 (#69).
+     *
+     * <p>{@code candidate()}·{@code resync()} 와 나눠 둔 이유: 그 둘은 <b>사용자에게 보이는 값</b>을
+     * 다루고 이건 <b>제공자 내부 주소</b>를 다룬다. 시그니처에 섞으면 모든 호출부가 쓰기와 무관한
+     * 인자를 들고 다녀야 한다. ETag 는 매 조회마다 바뀔 수 있으므로 값이 왔을 때만 갱신한다 —
+     * 없다고 지우면 다음 쓰기가 If-Match 없이 나간다.
+     */
+    public void updateWriteRefs(String externalCalendarId, String resourceHref, String etag, boolean recurring) {
+        if (externalCalendarId != null) {
+            this.externalCalendarId = externalCalendarId;
+        }
+        if (resourceHref != null) {
+            this.resourceHref = resourceHref;
+        }
+        if (etag != null) {
+            this.etag = etag;
+        }
+        this.recurring = recurring;
+    }
+
+    /**
+     * 밖으로 쓸 수 있는 일정인가 (#69).
+     *
+     * <p>반복 일정은 제외한다 — 회차 하나를 고치려다 전체를 덮을 수 있다. 캘린더 식별자가 없으면
+     * 쓰기 주소를 만들 수 없다. <b>모르면 쓰지 않는다.</b>
+     */
+    public boolean isWritable() {
+        return !recurring && externalCalendarId != null;
+    }
+
     public void resync(String title, Instant startAt, Instant endAt, String sourceCalendar, Instant now) {
         this.title = title;
         this.startAt = startAt;

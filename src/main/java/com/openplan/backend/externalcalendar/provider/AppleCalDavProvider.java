@@ -187,31 +187,41 @@ public class AppleCalDavProvider implements CalendarProvider {
         List<ProviderEvent> events = new ArrayList<>();
         for (int offset = 0; offset < hrefs.size(); offset += MULTIGET_BATCH) {
             List<String> batch = hrefs.subList(offset, Math.min(offset + MULTIGET_BATCH, hrefs.size()));
-            collect(fetchBodies(credential, externalCalendarId, batch), calendarName, from, to, events);
+            collect(fetchBodies(credential, externalCalendarId, batch), externalCalendarId, calendarName,
+                    from, to, events);
         }
         return events;
     }
 
-    /** {@code calendar-multiget} — 방언 ①: 본문은 여기서만 온다. */
-    private List<String> fetchBodies(ProviderCredential credential, String calendarHref, List<String> hrefs) {
+    /**
+     * 쓰기 대상을 가리키는 참조 (#69) — 본문과 함께 받아 둔다.
+     *
+     * <p>예전에는 본문만 돌려주고 주소·ETag 를 버렸다. 읽기만 할 때는 필요 없었지만, 밖으로 쓰려면
+     * <b>어디에</b> 쓸지(href)와 <b>그 사이 남이 안 고쳤는지</b>(ETag)가 있어야 한다.
+     */
+    private record Resource(String href, String etag, String body) {
+    }
+
+    /** {@code calendar-multiget} — 방언 ①: 본문은 여기서만 온다. ETag 도 같이 청구한다(#69). */
+    private List<Resource> fetchBodies(ProviderCredential credential, String calendarHref, List<String> hrefs) {
         StringBuilder body = new StringBuilder("""
                 <?xml version="1.0" encoding="utf-8"?>
                 <c:calendar-multiget xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
-                  <d:prop><c:calendar-data/></d:prop>
+                  <d:prop><d:getetag/><c:calendar-data/></d:prop>
                 """);
         for (String href : hrefs) {
             body.append("  <d:href>").append(escapeXml(href)).append("</d:href>\n");
         }
         body.append("</c:calendar-multiget>");
 
-        List<String> bodies = new ArrayList<>();
+        List<Resource> resources = new ArrayList<>();
         for (Element response : children(dav(credential, calendarHref, 1, REPORT, body.toString()), "response")) {
             String data = text(response, "calendar-data");
             if (data != null && !data.isBlank()) {
-                bodies.add(data);
+                resources.add(new Resource(text(response, "href"), text(response, "getetag"), data));
             }
         }
-        return bodies;
+        return resources;
     }
 
     /**
@@ -248,10 +258,10 @@ public class AppleCalDavProvider implements CalendarProvider {
         return null;
     }
 
-    private void collect(List<String> icsBodies, String calendarName, Instant from, Instant to,
-                         List<ProviderEvent> target) {
-        for (String ics : icsBodies) {
-            for (ICalParser.Component event : ICalParser.parseEvents(ics)) {
+    private void collect(List<Resource> resources, String externalCalendarId, String calendarName,
+                         Instant from, Instant to, List<ProviderEvent> target) {
+        for (Resource resource : resources) {
+            for (ICalParser.Component event : ICalParser.parseEvents(resource.body())) {
                 ICalParser.Property dtStart = event.first("DTSTART");
                 if (ICalDateTime.isAllDay(dtStart)) {
                     // 종일 일정은 시각이 없어 옮길 자리가 없고, 하루를 통째로 채우면 의도하지 않은 차단이 된다.
@@ -275,6 +285,10 @@ public class AppleCalDavProvider implements CalendarProvider {
 
                 String uid = event.value("UID");
                 String title = event.value("SUMMARY");
+                // 🔴 RRULE 이 있으면 이 .ics 하나가 여러 회차로 펼쳐진다. 그 회차들은 같은 파일을
+                //    공유하므로, 하나만 고치려고 PUT 하면 **전체가 덮인다.** 그래서 반복으로 표시해
+                //    쓰기 대상에서 빼 둔다(#69 · 마이그레이션 V202608290200 주석).
+                boolean recurring = event.first("RRULE") != null;
                 for (RecurrenceExpander.Occurrence occurrence :
                         RecurrenceExpander.expand(event, start, end, zone, from, to)) {
                     if (!occurrence.endAt().isAfter(occurrence.startAt())) {
@@ -283,7 +297,8 @@ public class AppleCalDavProvider implements CalendarProvider {
                     target.add(new ProviderEvent(
                             occurrenceId(uid, occurrence.startAt()),
                             title != null && !title.isBlank() ? title : "(제목 없음)",
-                            occurrence.startAt(), occurrence.endAt(), calendarName));
+                            occurrence.startAt(), occurrence.endAt(), calendarName,
+                            externalCalendarId, resource.href(), resource.etag(), recurring));
                 }
             }
         }

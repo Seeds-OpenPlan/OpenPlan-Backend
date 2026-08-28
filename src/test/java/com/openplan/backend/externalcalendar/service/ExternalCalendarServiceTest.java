@@ -325,6 +325,69 @@ class ExternalCalendarServiceTest {
         verify(eventRepository, never()).deleteAll(any());
     }
 
+    // ── #69 쓰기 참조 배선 ─────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("동기화가 쓰기 참조(캘린더 id·리소스 주소·ETag·반복 여부)를 저장한다")
+    void 동기화가_쓰기_참조를_저장한다() {
+        ExternalCalendarConnection connection = stubSync();
+        when(calendarProvider.listEvents(any(), eq("cal-a"), any(), any(), any())).thenReturn(List.of(
+                new ProviderEvent("evt-1", "회의",
+                        Instant.parse("2026-08-20T01:00:00Z"), Instant.parse("2026-08-20T02:00:00Z"),
+                        "개인", "cal-a", "/cal/abc.ics", "\"etag-1\"", false)));
+        when(calendarProvider.listEvents(any(), eq("cal-b"), any(), any(), any())).thenReturn(List.of());
+
+        service.listEvents(USER, connection.getId(), null);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<ExternalCalendarEvent>> captor = ArgumentCaptor.forClass(List.class);
+        verify(eventWriter).insertAll(captor.capture());
+        ExternalCalendarEvent saved = captor.getValue().get(0);
+        assertThat(saved.getExternalCalendarId()).isEqualTo("cal-a");
+        assertThat(saved.getResourceHref()).isEqualTo("/cal/abc.ics");
+        assertThat(saved.getEtag()).isEqualTo("\"etag-1\"");
+        assertThat(saved.isRecurring()).isFalse();
+        assertThat(saved.isWritable()).as("단일 일정 + 캘린더 식별자 → 쓰기 가능").isTrue();
+    }
+
+    @Test
+    @DisplayName("🔴 반복 일정은 쓰기 대상이 아니다 — 회차 하나를 고치려다 전체를 덮는다")
+    void 반복_일정은_쓰기_대상이_아니다() {
+        ExternalCalendarConnection connection = stubSync();
+        when(calendarProvider.listEvents(any(), eq("cal-a"), any(), any(), any())).thenReturn(List.of(
+                new ProviderEvent("evt-r#1", "매주 회의",
+                        Instant.parse("2026-08-20T01:00:00Z"), Instant.parse("2026-08-20T02:00:00Z"),
+                        "개인", "cal-a", "/cal/weekly.ics", "\"etag-r\"", true)));
+        when(calendarProvider.listEvents(any(), eq("cal-b"), any(), any(), any())).thenReturn(List.of());
+
+        service.listEvents(USER, connection.getId(), null);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<ExternalCalendarEvent>> captor = ArgumentCaptor.forClass(List.class);
+        verify(eventWriter).insertAll(captor.capture());
+        ExternalCalendarEvent saved = captor.getValue().get(0);
+        assertThat(saved.isRecurring()).isTrue();
+        assertThat(saved.isWritable()).as("반복이면 참조가 다 있어도 쓰지 않는다").isFalse();
+    }
+
+    @Test
+    @DisplayName("🔴 캘린더 식별자를 모르면 쓰기 대상이 아니다 — 모르면 쓰지 않는다")
+    void 식별자를_모르면_쓰기_대상이_아니다() {
+        ExternalCalendarConnection connection = stubSync();
+        // 옛 형태(5인자) — 쓰기 참조가 없는 호출부를 흉내낸다.
+        when(calendarProvider.listEvents(any(), eq("cal-a"), any(), any(), any())).thenReturn(List.of(
+                new ProviderEvent("evt-2", "회의",
+                        Instant.parse("2026-08-20T01:00:00Z"), Instant.parse("2026-08-20T02:00:00Z"), "개인")));
+        when(calendarProvider.listEvents(any(), eq("cal-b"), any(), any(), any())).thenReturn(List.of());
+
+        service.listEvents(USER, connection.getId(), null);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<ExternalCalendarEvent>> captor = ArgumentCaptor.forClass(List.class);
+        verify(eventWriter).insertAll(captor.capture());
+        assertThat(captor.getValue().get(0).isWritable()).isFalse();
+    }
+
     private ExternalCalendarConnection stubSync() {
         ExternalCalendarConnection connection = ExternalCalendarConnection.connect(
                 USER, ExternalCalendarProvider.GOOGLE, "me@example.com", "enc", "renc", NOW, NOW);
