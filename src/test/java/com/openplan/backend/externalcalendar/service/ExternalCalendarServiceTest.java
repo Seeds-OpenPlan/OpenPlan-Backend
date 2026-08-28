@@ -347,6 +347,8 @@ class ExternalCalendarServiceTest {
                 .satisfies(ex -> assertThat(((OpenPlanException) ex).errorCode())
                         .as("계약이 이 자리에 409 E-EXT-005 를 정본으로 명시한다")
                         .isEqualTo(ErrorCode.E_EXT_005));
+    }
+
     // ── #69 쓰기 참조 배선 ─────────────────────────────────────────────────────
 
     @Test
