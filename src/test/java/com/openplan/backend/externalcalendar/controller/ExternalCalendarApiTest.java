@@ -420,6 +420,75 @@ class ExternalCalendarApiTest {
         }
     }
 
+    // ---------- #68 원격 수정·삭제 전파 (실 DB — 새 JPQL·derived query 를 실제로 태운다) ----------
+
+    /**
+     * 동기화 창 **안**의 일정.
+     *
+     * <p>🔴 기존 {@link #providerEvent} 는 2026-08-20 고정인데, 그 날짜는 시간이 지나면 창(과거 7일 ~
+     * 미래 56일) 밖으로 밀려난다. 창 밖 일정은 <b>삭제 판정에서 제외</b>되므로(그게 옳다) 그대로 쓰면
+     * 이 테스트가 "가드가 막았다" 를 "쿼리가 돌았다" 로 착각하게 된다. 오늘 기준 상대 날짜로 만든다.
+     */
+    private static ProviderEvent inWindowEvent(String externalId, String title, int hourOfDayUtc) {
+        Instant day = Instant.now().plus(3, java.time.temporal.ChronoUnit.DAYS)
+                .truncatedTo(java.time.temporal.ChronoUnit.DAYS);
+        Instant start = day.plus(hourOfDayUtc, java.time.temporal.ChronoUnit.HOURS);
+        return new ProviderEvent(externalId, title, start, start.plus(1, java.time.temporal.ChronoUnit.HOURS),
+                "내 캘린더");
+    }
+
+    @Test
+    @DisplayName("원격에서 사라지면 반영된 고정 일정까지 지운다 — 새 JPQL 을 실 DB 에서 태운다")
+    void remoteDeletionRemovesFixedSchedule() throws Exception {
+        UUID connectionId = connectionWithCalendar();
+        given(googleProvider.listEvents(any(), eq("cal-1"), anyString(), any(), any()))
+                .willReturn(List.of(inWindowEvent("ext-del", "지워질 회의", 1)));
+        UUID eventId = firstEventId(connectionId);
+        applyEvent(eventId, """
+                {"mode":"AS_IS"}""").andExpect(status().isCreated());
+
+        Integer before = jdbc.queryForObject(
+                "SELECT count(*) FROM fixed_schedules WHERE external_calendar_event_id = ?", Integer.class, eventId);
+        assertThat(before).as("반영이 링크를 남겼는가").isEqualTo(1);
+
+        // 원격에서 지워졌다 — 이번 조회는 아무것도 돌려주지 않는다.
+        given(googleProvider.listEvents(any(), eq("cal-1"), anyString(), any(), any()))
+                .willReturn(List.of());
+        mockMvc.perform(get(CONNECTIONS + "/" + connectionId + "/events").header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(0));
+
+        Integer after = jdbc.queryForObject(
+                "SELECT count(*) FROM fixed_schedules WHERE external_calendar_event_id = ?", Integer.class, eventId);
+        assertThat(after).as("고정 일정도 함께 사라져야 한다").isZero();
+    }
+
+    @Test
+    @DisplayName("원격에서 시간이 바뀌면 반영된 고정 일정이 따라 바뀐다 — derived query 를 실 DB 에서 태운다")
+    void remoteUpdateMovesFixedSchedule() throws Exception {
+        UUID connectionId = connectionWithCalendar();
+        given(googleProvider.listEvents(any(), eq("cal-1"), anyString(), any(), any()))
+                .willReturn(List.of(inWindowEvent("ext-upd", "옮겨질 회의", 1)));
+        UUID eventId = firstEventId(connectionId);
+        applyEvent(eventId, """
+                {"mode":"AS_IS"}""").andExpect(status().isCreated());
+
+        String beforeStart = jdbc.queryForObject(
+                "SELECT start_time::text FROM fixed_schedules WHERE external_calendar_event_id = ?",
+                String.class, eventId);
+
+        // 같은 일정이 3시간 뒤로 옮겨졌다.
+        given(googleProvider.listEvents(any(), eq("cal-1"), anyString(), any(), any()))
+                .willReturn(List.of(inWindowEvent("ext-upd", "옮겨질 회의", 4)));
+        mockMvc.perform(get(CONNECTIONS + "/" + connectionId + "/events").header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isOk());
+
+        String afterStart = jdbc.queryForObject(
+                "SELECT start_time::text FROM fixed_schedules WHERE external_calendar_event_id = ?",
+                String.class, eventId);
+        assertThat(afterStart).as("원격이 옮겨졌으면 고정 일정도 옮겨져야 한다").isNotEqualTo(beforeStart);
+    }
+
     private UUID connectionWithCalendar() throws Exception {
         UUID connectionId = createConnection(MAIN);
         saveSelections(connectionId, """
