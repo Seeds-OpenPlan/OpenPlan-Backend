@@ -325,6 +325,30 @@ class ExternalCalendarServiceTest {
         verify(eventRepository, never()).deleteAll(any());
     }
 
+    @Test
+    @DisplayName("🔴 진짜 동시 반영은 500 이 아니라 409 다 — isCandidate() 검사는 check-then-act 라 둘 다 통과한다")
+    void 동시_반영은_409다() {
+        ExternalCalendarConnection connection = ExternalCalendarConnection.connect(
+                USER, ExternalCalendarProvider.GOOGLE, "me@example.com", "enc", "renc", NOW, NOW);
+        ExternalCalendarEvent event = ExternalCalendarEvent.candidate(connection.getId(), "evt-1", "회의",
+                Instant.parse("2026-08-20T01:00:00Z"), Instant.parse("2026-08-20T02:00:00Z"), "개인", NOW);
+        ReflectionTestUtils.setField(event, "id", UUID.randomUUID());
+        when(eventRepository.findById(event.getId())).thenReturn(Optional.of(event));
+        when(connectionRepository.findByIdAndUserId(connection.getId(), USER)).thenReturn(Optional.of(connection));
+        FixedSchedule fs = FixedSchedule.createExternal(USER, connection.getId(), event.getId(), "회의",
+                Weekday.THU, LocalTime.of(10, 0), LocalTime.of(11, 0),
+                LocalDate.of(2026, 8, 20), LocalDate.of(2026, 8, 20), NOW);
+        when(converter.convert(eq(USER), eq(event), isNull())).thenReturn(fs);
+        // 진 쪽이 겪는 것 — ux_fixed_external_event 위반이 flush 에서 터진다.
+        when(fixedScheduleRepository.saveAndFlush(fs)).thenThrow(new DataIntegrityViolationException("ux_fixed_external_event"));
+
+        assertThatThrownBy(() -> service.apply(USER, event.getId(), new ApplyEventRequest("AS_IS", null)))
+                .isInstanceOf(OpenPlanException.class)
+                .satisfies(ex -> assertThat(((OpenPlanException) ex).errorCode())
+                        .as("계약이 이 자리에 409 E-EXT-005 를 정본으로 명시한다")
+                        .isEqualTo(ErrorCode.E_EXT_005));
+    }
+
     private ExternalCalendarConnection stubSync() {
         ExternalCalendarConnection connection = ExternalCalendarConnection.connect(
                 USER, ExternalCalendarProvider.GOOGLE, "me@example.com", "enc", "renc", NOW, NOW);

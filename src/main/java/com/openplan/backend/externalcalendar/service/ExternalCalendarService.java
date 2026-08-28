@@ -382,7 +382,24 @@ public class ExternalCalendarService {
         if (mode != ApplyMode.EXCLUDE) {
             FixedSchedule fixedSchedule = converter.convert(userId, event,
                     mode == ApplyMode.EDITED ? request.edited() : null);
-            fixedScheduleRepository.save(fixedSchedule);
+            try {
+                // 🔴 save() 가 아니라 saveAndFlush() 다. FixedSchedule.id 는 앱이 채우는 UUID 라
+                //    @GeneratedValue 가 없고, 그러면 하이버네이트가 INSERT 를 커밋까지 미룬다.
+                //    미루면 ux_fixed_external_event 위반이 이 try **밖**(커밋 시점)에서 터져
+                //    미분류 500 이 된다 — ExternalCalendarEventWriter 가 같은 이유로 flush 를 강제한다.
+                fixedScheduleRepository.saveAndFlush(fixedSchedule);
+            } catch (DataIntegrityViolationException e) {
+                // 진짜 동시 요청(둘 다 커밋 전에 위 isCandidate() 를 통과) — 그 검사는 check-then-act 라
+                // 순차 재시도만 막는다. 여기서는 **DB 가 최종 판정자**다.
+                // 계약이 이 자리에 409 E-EXT-005 를 정본으로 명시한다(openapi.yaml:826-831 —
+                // "클라이언트는 이 응답을 '이미 처리됨' 으로 읽으면 된다").
+                //
+                // 🔴 삼키지 않고 던진다. 삼키고 계속하면 실패한 flush 로 세션이 망가진 채 커밋에
+                //    들어가 UnexpectedRollbackException 이 된다(ExternalCalendarEventWriter 주석).
+                //    던지면 트랜잭션이 통째로 되돌아가고 event.apply(mode) 도 함께 없던 일이 된다 —
+                //    이긴 쪽이 만든 상태만 남으므로 그것이 바라는 동작이다.
+                throw new OpenPlanException(ErrorCode.E_EXT_005);
+            }
             fixedScheduleResponse = FixedScheduleResponse.from(fixedSchedule);
         }
         event.apply(mode);
