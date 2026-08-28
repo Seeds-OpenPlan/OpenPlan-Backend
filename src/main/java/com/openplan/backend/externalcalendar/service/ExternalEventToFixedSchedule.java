@@ -117,7 +117,7 @@ public class ExternalEventToFixedSchedule {
                 ? edited.title().trim()
                 : event.getTitle();
 
-        return FixedSchedule.createExternal(userId, event.getConnectionId(), title, weekday,
+        return FixedSchedule.createExternal(userId, event.getConnectionId(), event.getId(), title, weekday,
                 startTime, endTime, date, date, userClock.now());
     }
 
