@@ -182,6 +182,27 @@ class OAuthApiTest {
     }
 
     @Test
+    @DisplayName("🔴 온보딩을 마친 계정 → 302 홈(/) — 프론트에 /dashboard 라우트가 없다")
+    void completedOnboardingLandsOnHome() throws Exception {
+        given(oauthClient.fetchUserInfo(any(), any()))
+                .willReturn(new OAuthUserInfo(PROVIDER_USER_ID, SOCIAL_EMAIL));
+
+        // 1) 첫 로그인 — 계정과 온보딩 행이 생기고, 아직 미완료라 /onboarding 으로 간다.
+        mockMvc.perform(get(CALLBACK).param("code", "c1").param("state", validState()))
+                .andExpect(header().string("Location", "http://localhost:5173/onboarding"));
+
+        // 2) 마법사 4단계를 완료로 — OnboardingProgress.isOnboardingCompleted() 의 정의 그대로.
+        UUID userId = jdbc.queryForObject("SELECT user_id FROM users WHERE email = ?", UUID.class, SOCIAL_EMAIL);
+        jdbc.update("UPDATE onboarding_progress SET profile_done = true, availability_done = true,"
+                + " fixed_schedule_done = true, calendar_sync_done = true WHERE user_id = ?", userId);
+
+        // 3) 재로그인 — 여기가 결함 자리였다. "/dashboard" 는 프론트 라우터에 없어 404 화면이 떴다.
+        mockMvc.perform(get(CALLBACK).param("code", "c2").param("state", validState()))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "http://localhost:5173/"));
+    }
+
+    @Test
     @DisplayName("재로그인은 같은 계정을 쓴다 — 제공자 측 ID가 신원 기준")
     void repeatedLoginReusesAccount() throws Exception {
         given(oauthClient.fetchUserInfo(any(), any()))
