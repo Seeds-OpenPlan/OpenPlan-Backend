@@ -117,7 +117,10 @@ public class GoogleCalendarProvider implements CalendarProvider {
                 continue;
             }
             String title = text(item, "summary");
-            events.add(new ProviderEvent(id, title != null ? title : "(제목 없음)", start, end, calendarName));
+            // recurringEventId 가 있으면 이 항목은 반복 일정의 **한 회차**다 — 밖으로 쓰지 않는다(#69).
+            boolean recurring = text(item, "recurringEventId") != null;
+            events.add(new ProviderEvent(id, title != null ? title : "(제목 없음)", start, end, calendarName,
+                    externalCalendarId, null, text(item, "etag"), recurring));
         }
         if (body.path("items").size() >= MAX_RESULTS) {
             log.warn("구글 캘린더 일정이 조회 상한에 도달했다 — 이후 일정은 보이지 않는다: calendar={} limit={}",

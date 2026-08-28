@@ -451,6 +451,9 @@ public class ExternalCalendarService {
                             || !Objects.equals(stored.getEndAt(), providerEvent.endAt());
                     stored.resync(providerEvent.title(), providerEvent.startAt(), providerEvent.endAt(),
                             providerEvent.sourceCalendar(), now);
+                    // 쓰기 참조는 매 조회마다 바뀔 수 있다(특히 ETag). 값이 왔을 때만 갱신한다(#69).
+                    stored.updateWriteRefs(providerEvent.externalCalendarId(), providerEvent.resourceHref(),
+                            providerEvent.etag(), providerEvent.recurring());
                     if (differs) {
                         remoteChanged.add(stored);
                     }
@@ -462,6 +465,8 @@ public class ExternalCalendarService {
                             providerEvent.externalEventId(), providerEvent.title(),
                             providerEvent.startAt(), providerEvent.endAt(),
                             providerEvent.sourceCalendar(), now);
+                    candidate.updateWriteRefs(providerEvent.externalCalendarId(), providerEvent.resourceHref(),
+                            providerEvent.etag(), providerEvent.recurring());
                     created.add(candidate);
                     existing.put(providerEvent.externalEventId(), candidate);
                 }

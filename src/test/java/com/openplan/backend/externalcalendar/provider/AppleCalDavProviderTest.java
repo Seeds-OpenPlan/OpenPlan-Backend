@@ -115,6 +115,15 @@ class AppleCalDavProviderTest {
         // DTSTART;TZID=Asia/Seoul:20260820T100000 → 01:00Z. UTC 로 읽었으면 10:00Z 가 됐을 것이다.
         assertThat(event.startAt()).isEqualTo(Instant.parse("2026-08-20T01:00:00Z"));
         assertThat(event.sourceCalendar()).isEqualTo("내 캘린더");
+
+        // #69 쓰기 참조 — 이것이 없으면 밖으로 쓸 주소를 만들 수 없다.
+        assertThat(event.externalCalendarId()).isEqualTo(CAL);
+        assertThat(event.resourceHref()).isEqualTo(EVENT_HREF);
+        assertThat(event.etag()).isEqualTo("\"etag-abc\"");
+        // 🔴 이 픽스처의 VTIMEZONE 에는 서머타임 RRULE 이 들어 있다. 그것을 일정의 것으로 읽으면
+        //    단발 일정이 반복으로 둔갑해 **쓰기 대상에서 통째로 빠진다**(조용한 기능 상실).
+        //    ICalParser 가 이미 그 둘을 가르고 있고(ICalParsingTest), 여기서 그 결과에 기댄다.
+        assertThat(event.recurring()).as("VTIMEZONE 의 RRULE 은 일정의 반복이 아니다").isFalse();
     }
 
     @Test
@@ -147,6 +156,11 @@ class AppleCalDavProviderTest {
         assertThat(events).extracting(ProviderEvent::externalEventId).doesNotHaveDuplicates();
         assertThat(events).extracting(ProviderEvent::startAt).containsExactly(
                 Instant.parse("2026-08-18T01:00:00Z"), Instant.parse("2026-08-25T01:00:00Z"));
+
+        // 🔴 회차들은 같은 .ics 파일을 공유한다 — 하나만 고치려고 PUT 하면 전체가 덮인다.
+        //    그래서 전부 recurring 으로 표시해 쓰기 대상에서 뺀다(#69).
+        assertThat(events).allMatch(ProviderEvent::recurring);
+        assertThat(events).allMatch(e -> EVENT_HREF.equals(e.resourceHref()));
     }
 
     @Test
@@ -312,6 +326,7 @@ class AppleCalDavProviderTest {
                 <?xml version="1.0" encoding="UTF-8"?>
                 <D:multistatus %s>
                   <D:response><D:href>%s</D:href><D:propstat><D:prop>
+                    <D:getetag>"etag-abc"</D:getetag>
                     <caldav:calendar-data>%s</caldav:calendar-data>
                   </D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>
                 </D:multistatus>""".formatted(NS, EVENT_HREF, ics);
