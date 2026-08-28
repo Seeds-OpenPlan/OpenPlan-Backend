@@ -120,7 +120,11 @@ public class OAuthLoginService {
         assertLoginAllowed(user);
 
         AuthService.LoginResult session = authService.establishSession(user);
-        String target = session.session().onboardingCompleted() ? "/dashboard" : "/onboarding";
+        // 🔴 프론트 화면 주소다 — API 경로가 아니다. 대시보드 화면은 라우터의 인덱스 라우트 "/"(HomePage)이고
+        //    "/dashboard" 는 조립 API(GET /api/v1/dashboard)의 주소일 뿐 프론트에는 그런 라우트가 없다.
+        //    "/dashboard" 로 보내면 SPA 폴백이 index.html 을 주고 라우터가 `path: '*'` → NotFoundPage 로
+        //    떨어진다 — 헤더는 그대로라 "로그인은 됐는데 404" 로 보인다(2026-08-28 실사용 신고).
+        String target = session.session().onboardingCompleted() ? "/" : "/onboarding";
         return new CallbackResult(appProperties.frontendUrl(target), session);
     }
 
