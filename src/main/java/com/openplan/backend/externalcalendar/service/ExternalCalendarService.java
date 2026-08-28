@@ -451,6 +451,7 @@ public class ExternalCalendarService {
                             || !Objects.equals(stored.getEndAt(), providerEvent.endAt());
                     stored.resync(providerEvent.title(), providerEvent.startAt(), providerEvent.endAt(),
                             providerEvent.sourceCalendar(), now);
+                    stored.locateIn(providerEvent.externalCalendarId());
                     if (differs) {
                         remoteChanged.add(stored);
                     }
@@ -462,6 +463,7 @@ public class ExternalCalendarService {
                             providerEvent.externalEventId(), providerEvent.title(),
                             providerEvent.startAt(), providerEvent.endAt(),
                             providerEvent.sourceCalendar(), now);
+                    candidate.locateIn(providerEvent.externalCalendarId());
                     created.add(candidate);
                     existing.put(providerEvent.externalEventId(), candidate);
                 }
@@ -536,8 +538,11 @@ public class ExternalCalendarService {
      * 하나라도 빠뜨리면 멀쩡한 일정이 대량으로 사라진다.
      * <ul>
      *   <li><b>동기화 창 밖</b> — 과거·미래 경계 너머의 일정은 애초에 조회하지 않았다. 시각으로 거른다.</li>
-     *   <li><b>선택 해제한 캘린더</b> — 그 캘린더는 이번에 조회조차 하지 않았다. 출처 이름으로 거른다.
-     *       출처가 {@code null} 이면 귀속을 못 하므로 <b>지우지 않는다</b>(모르면 남긴다).</li>
+     *   <li><b>선택 해제한 캘린더</b> — 그 캘린더는 이번에 조회조차 하지 않았다. 출처 <b>식별자</b>로 거른다.
+     *       식별자가 {@code null} 이면 귀속을 못 하므로 <b>지우지 않는다</b>(모르면 남긴다).
+     *       🔴 표시 이름으로 판정하면 안 된다(2026-08-29 리뷰 Blocking) — 이름은 유일하지 않다.
+     *       선택의 유일성 제약은 {@code external_calendar_id} 기준이라({@code ux_ext_selection}),
+     *       같은 이름의 캘린더 둘 중 하나만 해제하면 <b>조회하지도 않은 쪽의 일정이 지워진다.</b></li>
      *   <li><b>제공자 조회 실패</b> — 네트워크 순단·인증 만료. 이건 여기서 거르지 않아도 된다:
      *       {@code listEvents} 가 던지면 동기화가 통째로 중단돼 이 메서드까지 오지 못한다.
      *       <b>그 성질에 기대고 있으므로</b>, 나중에 조회 실패를 삼키도록 고치는 사람은 여기도 함께 봐야 한다.</li>
@@ -551,15 +556,16 @@ public class ExternalCalendarService {
                                           Set<String> seen,
                                           List<ExternalCalendarSelection> selections,
                                           Instant from, Instant to) {
-        Set<String> selectedNames = selections.stream()
-                .map(ExternalCalendarSelection::getCalendarName)
+        Set<String> fetchedCalendarIds = selections.stream()
+                .map(ExternalCalendarSelection::getExternalCalendarId)
                 .collect(Collectors.toSet());
 
         List<ExternalCalendarEvent> gone = existing.values().stream()
                 .filter(e -> e.getId() != null)                       // 이번에 만든 후보는 아직 저장 전이다
                 .filter(e -> !seen.contains(e.getExternalEventId()))
                 .filter(e -> !e.getStartAt().isBefore(from) && e.getStartAt().isBefore(to))
-                .filter(e -> e.getSourceCalendar() != null && selectedNames.contains(e.getSourceCalendar()))
+                .filter(e -> e.getExternalCalendarId() != null
+                        && fetchedCalendarIds.contains(e.getExternalCalendarId()))
                 .toList();
         if (gone.isEmpty()) {
             return;

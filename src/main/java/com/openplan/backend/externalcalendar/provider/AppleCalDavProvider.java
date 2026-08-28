@@ -187,7 +187,8 @@ public class AppleCalDavProvider implements CalendarProvider {
         List<ProviderEvent> events = new ArrayList<>();
         for (int offset = 0; offset < hrefs.size(); offset += MULTIGET_BATCH) {
             List<String> batch = hrefs.subList(offset, Math.min(offset + MULTIGET_BATCH, hrefs.size()));
-            collect(fetchBodies(credential, externalCalendarId, batch), calendarName, from, to, events);
+            collect(fetchBodies(credential, externalCalendarId, batch), externalCalendarId, calendarName,
+                    from, to, events);
         }
         return events;
     }
@@ -248,8 +249,8 @@ public class AppleCalDavProvider implements CalendarProvider {
         return null;
     }
 
-    private void collect(List<String> icsBodies, String calendarName, Instant from, Instant to,
-                         List<ProviderEvent> target) {
+    private void collect(List<String> icsBodies, String externalCalendarId, String calendarName,
+                         Instant from, Instant to, List<ProviderEvent> target) {
         for (String ics : icsBodies) {
             for (ICalParser.Component event : ICalParser.parseEvents(ics)) {
                 ICalParser.Property dtStart = event.first("DTSTART");
@@ -283,7 +284,7 @@ public class AppleCalDavProvider implements CalendarProvider {
                     target.add(new ProviderEvent(
                             occurrenceId(uid, occurrence.startAt()),
                             title != null && !title.isBlank() ? title : "(제목 없음)",
-                            occurrence.startAt(), occurrence.endAt(), calendarName));
+                            occurrence.startAt(), occurrence.endAt(), calendarName, externalCalendarId));
                 }
             }
         }

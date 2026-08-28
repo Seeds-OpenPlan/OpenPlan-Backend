@@ -55,6 +55,16 @@ public class ExternalCalendarEvent {
     @Column(name = "apply_status", nullable = false, length = 20)
     private ApplyStatus applyStatus;
 
+    /**
+     * 이 일정이 온 제공자 캘린더 식별자 — 구글 calendarId · 애플 캘린더 href.
+     *
+     * <p>🔴 표시 이름({@code sourceCalendar})과 달리 <b>유일하다</b>. 삭제 전파에서 "이번에 조회한
+     * 캘린더인가" 를 판정할 때 이름을 쓰면, 같은 이름의 캘린더 둘 중 하나만 선택 해제했을 때
+     * 조회하지도 않은 쪽의 일정을 지운다(2026-08-29 리뷰 Blocking).
+     */
+    @Column(name = "external_calendar_id", length = 512)
+    private String externalCalendarId;
+
     @Column(name = "synced_at", nullable = false)
     private Instant syncedAt;
 
@@ -89,6 +99,19 @@ public class ExternalCalendarEvent {
      * <p><b>applyStatus 는 건드리지 않는다.</b> 사용자가 이미 제외했거나 반영한 일정을 후보로 되돌리면
      * 제외가 무의미해진다. 제목·시각이 바뀌었더라도 판단 자체는 사용자의 것이다.
      */
+    /**
+     * 출처 캘린더 식별자를 최신으로 맞춘다.
+     *
+     * <p>{@code candidate()}·{@code resync()} 와 나눠 둔 이유: 그 둘은 <b>사용자에게 보이는 값</b>을
+     * 다루고 이건 <b>제공자 내부 식별자</b>다. 값이 왔을 때만 갱신한다 — 없다고 지우면 이미 귀속돼
+     * 있던 일정이 삭제 대상에서 빠졌다 들어왔다 한다.
+     */
+    public void locateIn(String externalCalendarId) {
+        if (externalCalendarId != null) {
+            this.externalCalendarId = externalCalendarId;
+        }
+    }
+
     public void resync(String title, Instant startAt, Instant endAt, String sourceCalendar, Instant now) {
         this.title = title;
         this.startAt = startAt;
