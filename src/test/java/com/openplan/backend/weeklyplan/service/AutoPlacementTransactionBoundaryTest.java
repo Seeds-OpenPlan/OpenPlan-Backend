@@ -5,6 +5,7 @@ import com.openplan.backend.global.time.UserClock;
 import com.openplan.backend.rule.model.PlacementResult;
 import com.openplan.backend.rule.port.PlanPlacementPort;
 import com.openplan.backend.task.repository.TaskRepository;
+import com.openplan.backend.task.repository.WbsItemRepository;
 import com.openplan.backend.weeklyplan.domain.WeeklyPlan;
 import com.openplan.backend.weeklyplan.dto.AutoPlacementRequest;
 import com.openplan.backend.weeklyplan.dto.PlacementProposalResponse;
@@ -58,6 +59,7 @@ class AutoPlacementTransactionBoundaryTest {
         WeeklyPlanRepository weeklyPlanRepository = mock(WeeklyPlanRepository.class);
         PlanBlockRepository planBlockRepository = mock(PlanBlockRepository.class);
         TaskRepository taskRepository = mock(TaskRepository.class);
+        WbsItemRepository wbsItemRepository = mock(WbsItemRepository.class);
         AvailabilityPatternRepository availabilityRepository = mock(AvailabilityPatternRepository.class);
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
         UserClock clock = mock(UserClock.class);
@@ -73,7 +75,7 @@ class AutoPlacementTransactionBoundaryTest {
         when(jdbc.query(anyString(), any(RowMapper.class), any(), any())).thenReturn(List.of());
 
         PlanSnapshotAssembler assembler =
-                new PlanSnapshotAssembler(availabilityRepository, taskRepository, jdbc, clock);
+                new PlanSnapshotAssembler(availabilityRepository, taskRepository, wbsItemRepository, jdbc, clock);
         AutoPlacementSnapshotReader reader =
                 new AutoPlacementSnapshotReader(weeklyPlanRepository, planBlockRepository, taskRepository, assembler);
         AutoPlacementSnapshotReader proxiedReader = transactionalProxy(reader);
