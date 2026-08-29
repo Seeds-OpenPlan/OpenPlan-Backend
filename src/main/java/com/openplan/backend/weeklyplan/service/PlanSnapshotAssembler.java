@@ -10,7 +10,9 @@ import com.openplan.backend.rule.model.FixedWindow;
 import com.openplan.backend.rule.model.PlanSnapshot;
 import com.openplan.backend.rule.model.TaskFacts;
 import com.openplan.backend.task.domain.Task;
+import com.openplan.backend.task.domain.WbsItem;
 import com.openplan.backend.task.repository.TaskRepository;
+import com.openplan.backend.task.repository.WbsItemRepository;
 import com.openplan.backend.weeklyplan.dto.ValidateWeeklyPlanRequest.VirtualTaskEdit;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
@@ -34,7 +36,8 @@ import java.util.stream.Collectors;
  *   <li>고정일정 — 그 주 유효분만: {@code status=ACTIVE} + 주차예외({@code fixed_schedule_week_exceptions}) 안티조인.
  *       고정일정 도메인 엔티티가 이 브랜치에 없어 baseline 테이블을 JdbcTemplate로 읽는다(global {@code JdbcUserClock}과
  *       동일한 "타 도메인 잠정 SQL 접촉" 관례). 기간(start_date/end_date)은 {@link FixedWindow}에 그대로 실어 엔진에 맡긴다.</li>
- *   <li>태스크 사실 — 블록이 가리키는 태스크. dry-run은 {@code virtualTaskEdits}로 덮어쓴다.</li>
+ *   <li>태스크 사실 — 블록이 가리키는 태스크의 마감일·WBS 기간·예상시간·우선순위(V5·V6 입력).
+ *       dry-run은 {@code virtualTaskEdits}로 덮어쓴다(담긴 필드만).</li>
  *   <li>zone·referenceTime — {@link UserClock}(C-1: 엔진엔 Clock 없음)</li>
  * </ul>
  * <b>주의</b>: 엔진은 받은 것을 무조건 유효로 믿는다 — 주차예외·INACTIVE 필터를 여기서 안 걸면 없는 일정과의 오탐이 난다.
@@ -46,13 +49,16 @@ public class PlanSnapshotAssembler {
 
     private final AvailabilityPatternRepository availabilityRepository;
     private final TaskRepository taskRepository;
+    private final WbsItemRepository wbsItemRepository;
     private final JdbcTemplate jdbc;
     private final UserClock clock;
 
     public PlanSnapshotAssembler(AvailabilityPatternRepository availabilityRepository,
-                                 TaskRepository taskRepository, JdbcTemplate jdbc, UserClock clock) {
+                                 TaskRepository taskRepository, WbsItemRepository wbsItemRepository,
+                                 JdbcTemplate jdbc, UserClock clock) {
         this.availabilityRepository = availabilityRepository;
         this.taskRepository = taskRepository;
+        this.wbsItemRepository = wbsItemRepository;
         this.jdbc = jdbc;
         this.clock = clock;
     }
@@ -150,8 +156,12 @@ public class PlanSnapshotAssembler {
 
     /**
      * 태스크 사실 — blocks가 가리키는 태스크 + {@code extraTaskIds}(자동 배치 후보)의 합집합. dry-run 편집이 있으면
-     * 덮어쓴다. WBS는 미구현이라 null. taskRepository는 소유 무관 findAllById지만 taskId 출처가 이미 사용자 스코프
+     * 덮어쓴다. taskRepository는 소유 무관 findAllById지만 taskId 출처가 이미 사용자 스코프
      * (blocks=사용자 계획, extraTaskIds=서비스가 사용자 미배치 태스크로 조회)라 안전하다.
+     *
+     * <p><b>WBS 기간을 함께 싣는다</b>(V5 — PLAN-27 "WBS 범위 밖 배치 확인"). {@code wbs_items}는 태스크와
+     * 1:0..1이라 설정 안 한 태스크는 행이 없고, 그 태스크는 {@code wbsStart/wbsEnd = null}로 남아 엔진이
+     * 판정에서 제외한다(계약 §3.3 V5 "WBS 미설정은 판정 제외"). taskId 목록으로 한 번에 읽어 N+1을 피한다.
      */
     private Map<UUID, TaskFacts> taskFacts(List<BlockView> blocks, Map<UUID, VirtualTaskEdit> taskEdits,
                                            List<UUID> extraTaskIds) {
@@ -163,11 +173,14 @@ public class PlanSnapshotAssembler {
         if (taskIds.isEmpty()) {
             return Map.of();
         }
+        Map<UUID, WbsItem> wbsByTaskId = wbsItemRepository.findByTaskIdIn(taskIds).stream()
+                .collect(Collectors.toMap(WbsItem::getTaskId, w -> w));
         return taskRepository.findAllById(taskIds).stream()
-                .collect(Collectors.toMap(Task::getId, t -> toTaskFacts(t, taskEdits.get(t.getId()))));
+                .collect(Collectors.toMap(Task::getId,
+                        t -> toTaskFacts(t, wbsByTaskId.get(t.getId()), taskEdits.get(t.getId()))));
     }
 
-    private static TaskFacts toTaskFacts(Task t, VirtualTaskEdit edit) {
+    private static TaskFacts toTaskFacts(Task t, WbsItem wbs, VirtualTaskEdit edit) {
         LocalDate dueDate = t.getDueDate();
         int estimatedMinutes = t.getEstimatedMinutes() == null ? 0 : t.getEstimatedMinutes();
         int priority = t.getPriority() == null ? UNSET_PRIORITY : t.getPriority();
@@ -175,9 +188,16 @@ public class PlanSnapshotAssembler {
             if (edit.estimatedMinutes() != null) {
                 estimatedMinutes = edit.estimatedMinutes();
             }
-            dueDate = edit.dueDate();
+            // null = "이 필드는 편집 안 함"이다 — 무조건 대입하면 예상시간만 담은 편집이 마감일을 지워
+            // V6(마감일 이후 배치)가 조용히 침묵한다. estimatedMinutes와 같은 규약으로 맞춘다.
+            if (edit.dueDate() != null) {
+                dueDate = edit.dueDate();
+            }
         }
-        return new TaskFacts(dueDate, null, null, estimatedMinutes, priority);
+        return new TaskFacts(dueDate,
+                wbs == null ? null : wbs.getStartDate(),
+                wbs == null ? null : wbs.getEndDate(),
+                estimatedMinutes, priority);
     }
 
     /** common.Weekday(MON..SUN) → java DayOfWeek(MONDAY..SUNDAY). 선언 순서가 월~일로 1:1. */
