@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDate;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -18,6 +19,16 @@ import java.util.UUID;
 public interface WbsItemRepository extends JpaRepository<WbsItem, UUID> {
 
     Optional<WbsItem> findByTaskId(UUID taskId);
+
+    /**
+     * 여러 태스크의 WBS 기간을 한 번에 (계획 검증 V5 — PLAN-27). 블록이 가리키는 태스크가 여러 개라
+     * {@link #findByTaskId}를 루프로 돌리면 N+1이 된다. WBS 미설정 태스크는 행이 없어 결과에서 빠지고,
+     * 호출 측이 그것을 "판정 제외"로 읽는다(엔진 계약 §3.3 V5 "WBS 미설정은 판정 제외").
+     *
+     * <p>소유 판정은 여기서 하지 않는다(이 인터페이스 javadoc 승계) — 호출 측이 이미 사용자 스코프로
+     * 좁힌 taskId만 넘긴다.
+     */
+    List<WbsItem> findByTaskIdIn(Collection<UUID> taskIds);
 
     /** 프로젝트의 WBS 항목 수 (복제 프리뷰 — PROJ-11). */
     long countByProjectId(UUID projectId);
