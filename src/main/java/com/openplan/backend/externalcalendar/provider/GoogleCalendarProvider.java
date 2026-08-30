@@ -117,7 +117,8 @@ public class GoogleCalendarProvider implements CalendarProvider {
                 continue;
             }
             String title = text(item, "summary");
-            events.add(new ProviderEvent(id, title != null ? title : "(제목 없음)", start, end, calendarName));
+            events.add(new ProviderEvent(id, title != null ? title : "(제목 없음)", start, end, calendarName,
+                    externalCalendarId));
         }
         if (body.path("items").size() >= MAX_RESULTS) {
             log.warn("구글 캘린더 일정이 조회 상한에 도달했다 — 이후 일정은 보이지 않는다: calendar={} limit={}",

@@ -40,6 +40,16 @@ public class FixedSchedule {
     @Column(name = "connection_id")
     private UUID connectionId;
 
+    /**
+     * 이 고정 일정을 만든 외부 일정(ONB-09 반영). MANUAL 은 null.
+     *
+     * <p>이 링크가 없던 동안 세 증상이 함께 있었다 — 원격 수정이 안 따라오고, 원격 삭제가 안 지워지고,
+     * 이중 클릭으로 두 벌이 생겨도 DB 가 못 막았다(이슈 #68 · PR #33 리뷰). 원인은 하나였다.
+     * 부분 UNIQUE(ux_fixed_external_event)가 마지막 것을 DB 수준에서 닫는다.
+     */
+    @Column(name = "external_calendar_event_id")
+    private UUID externalCalendarEventId;
+
     @Column(nullable = false, length = 255)
     private String title;
 
@@ -113,13 +123,15 @@ public class FixedSchedule {
      * 이 테이블은 요일 + 시분 반복이다. 그래서 {@code startDate}와 {@code endDate}를 <b>그 일정의
      * 날짜로 같게</b> 두어 반복을 하루로 가둔다 — 그렇게 하지 않으면 매주 같은 요일이 영구히 막힌다.
      */
-    public static FixedSchedule createExternal(UUID userId, UUID connectionId, String title, Weekday weekday,
+    public static FixedSchedule createExternal(UUID userId, UUID connectionId, UUID externalCalendarEventId,
+                                               String title, Weekday weekday,
                                                LocalTime startTime, LocalTime endTime,
                                                LocalDate startDate, LocalDate endDate, Instant createdAt) {
         FixedSchedule fs = new FixedSchedule();
         fs.id = UUID.randomUUID();
         fs.userId = userId;
         fs.connectionId = connectionId;
+        fs.externalCalendarEventId = externalCalendarEventId;
         fs.title = title;
         fs.weekday = weekday;
         fs.startTime = startTime;

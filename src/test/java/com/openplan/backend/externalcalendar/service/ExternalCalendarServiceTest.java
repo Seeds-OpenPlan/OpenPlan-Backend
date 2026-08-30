@@ -6,6 +6,8 @@ import com.openplan.backend.externalcalendar.domain.ApplyMode;
 import com.openplan.backend.externalcalendar.dto.ApplyEventRequest;
 import com.openplan.backend.externalcalendar.domain.ExternalCalendarConnection;
 import com.openplan.backend.externalcalendar.domain.ExternalCalendarEvent;
+import com.openplan.backend.common.Weekday;
+import com.openplan.backend.fixedschedule.domain.FixedSchedule;
 import com.openplan.backend.externalcalendar.domain.ExternalCalendarProvider;
 import com.openplan.backend.externalcalendar.domain.ExternalCalendarSelection;
 import com.openplan.backend.externalcalendar.provider.CalendarProvider;
@@ -27,9 +29,11 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
@@ -40,6 +44,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -204,6 +209,168 @@ class ExternalCalendarServiceTest {
     }
 
     /** 동기화 경로가 도는 데 필요한 최소 스텁. 반환값은 활성 연결. */
+    // ── #68 원격 수정·삭제 전파 ────────────────────────────────────────────────
+
+    /** 이번 회차에 제공자가 이 일정들을 돌려주도록 세운다(두 캘린더 모두 같은 목록). */
+    private void providerReturns(ProviderEvent... events) {
+        when(calendarProvider.listEvents(any(), eq("cal-a"), any(), any(), any())).thenReturn(List.of(events));
+        when(calendarProvider.listEvents(any(), eq("cal-b"), any(), any(), any())).thenReturn(List.of());
+    }
+
+    /**
+     * 이미 저장돼 있는(그리고 반영까지 된) 일정 하나.
+     *
+     * <p>{@code externalCalendarId} 를 표시 이름과 <b>따로</b> 받는 것이 핵심이다 — 삭제 귀속은
+     * 이름이 아니라 식별자로 한다(2026-08-29 리뷰 Blocking).
+     */
+    private ExternalCalendarEvent storedApplied(UUID connectionId, ApplyMode mode,
+                                                String sourceCalendar, String externalCalendarId) {
+        ExternalCalendarEvent e = ExternalCalendarEvent.candidate(connectionId, "evt-1", "옛 제목",
+                Instant.parse("2026-08-20T01:00:00Z"), Instant.parse("2026-08-20T02:00:00Z"), sourceCalendar, NOW);
+        ReflectionTestUtils.setField(e, "id", UUID.randomUUID());
+        e.locateIn(externalCalendarId);
+        e.apply(mode);
+        return e;
+    }
+
+    @Test
+    @DisplayName("원격에서 시간이 바뀌면 AS_IS 로 반영한 고정 일정이 따라 바뀐다")
+    void 원격_수정이_고정일정에_반영된다() {
+        ExternalCalendarConnection connection = stubSync();
+        ExternalCalendarEvent stored = storedApplied(connection.getId(), ApplyMode.AS_IS, "개인", "cal-a");
+        when(eventRepository.findByConnectionId(connection.getId())).thenReturn(List.of(stored));
+        providerReturns(new ProviderEvent("evt-1", "새 제목",
+                Instant.parse("2026-08-20T04:00:00Z"), Instant.parse("2026-08-20T05:00:00Z"), "개인"));
+
+        FixedSchedule linked = FixedSchedule.createExternal(USER, connection.getId(), stored.getId(),
+                "옛 제목", Weekday.THU, LocalTime.of(10, 0), LocalTime.of(11, 0),
+                LocalDate.of(2026, 8, 20), LocalDate.of(2026, 8, 20), NOW);
+        when(fixedScheduleRepository.findByExternalCalendarEventId(stored.getId())).thenReturn(Optional.of(linked));
+        FixedSchedule converted = FixedSchedule.createExternal(USER, connection.getId(), stored.getId(),
+                "새 제목", Weekday.THU, LocalTime.of(13, 0), LocalTime.of(14, 0),
+                LocalDate.of(2026, 8, 20), LocalDate.of(2026, 8, 20), NOW);
+        when(converter.convert(eq(USER), eq(stored), isNull())).thenReturn(converted);
+
+        service.listEvents(USER, connection.getId(), null);
+
+        assertThat(linked.getTitle()).isEqualTo("새 제목");
+        assertThat(linked.getStartTime()).isEqualTo(LocalTime.of(13, 0));
+    }
+
+    @Test
+    @DisplayName("EDITED 로 손수정한 고정 일정은 원격이 바뀌어도 건드리지 않는다 — 사용자가 한 일을 지운다")
+    void 손수정한_고정일정은_원격_수정이_덮지_않는다() {
+        ExternalCalendarConnection connection = stubSync();
+        ExternalCalendarEvent stored = storedApplied(connection.getId(), ApplyMode.EDITED, "개인", "cal-a");
+        when(eventRepository.findByConnectionId(connection.getId())).thenReturn(List.of(stored));
+        providerReturns(new ProviderEvent("evt-1", "새 제목",
+                Instant.parse("2026-08-20T04:00:00Z"), Instant.parse("2026-08-20T05:00:00Z"), "개인"));
+
+        service.listEvents(USER, connection.getId(), null);
+
+        verify(fixedScheduleRepository, never()).findByExternalCalendarEventId(any());
+        verify(converter, never()).convert(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("원격에서 사라지면 고정 일정까지 지운다")
+    void 원격_삭제가_고정일정까지_지운다() {
+        ExternalCalendarConnection connection = stubSync();
+        ExternalCalendarEvent stored = storedApplied(connection.getId(), ApplyMode.AS_IS, "개인", "cal-a");
+        when(eventRepository.findByConnectionId(connection.getId())).thenReturn(List.of(stored));
+        providerReturns();   // 아무것도 안 돌려준다 = 원격에서 지워졌다
+
+        service.listEvents(USER, connection.getId(), null);
+
+        verify(fixedScheduleRepository).deleteByExternalCalendarEventIdIn(List.of(stored.getId()));
+        verify(eventRepository).deleteAll(List.of(stored));
+    }
+
+    @Test
+    @DisplayName("🔴 동기화 창 밖의 일정은 안 왔어도 지우지 않는다 — 조회조차 안 한 구간이다")
+    void 창_밖의_일정은_지우지_않는다() {
+        ExternalCalendarConnection connection = stubSync();
+        // today=2026-08-20 기준 창은 과거 7일~미래 56일. 1년 전 일정은 애초에 조회 대상이 아니다.
+        ExternalCalendarEvent old = ExternalCalendarEvent.candidate(connection.getId(), "evt-old", "작년 회의",
+                Instant.parse("2025-08-20T01:00:00Z"), Instant.parse("2025-08-20T02:00:00Z"), "개인", NOW);
+        ReflectionTestUtils.setField(old, "id", UUID.randomUUID());
+        old.apply(ApplyMode.AS_IS);
+        when(eventRepository.findByConnectionId(connection.getId())).thenReturn(List.of(old));
+        providerReturns();
+
+        service.listEvents(USER, connection.getId(), null);
+
+        verify(fixedScheduleRepository, never()).deleteByExternalCalendarEventIdIn(any());
+        verify(eventRepository, never()).deleteAll(any());
+    }
+
+    @Test
+    @DisplayName("🔴 선택 해제한 캘린더의 일정은 안 왔어도 지우지 않는다 — 그 캘린더는 조회하지 않았다")
+    void 선택_해제한_캘린더의_일정은_지우지_않는다() {
+        ExternalCalendarConnection connection = stubSync();   // 선택된 캘린더는 "개인"·"팀"
+        ExternalCalendarEvent stored = storedApplied(connection.getId(), ApplyMode.AS_IS, "예전에 골랐던 캘린더", "cal-gone");
+        when(eventRepository.findByConnectionId(connection.getId())).thenReturn(List.of(stored));
+        providerReturns();
+
+        service.listEvents(USER, connection.getId(), null);
+
+        verify(fixedScheduleRepository, never()).deleteByExternalCalendarEventIdIn(any());
+        verify(eventRepository, never()).deleteAll(any());
+    }
+
+    @Test
+    @DisplayName("🔴 이름이 같아도 다른 캘린더면 지우지 않는다 — 이름은 유일하지 않다")
+    void 이름이_같아도_다른_캘린더면_지우지_않는다() {
+        ExternalCalendarConnection connection = stubSync();   // 선택: cal-a("개인") · cal-b("팀")
+        // 선택 해제된 캘린더인데 **이름이 선택된 것과 같다.** 이름으로 판정하면 지워진다.
+        ExternalCalendarEvent stored = storedApplied(connection.getId(), ApplyMode.AS_IS, "개인", "cal-c");
+        when(eventRepository.findByConnectionId(connection.getId())).thenReturn(List.of(stored));
+        providerReturns();
+
+        service.listEvents(USER, connection.getId(), null);
+
+        verify(fixedScheduleRepository, never()).deleteByExternalCalendarEventIdIn(any());
+        verify(eventRepository, never()).deleteAll(any());
+    }
+
+    @Test
+    @DisplayName("🔴 출처 캘린더를 모르는 일정은 지우지 않는다 — 모르면 남긴다")
+    void 출처를_모르는_일정은_지우지_않는다() {
+        ExternalCalendarConnection connection = stubSync();
+        ExternalCalendarEvent stored = storedApplied(connection.getId(), ApplyMode.AS_IS, "개인", null);
+        when(eventRepository.findByConnectionId(connection.getId())).thenReturn(List.of(stored));
+        providerReturns();
+
+        service.listEvents(USER, connection.getId(), null);
+
+        verify(fixedScheduleRepository, never()).deleteByExternalCalendarEventIdIn(any());
+        verify(eventRepository, never()).deleteAll(any());
+    }
+
+    @Test
+    @DisplayName("🔴 진짜 동시 반영은 500 이 아니라 409 다 — isCandidate() 검사는 check-then-act 라 둘 다 통과한다")
+    void 동시_반영은_409다() {
+        ExternalCalendarConnection connection = ExternalCalendarConnection.connect(
+                USER, ExternalCalendarProvider.GOOGLE, "me@example.com", "enc", "renc", NOW, NOW);
+        ExternalCalendarEvent event = ExternalCalendarEvent.candidate(connection.getId(), "evt-1", "회의",
+                Instant.parse("2026-08-20T01:00:00Z"), Instant.parse("2026-08-20T02:00:00Z"), "개인", NOW);
+        ReflectionTestUtils.setField(event, "id", UUID.randomUUID());
+        when(eventRepository.findById(event.getId())).thenReturn(Optional.of(event));
+        when(connectionRepository.findByIdAndUserId(connection.getId(), USER)).thenReturn(Optional.of(connection));
+        FixedSchedule fs = FixedSchedule.createExternal(USER, connection.getId(), event.getId(), "회의",
+                Weekday.THU, LocalTime.of(10, 0), LocalTime.of(11, 0),
+                LocalDate.of(2026, 8, 20), LocalDate.of(2026, 8, 20), NOW);
+        when(converter.convert(eq(USER), eq(event), isNull())).thenReturn(fs);
+        // 진 쪽이 겪는 것 — ux_fixed_external_event 위반이 flush 에서 터진다.
+        when(fixedScheduleRepository.saveAndFlush(fs)).thenThrow(new DataIntegrityViolationException("ux_fixed_external_event"));
+
+        assertThatThrownBy(() -> service.apply(USER, event.getId(), new ApplyEventRequest("AS_IS", null)))
+                .isInstanceOf(OpenPlanException.class)
+                .satisfies(ex -> assertThat(((OpenPlanException) ex).errorCode())
+                        .as("계약이 이 자리에 409 E-EXT-005 를 정본으로 명시한다")
+                        .isEqualTo(ErrorCode.E_EXT_005));
+    }
+
     private ExternalCalendarConnection stubSync() {
         ExternalCalendarConnection connection = ExternalCalendarConnection.connect(
                 USER, ExternalCalendarProvider.GOOGLE, "me@example.com", "enc", "renc", NOW, NOW);

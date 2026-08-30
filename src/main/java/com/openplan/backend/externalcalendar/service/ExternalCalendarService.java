@@ -45,10 +45,15 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * 외부 캘린더 연동 (ST-B1-11 · ONB-07/08/09 · FIX-13~17).
@@ -377,7 +382,24 @@ public class ExternalCalendarService {
         if (mode != ApplyMode.EXCLUDE) {
             FixedSchedule fixedSchedule = converter.convert(userId, event,
                     mode == ApplyMode.EDITED ? request.edited() : null);
-            fixedScheduleRepository.save(fixedSchedule);
+            try {
+                // 🔴 save() 가 아니라 saveAndFlush() 다. FixedSchedule.id 는 앱이 채우는 UUID 라
+                //    @GeneratedValue 가 없고, 그러면 하이버네이트가 INSERT 를 커밋까지 미룬다.
+                //    미루면 ux_fixed_external_event 위반이 이 try **밖**(커밋 시점)에서 터져
+                //    미분류 500 이 된다 — ExternalCalendarEventWriter 가 같은 이유로 flush 를 강제한다.
+                fixedScheduleRepository.saveAndFlush(fixedSchedule);
+            } catch (DataIntegrityViolationException e) {
+                // 진짜 동시 요청(둘 다 커밋 전에 위 isCandidate() 를 통과) — 그 검사는 check-then-act 라
+                // 순차 재시도만 막는다. 여기서는 **DB 가 최종 판정자**다.
+                // 계약이 이 자리에 409 E-EXT-005 를 정본으로 명시한다(openapi.yaml:826-831 —
+                // "클라이언트는 이 응답을 '이미 처리됨' 으로 읽으면 된다").
+                //
+                // 🔴 삼키지 않고 던진다. 삼키고 계속하면 실패한 flush 로 세션이 망가진 채 커밋에
+                //    들어가 UnexpectedRollbackException 이 된다(ExternalCalendarEventWriter 주석).
+                //    던지면 트랜잭션이 통째로 되돌아가고 event.apply(mode) 도 함께 없던 일이 된다 —
+                //    이긴 쪽이 만든 상태만 남으므로 그것이 바라는 동작이다.
+                throw new OpenPlanException(ErrorCode.E_EXT_005);
+            }
             fixedScheduleResponse = FixedScheduleResponse.from(fixedSchedule);
         }
         event.apply(mode);
@@ -410,15 +432,29 @@ public class ExternalCalendarService {
 
         Instant now = userClock.now();
         List<ExternalCalendarEvent> created = new ArrayList<>();
+        // 🔴 이번 회차에 제공자가 실제로 돌려준 일정 — 삭제 판정의 유일한 근거다(#68).
+        //    "안 왔다" 를 곧바로 "지워졌다" 로 읽으면 안 된다. 아래 propagateDeletions 참고.
+        Set<String> seen = new HashSet<>();
+        // 원격에서 값이 바뀐 것 — 반영된 고정 일정을 따라 고쳐야 한다.
+        List<ExternalCalendarEvent> remoteChanged = new ArrayList<>();
         for (ExternalCalendarSelection selection : selections) {
             List<ProviderEvent> fetched = providerRegistry.get(connection.getProvider())
                     .listEvents(credential, selection.getExternalCalendarId(), selection.getCalendarName(), from, to);
 
             for (ProviderEvent providerEvent : fetched) {
+                seen.add(providerEvent.externalEventId());
                 ExternalCalendarEvent stored = existing.get(providerEvent.externalEventId());
                 if (stored != null) {
+                    // resync 는 값을 덮어쓰므로 **덮어쓰기 전에** 비교해야 한다.
+                    boolean differs = !Objects.equals(stored.getTitle(), providerEvent.title())
+                            || !Objects.equals(stored.getStartAt(), providerEvent.startAt())
+                            || !Objects.equals(stored.getEndAt(), providerEvent.endAt());
                     stored.resync(providerEvent.title(), providerEvent.startAt(), providerEvent.endAt(),
                             providerEvent.sourceCalendar(), now);
+                    stored.locateIn(providerEvent.externalCalendarId());
+                    if (differs) {
+                        remoteChanged.add(stored);
+                    }
                 } else {
                     // 방금 만든 것도 existing 에 넣는다 — 두 캘린더가 같은 원본 일정을 돌려주면
                     // (초대받은 일정이 개인·팀 캘린더에 함께 보이는 흔한 경우) 같은 호출 안에서
@@ -427,11 +463,15 @@ public class ExternalCalendarService {
                             providerEvent.externalEventId(), providerEvent.title(),
                             providerEvent.startAt(), providerEvent.endAt(),
                             providerEvent.sourceCalendar(), now);
+                    candidate.locateIn(providerEvent.externalCalendarId());
                     created.add(candidate);
                     existing.put(providerEvent.externalEventId(), candidate);
                 }
             }
         }
+        propagateRemoteUpdates(userId, remoteChanged);
+        propagateRemoteDeletions(connection, existing, seen, selections, from, to);
+
         if (created.isEmpty()) {
             return;
         }
@@ -458,6 +498,84 @@ public class ExternalCalendarService {
             log.info("외부 캘린더 동기화 경합 — 이미 저장된 일정 {}건을 건너뛴다. connectionId={}",
                     skipped, connection.getId());
         }
+    }
+
+    /**
+     * 원격에서 바뀐 값을 반영된 고정 일정에 옮긴다 (#68).
+     *
+     * <p><b>AS_IS 로 반영한 것만 따라간다.</b> {@code EDITED} 는 사용자가 시각·제목을 직접 고쳐 넣은
+     * 것이라, 원격이 바뀔 때마다 덮으면 그 손수정이 조용히 사라진다. 대신 그 일정은 원격과 어긋난 채
+     * 남는데, 둘 중 하나는 포기해야 하는 자리에서 <b>사용자가 명시적으로 한 일</b>을 지키는 쪽을 골랐다.
+     *
+     * <p>🔴 변환 실패가 동기화를 죽이지 않는다. 원격 수정이 자정을 넘기는 등으로 고정 일정 모델에 담기지
+     * 않으면 {@link ExternalEventToFixedSchedule} 이 422 를 던진다. 그건 <b>이 한 건</b>의 문제이지
+     * 동기화 전체의 문제가 아니다 — 던지게 두면 다른 일정까지 갱신되지 않고 목록 조회가 통째로 실패한다.
+     */
+    private void propagateRemoteUpdates(UUID userId, List<ExternalCalendarEvent> remoteChanged) {
+        for (ExternalCalendarEvent event : remoteChanged) {
+            if (event.getApplyStatus() != ApplyStatus.APPLIED || event.getApplyMode() != ApplyMode.AS_IS) {
+                continue;   // 후보·제외는 옮길 대상이 없고, EDITED 는 위 이유로 건드리지 않는다.
+            }
+            Optional<FixedSchedule> linked = fixedScheduleRepository.findByExternalCalendarEventId(event.getId());
+            if (linked.isEmpty()) {
+                continue;   // 링크가 생기기 전에 반영된 것 — 출처를 되찾을 방법이 없다(마이그레이션 주석 참고).
+            }
+            try {
+                FixedSchedule fresh = converter.convert(userId, event, null);
+                linked.get().edit(fresh.getTitle(), fresh.getWeekday(), fresh.getStartTime(),
+                        fresh.getEndTime(), fresh.getStartDate(), fresh.getEndDate());
+            } catch (OpenPlanException e) {
+                log.info("원격 수정을 고정 일정에 옮기지 못했다 — 이 건만 건너뛴다. eventId={} reason={}",
+                        event.getId(), e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * 원격에서 사라진 일정과 그 고정 일정을 정리한다 (#68).
+     *
+     * <p>🔴 <b>"이번에 안 왔으면 삭제" 는 안 된다.</b> 셋 다 "안 온 것" 으로 보이지만 삭제가 아니다 —
+     * 하나라도 빠뜨리면 멀쩡한 일정이 대량으로 사라진다.
+     * <ul>
+     *   <li><b>동기화 창 밖</b> — 과거·미래 경계 너머의 일정은 애초에 조회하지 않았다. 시각으로 거른다.</li>
+     *   <li><b>선택 해제한 캘린더</b> — 그 캘린더는 이번에 조회조차 하지 않았다. 출처 <b>식별자</b>로 거른다.
+     *       식별자가 {@code null} 이면 귀속을 못 하므로 <b>지우지 않는다</b>(모르면 남긴다).
+     *       🔴 표시 이름으로 판정하면 안 된다(2026-08-29 리뷰 Blocking) — 이름은 유일하지 않다.
+     *       선택의 유일성 제약은 {@code external_calendar_id} 기준이라({@code ux_ext_selection}),
+     *       같은 이름의 캘린더 둘 중 하나만 해제하면 <b>조회하지도 않은 쪽의 일정이 지워진다.</b></li>
+     *   <li><b>제공자 조회 실패</b> — 네트워크 순단·인증 만료. 이건 여기서 거르지 않아도 된다:
+     *       {@code listEvents} 가 던지면 동기화가 통째로 중단돼 이 메서드까지 오지 못한다.
+     *       <b>그 성질에 기대고 있으므로</b>, 나중에 조회 실패를 삼키도록 고치는 사람은 여기도 함께 봐야 한다.</li>
+     * </ul>
+     *
+     * <p>사용자 결정(2026-08-28) — 원격에서 지워진 일정은 <b>완전 삭제</b>다. 반영 모드와 무관하다:
+     * 원본이 없어졌으므로 {@code EDITED} 로 고쳐 둔 것도 근거를 잃는다.
+     */
+    private void propagateRemoteDeletions(ExternalCalendarConnection connection,
+                                          Map<String, ExternalCalendarEvent> existing,
+                                          Set<String> seen,
+                                          List<ExternalCalendarSelection> selections,
+                                          Instant from, Instant to) {
+        Set<String> fetchedCalendarIds = selections.stream()
+                .map(ExternalCalendarSelection::getExternalCalendarId)
+                .collect(Collectors.toSet());
+
+        List<ExternalCalendarEvent> gone = existing.values().stream()
+                .filter(e -> e.getId() != null)                       // 이번에 만든 후보는 아직 저장 전이다
+                .filter(e -> !seen.contains(e.getExternalEventId()))
+                .filter(e -> !e.getStartAt().isBefore(from) && e.getStartAt().isBefore(to))
+                .filter(e -> e.getExternalCalendarId() != null
+                        && fetchedCalendarIds.contains(e.getExternalCalendarId()))
+                .toList();
+        if (gone.isEmpty()) {
+            return;
+        }
+
+        List<UUID> goneIds = gone.stream().map(ExternalCalendarEvent::getId).toList();
+        int removedSchedules = fixedScheduleRepository.deleteByExternalCalendarEventIdIn(goneIds);
+        eventRepository.deleteAll(gone);
+        log.info("원격에서 사라진 일정 {}건을 정리했다(고정 일정 {}건 포함). connectionId={}",
+                gone.size(), removedSchedules, connection.getId());
     }
 
     /** 부재와 타인 소유를 같은 404 로 돌린다 — 존재 여부를 알려주지 않는다(NFR-030). */

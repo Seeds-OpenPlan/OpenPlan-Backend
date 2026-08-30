@@ -7,6 +7,8 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -31,4 +33,18 @@ public interface ExternalFixedScheduleRepository extends JpaRepository<FixedSche
     @Query("update FixedSchedule fs set fs.status = :status where fs.connectionId = :connectionId")
     int updateStatusByConnectionId(@Param("connectionId") UUID connectionId,
                                    @Param("status") FixedScheduleStatus status);
+
+    /** 원격 변경을 따라갈 대상 — 반영으로 만들어진 고정 일정을 출처 일정 id 로 찾는다(#68). */
+    Optional<FixedSchedule> findByExternalCalendarEventId(UUID externalCalendarEventId);
+
+    /**
+     * 원격에서 사라진 일정의 고정 일정을 지운다(#68).
+     *
+     * <p>DB 에도 {@code ON DELETE CASCADE} 가 걸려 있어 외부 일정 행만 지워도 함께 사라지지만,
+     * 여기서 명시적으로 지운다 — 무엇이 왜 사라지는지가 자바 코드에 보여야 하고, DB 없이 도는
+     * 단위 테스트가 그 동작을 검증할 수 있어야 한다.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("delete from FixedSchedule fs where fs.externalCalendarEventId in :eventIds")
+    int deleteByExternalCalendarEventIdIn(@Param("eventIds") Collection<UUID> eventIds);
 }
