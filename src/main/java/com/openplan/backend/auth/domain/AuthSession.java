@@ -59,6 +59,16 @@ public class AuthSession {
     @Column(name = "status", nullable = false, length = 20)
     private AuthSessionStatus status;
 
+    /**
+     * 회전으로 소진된 시각. 소진되지 않았으면 null.
+     *
+     * <p>재사용 탐지가 "정상 클라이언트의 중복 갱신"과 "탈취"를 가르는 기준이다 — 회전이 커밋된 뒤
+     * {@code Set-Cookie}가 브라우저에 닿기까지의 창에서 출발한 두 번째 갱신은 헌 토큰을 들고 오는데,
+     * 그것은 탈취가 아니라 경쟁이다. 시각을 남기지 않으면 둘을 구분할 방법이 없다.
+     */
+    @Column(name = "rotated_at")
+    private Instant rotatedAt;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -89,9 +99,13 @@ public class AuthSession {
 
     /**
      * 회전으로 소진. <b>삭제하지 않고 EXPIRED로 남긴다</b> — 이 행이 재사용 탐지의 증거다.
+     *
+     * <p><b>시각을 함께 남긴다.</b> 남기지 않으면 뒤늦게 도착한 헌 토큰이 "회전 직후의 중복 갱신"인지
+     * "한참 뒤에 온 탈취"인지 알 수 없고, 그 구분이 없으면 전자까지 전 세션 폐기로 처리하게 된다.
      */
-    public void expire() {
+    public void rotate(Instant now) {
         this.status = AuthSessionStatus.EXPIRED;
+        this.rotatedAt = now;
     }
 
     /**
@@ -99,6 +113,11 @@ public class AuthSession {
      */
     public void revoke() {
         this.status = AuthSessionStatus.REVOKED;
+    }
+
+    /** 회전으로 소진된 시각. 소진 전이거나 이 컬럼 도입 이전의 행이면 null. */
+    public Instant getRotatedAt() {
+        return rotatedAt;
     }
 
     /**

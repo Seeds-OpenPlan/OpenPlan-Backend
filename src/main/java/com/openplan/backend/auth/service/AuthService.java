@@ -27,6 +27,7 @@ import org.springframework.http.ResponseCookie;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
@@ -49,6 +50,15 @@ import java.util.UUID;
 public class AuthService {
 
     private static final Logger log = LoggerFactory.getLogger(AuthService.class);
+
+    /**
+     * 회전 직후 이 시간 안에 도착한 헌 refresh 는 탈취가 아니라 <b>정상 클라이언트의 중복 갱신</b>으로 본다.
+     *
+     * <p>실제로 필요한 창은 회전 커밋 ~ {@code Set-Cookie} 도착까지의 응답 왕복 지연(수백 ms)이다.
+     * 30초는 거기에 모바일 회선·백그라운드 탭 복귀까지 감안한 여유이며, 탈취자가 굳이 이 창에 맞춰
+     * 들어올 이유는 없으므로 탐지력을 의미 있게 낮추지 않는다.
+     */
+    private static final Duration ROTATION_GRACE = Duration.ofSeconds(30);
 
     private final UserRepository userRepository;
     private final UserProfileRepository userProfileRepository;
@@ -296,9 +306,29 @@ public class AuthService {
                 .orElseThrow(() -> new OpenPlanException(ErrorCode.E_AUTH_007));
 
         if (session.getStatus() != AuthSessionStatus.ACTIVE) {
-            // 재사용 — 이 사용자의 모든 활성 세션을 끊는다.
+            // 소진된 토큰이 다시 왔다. 여기서 갈린다 — 탈취인가, 정상 클라이언트의 중복 갱신인가.
+            //
+            // 🔴 구분이 없으면 정상 사용자가 30분마다 쫓겨난다. 회전은 서버에서 커밋된 뒤
+            //    Set-Cookie 가 브라우저에 닿기까지 수백 ms 가 걸리는데, 그 창에 출발한 두 번째
+            //    갱신은 아직 헌 토큰을 들고 온다. 액세스 토큰이 만료되는 순간 한 화면의 쿼리
+            //    여러 개가 같은 틱에 401 을 받으므로 이 창에 걸릴 확률이 낮지 않다.
+            //    그것을 탈취로 보고 전 세션을 끊으면, 방금 발급한 정상 refresh 까지 함께 죽는다.
+            //
+            // 유예창 안이면 폐기하지 않는다. 호출자는 이미 새 쿠키를 들고 있으므로 다음 요청은
+            // 그대로 통과한다 — 401 하나로 끝내는 것이 맞다.
+            Instant rotatedAt = session.getRotatedAt();
+            boolean withinGrace = rotatedAt != null
+                    && Duration.between(rotatedAt, now).compareTo(ROTATION_GRACE) <= 0;
+            if (withinGrace) {
+                log.info("회전 직후 중복 갱신 — 폐기하지 않는다. sessionId={}", session.getSessionId());
+                throw new OpenPlanException(ErrorCode.E_AUTH_007);
+            }
+
+            // 유예창 밖 = 재사용. 어느 쪽이 도둑인지 서버가 구분할 수 없으므로 이 사용자의 활성
+            // 세션을 전부 끊는다(ADR-0001 "재사용 감지 시 세션 폐기").
             // 🔴 별도 트랜잭션이어야 한다: 아래 예외가 이 트랜잭션을 롤백시키므로 같은 tx에서 폐기하면
             //    폐기까지 되돌아간다({@link AuthSessionTerminator} javadoc — 테스트가 잡은 결함).
+            log.warn("refresh 재사용 탐지 — 전 세션 폐기. userId={} 소진={}", session.getUserId(), rotatedAt);
             terminator.revokeAllActive(session.getUserId());
             throw new OpenPlanException(ErrorCode.E_AUTH_007);
         }
@@ -310,7 +340,7 @@ public class AuthService {
         }
 
         String previousPath = session.getPreviousPath();
-        session.expire();   // 회전: 소진 표시를 남겨 다음 재사용을 잡을 수 있게 한다
+        session.rotate(now);   // 회전: 소진 표시와 그 시각을 남겨 다음 재사용을 잡을 수 있게 한다
         OpenedSession rotated = openSession(jwt, session.getUserId(), previousPath, now);
 
         return new RefreshResult(
