@@ -54,11 +54,16 @@ public class AuthService {
     /**
      * 회전 직후 이 시간 안에 도착한 헌 refresh 는 탈취가 아니라 <b>정상 클라이언트의 중복 갱신</b>으로 본다.
      *
-     * <p>실제로 필요한 창은 회전 커밋 ~ {@code Set-Cookie} 도착까지의 응답 왕복 지연(수백 ms)이다.
-     * 30초는 거기에 모바일 회선·백그라운드 탭 복귀까지 감안한 여유이며, 탈취자가 굳이 이 창에 맞춰
-     * 들어올 이유는 없으므로 탐지력을 의미 있게 낮추지 않는다.
+     * <p>필요한 창은 회전 커밋 ~ {@code Set-Cookie} 도착까지의 <b>응답 왕복 지연</b> 하나다.
+     * 2026-09-07 실서버 실측({@code POST /auth/token-refresh} 5회): 206·227·232·234·247 ms —
+     * 중앙값 232 ms. 3초는 거기에 모바일 회선·백그라운드 탭 복귀까지 얹은 약 12배 여유다.
+     *
+     * <p>🔴 <b>넓히면 안 된다.</b> 이 창은 «정상 중복» 만이 아니라 <b>실시간 릴레이 재사용</b>도 함께
+     * 통과시킨다 — MITM 이 같은 토큰을 중계하는 지연도 수백 ms~수 초라 신호가 구분되지 않는다
+     * (PR #74 리뷰 Should-fix). 실측 왕복에 붙는 최소 여유로 유지해, 그 창을 필요 이상으로
+     * 열어 두지 않는 것이 이 상수의 목적이다.
      */
-    private static final Duration ROTATION_GRACE = Duration.ofSeconds(30);
+    private static final Duration ROTATION_GRACE = Duration.ofSeconds(3);
 
     private final UserRepository userRepository;
     private final UserProfileRepository userProfileRepository;
