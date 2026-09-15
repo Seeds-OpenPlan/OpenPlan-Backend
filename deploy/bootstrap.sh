@@ -151,7 +151,7 @@ log "4/8 .env 확인"
 # 시드와 사전검사가 같은 목록을 본다 — 둘이 갈라지면 "안내는 여섯인데 검사는 넷" 이 된다.
 REQUIRED_KEYS=(DB_HOST DB_PASSWORD JWT_SECRET APP_BASE_URL API_BASE_URL
                GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET MAIL_USERNAME MAIL_PASSWORD
-               GROQ_API_KEY EXT_TOKEN_KEY)
+               ZAI_API_KEY EXT_TOKEN_KEY)
 
 if [ ! -f "$APP_DIR/.env" ]; then
   # 🔴 .env.example 을 그대로 쓰면 안 된다. 거기엔 로컬 개발 기본값이 채워져 있어
@@ -180,12 +180,12 @@ if [ ! -f "$APP_DIR/.env" ]; then
      MAIL_USERNAME   Gmail 주소
      MAIL_PASSWORD   Gmail 앱 비밀번호 16자 (계정 비밀번호 아님)
      EXT_TOKEN_KEY   외부 캘린더 토큰 암호화 키   openssl rand -base64 32
-     GROQ_API_KEY    AI 모델 키                   console.groq.com 발급값
+     ZAI_API_KEY     AI 모델 키                   z.ai 발급값 (flash 계열 무료)
 
   MAIL_* 이 없으면 가입 메일이 안 나가고, 이메일 미인증 계정은 로그인이
   403 으로 막혀 "떴지만 아무도 못 쓰는" 서버가 됩니다.
 
-  GROQ_API_KEY 가 없으면 AI 초안이 매번 503 으로 떨어지고 Spring 이 규칙 폴백으로
+  ZAI_API_KEY 가 없으면 AI 초안이 매번 503 으로 떨어지고 Spring 이 규칙 폴백으로
   대신합니다 — 화면은 멀쩡하고 AI 기능만 조용히 사라집니다. 그래서 필수값에 넣었습니다.
 
   GOOGLE_* 이 없으면 소셜 로그인 버튼이 눌리기는 하는데 항상
