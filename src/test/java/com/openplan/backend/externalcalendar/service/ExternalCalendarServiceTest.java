@@ -217,11 +217,18 @@ class ExternalCalendarServiceTest {
         when(calendarProvider.listEvents(any(), eq("cal-b"), any(), any(), any())).thenReturn(List.of());
     }
 
-    /** 이미 저장돼 있는(그리고 반영까지 된) 일정 하나. */
-    private ExternalCalendarEvent storedApplied(UUID connectionId, ApplyMode mode, String sourceCalendar) {
+    /**
+     * 이미 저장돼 있는(그리고 반영까지 된) 일정 하나.
+     *
+     * <p>{@code externalCalendarId} 를 표시 이름과 <b>따로</b> 받는 것이 핵심이다 — 삭제 귀속은
+     * 이름이 아니라 식별자로 한다(2026-08-29 리뷰 Blocking).
+     */
+    private ExternalCalendarEvent storedApplied(UUID connectionId, ApplyMode mode,
+                                                String sourceCalendar, String externalCalendarId) {
         ExternalCalendarEvent e = ExternalCalendarEvent.candidate(connectionId, "evt-1", "옛 제목",
                 Instant.parse("2026-08-20T01:00:00Z"), Instant.parse("2026-08-20T02:00:00Z"), sourceCalendar, NOW);
         ReflectionTestUtils.setField(e, "id", UUID.randomUUID());
+        e.locateIn(externalCalendarId);
         e.apply(mode);
         return e;
     }
@@ -230,7 +237,7 @@ class ExternalCalendarServiceTest {
     @DisplayName("원격에서 시간이 바뀌면 AS_IS 로 반영한 고정 일정이 따라 바뀐다")
     void 원격_수정이_고정일정에_반영된다() {
         ExternalCalendarConnection connection = stubSync();
-        ExternalCalendarEvent stored = storedApplied(connection.getId(), ApplyMode.AS_IS, "개인");
+        ExternalCalendarEvent stored = storedApplied(connection.getId(), ApplyMode.AS_IS, "개인", "cal-a");
         when(eventRepository.findByConnectionId(connection.getId())).thenReturn(List.of(stored));
         providerReturns(new ProviderEvent("evt-1", "새 제목",
                 Instant.parse("2026-08-20T04:00:00Z"), Instant.parse("2026-08-20T05:00:00Z"), "개인"));
@@ -254,7 +261,7 @@ class ExternalCalendarServiceTest {
     @DisplayName("EDITED 로 손수정한 고정 일정은 원격이 바뀌어도 건드리지 않는다 — 사용자가 한 일을 지운다")
     void 손수정한_고정일정은_원격_수정이_덮지_않는다() {
         ExternalCalendarConnection connection = stubSync();
-        ExternalCalendarEvent stored = storedApplied(connection.getId(), ApplyMode.EDITED, "개인");
+        ExternalCalendarEvent stored = storedApplied(connection.getId(), ApplyMode.EDITED, "개인", "cal-a");
         when(eventRepository.findByConnectionId(connection.getId())).thenReturn(List.of(stored));
         providerReturns(new ProviderEvent("evt-1", "새 제목",
                 Instant.parse("2026-08-20T04:00:00Z"), Instant.parse("2026-08-20T05:00:00Z"), "개인"));
@@ -269,7 +276,7 @@ class ExternalCalendarServiceTest {
     @DisplayName("원격에서 사라지면 고정 일정까지 지운다")
     void 원격_삭제가_고정일정까지_지운다() {
         ExternalCalendarConnection connection = stubSync();
-        ExternalCalendarEvent stored = storedApplied(connection.getId(), ApplyMode.AS_IS, "개인");
+        ExternalCalendarEvent stored = storedApplied(connection.getId(), ApplyMode.AS_IS, "개인", "cal-a");
         when(eventRepository.findByConnectionId(connection.getId())).thenReturn(List.of(stored));
         providerReturns();   // 아무것도 안 돌려준다 = 원격에서 지워졌다
 
@@ -301,7 +308,22 @@ class ExternalCalendarServiceTest {
     @DisplayName("🔴 선택 해제한 캘린더의 일정은 안 왔어도 지우지 않는다 — 그 캘린더는 조회하지 않았다")
     void 선택_해제한_캘린더의_일정은_지우지_않는다() {
         ExternalCalendarConnection connection = stubSync();   // 선택된 캘린더는 "개인"·"팀"
-        ExternalCalendarEvent stored = storedApplied(connection.getId(), ApplyMode.AS_IS, "예전에 골랐던 캘린더");
+        ExternalCalendarEvent stored = storedApplied(connection.getId(), ApplyMode.AS_IS, "예전에 골랐던 캘린더", "cal-gone");
+        when(eventRepository.findByConnectionId(connection.getId())).thenReturn(List.of(stored));
+        providerReturns();
+
+        service.listEvents(USER, connection.getId(), null);
+
+        verify(fixedScheduleRepository, never()).deleteByExternalCalendarEventIdIn(any());
+        verify(eventRepository, never()).deleteAll(any());
+    }
+
+    @Test
+    @DisplayName("🔴 이름이 같아도 다른 캘린더면 지우지 않는다 — 이름은 유일하지 않다")
+    void 이름이_같아도_다른_캘린더면_지우지_않는다() {
+        ExternalCalendarConnection connection = stubSync();   // 선택: cal-a("개인") · cal-b("팀")
+        // 선택 해제된 캘린더인데 **이름이 선택된 것과 같다.** 이름으로 판정하면 지워진다.
+        ExternalCalendarEvent stored = storedApplied(connection.getId(), ApplyMode.AS_IS, "개인", "cal-c");
         when(eventRepository.findByConnectionId(connection.getId())).thenReturn(List.of(stored));
         providerReturns();
 
@@ -315,7 +337,7 @@ class ExternalCalendarServiceTest {
     @DisplayName("🔴 출처 캘린더를 모르는 일정은 지우지 않는다 — 모르면 남긴다")
     void 출처를_모르는_일정은_지우지_않는다() {
         ExternalCalendarConnection connection = stubSync();
-        ExternalCalendarEvent stored = storedApplied(connection.getId(), ApplyMode.AS_IS, null);
+        ExternalCalendarEvent stored = storedApplied(connection.getId(), ApplyMode.AS_IS, "개인", null);
         when(eventRepository.findByConnectionId(connection.getId())).thenReturn(List.of(stored));
         providerReturns();
 

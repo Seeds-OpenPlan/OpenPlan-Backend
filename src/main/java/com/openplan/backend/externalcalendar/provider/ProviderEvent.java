@@ -16,9 +16,15 @@ public record ProviderEvent(String externalEventId, String title, Instant startA
                             String externalCalendarId, String resourceHref, String etag, boolean recurring) {
 
     /**
-     * 읽기만 하던 시절의 형태 — 쓰기 참조를 모르는 호출부(테스트·목)를 그대로 두기 위해 남긴다.
-     * 이 생성자로 만든 일정은 {@code recurring=false} 이지만 {@code externalCalendarId} 가 없어
-     * 쓰기 대상이 되지 않는다(주소를 만들 수 없다). 조용히 반복 일정을 쓰게 되는 경로는 없다.
+     * 읽기만 하던 시절의 형태 — 쓰기 참조도 캘린더 id 도 모르는 호출부(테스트·목)를 그대로 두기 위해 남긴다.
+     *
+     * <p>이 생성자로 만든 일정은 두 가지가 동시에 성립한다.
+     * <ul>
+     *   <li>🔴 {@code externalCalendarId} 가 null 이라 <b>삭제 전파의 대상이 되지 않는다</b>
+     *       (귀속을 못 하면 지우지 않는다 — #70 리뷰).</li>
+     *   <li>같은 이유로 <b>쓰기 대상도 되지 않는다</b> — 쓸 주소를 만들 수 없다(#69).
+     *       {@code recurring=false} 이지만 조용히 반복 일정을 쓰게 되는 경로는 없다.</li>
+     * </ul>
      */
     public ProviderEvent(String externalEventId, String title, Instant startAt, Instant endAt,
                          String sourceCalendar) {

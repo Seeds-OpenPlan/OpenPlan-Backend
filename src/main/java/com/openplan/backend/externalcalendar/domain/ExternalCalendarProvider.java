@@ -22,7 +22,17 @@ import com.openplan.backend.auth.oauth.OAuthProviderType;
  */
 public enum ExternalCalendarProvider {
 
-    GOOGLE(OAuthProviderType.GOOGLE, "https://www.googleapis.com/auth/calendar.readonly",
+    // 🔴 캘린더 권한만 요청하면 연동이 반드시 실패한다 (2026-08-28 실장애).
+    //    ExternalCalendarService.exchangeOAuth 는 토큰을 받은 **직후** 그 토큰으로
+    //    fetchUserInfo 를 불러 accountIdentifier(이메일)를 채운다. 그런데
+    //    googleapis.com/oauth2/v3/userinfo 는 openid·email 없이는 401 을 준다
+    //    ("insufficient authentication scopes"). 그 401 이 OAuthException →
+    //    E-EXT-001(502) 로 올라가 화면에는 "연동하지 못했습니다" 만 남는다 —
+    //    구글 동의까지 정상적으로 끝난 뒤라 원인이 구글 쪽으로 보이지도 않는다.
+    //    profile 은 넣지 않는다: 우리가 쓰는 값은 email(과 폴백 sub)뿐이라
+    //    이름·사진까지 동의받는 것은 최소 권한에 어긋난다.
+    GOOGLE(OAuthProviderType.GOOGLE,
+            "openid email https://www.googleapis.com/auth/calendar.readonly",
             CalendarAuthModel.OAUTH),
 
     /**
@@ -78,6 +88,11 @@ public enum ExternalCalendarProvider {
      * <p>로그인은 신원만 확인하면 되므로 {@code openid email profile} 이면 끝이지만, 캘린더는 남의 일정을
      * 읽는 권한이라 별도 동의가 필요하다. 로그인 scope 에 이것을 섞지 않는 이유는, 캘린더를 쓰지 않는
      * 사용자에게까지 <b>일정 열람 동의를 요구하게</b> 되기 때문이다(최소 권한).
+     *
+     * <p>🔴 <b>반대로 신원 scope 는 여기에 반드시 섞여 있어야 한다.</b> 연결 생성이 토큰을 받은 직후
+     * {@code fetchUserInfo} 로 계정을 확인하는데, 캘린더 scope 만으로 받은 토큰은 userinfo 를 부를 수
+     * 없어 401 이 나고 연동이 통째로 502 가 된다(2026-08-28 실장애). 최소 권한은 {@code openid email}
+     * 까지이고, {@code profile}(이름·사진)은 쓰지 않으므로 요청하지 않는다.
      */
     public String calendarScope() {
         return calendarScope;

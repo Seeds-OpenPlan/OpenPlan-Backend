@@ -42,6 +42,10 @@ class WeeklyPlanValidationApiTest {
     private static final Instant SLOT_A_END = Instant.parse("2026-07-27T03:00:00Z");
     private static final Instant SLOT_OVERLAP_START = Instant.parse("2026-07-27T02:30:00Z"); // A와 겹침
     private static final Instant SLOT_OVERLAP_END = Instant.parse("2026-07-27T03:30:00Z");
+    // 수요일(2026-07-29) 11:00~12:00 KST — 마감일·WBS 판정용 배치일(profile timezone = Asia/Seoul)
+    private static final Instant WED_START = Instant.parse("2026-07-29T02:00:00Z");
+    private static final Instant WED_END = Instant.parse("2026-07-29T03:00:00Z");
+    private static final LocalDate WED = LocalDate.of(2026, 7, 29);
 
     @Autowired
     private MockMvc mockMvc;
@@ -59,6 +63,11 @@ class WeeklyPlanValidationApiTest {
         jdbc.update("DELETE FROM weekly_plans WHERE user_id IN (?, ?)", MAIN, OTHER);
         jdbc.update("DELETE FROM schedules WHERE user_id IN (?, ?)", MAIN, OTHER);
         jdbc.update("DELETE FROM availability_patterns WHERE user_id IN (?, ?)", MAIN, OTHER);
+        jdbc.update("DELETE FROM wbs_items WHERE project_id IN "
+                + "(SELECT project_id FROM projects WHERE user_id IN (?, ?))", MAIN, OTHER);
+        jdbc.update("DELETE FROM tasks WHERE project_id IN "
+                + "(SELECT project_id FROM projects WHERE user_id IN (?, ?))", MAIN, OTHER);
+        jdbc.update("DELETE FROM projects WHERE user_id IN (?, ?)", MAIN, OTHER);
     }
 
     // ---------- 검사 (validations) ----------
@@ -148,6 +157,113 @@ class WeeklyPlanValidationApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.savable").value(true))
                 .andExpect(jsonPath("$.data.issues.length()").value(0));
+    }
+
+    @Test
+    @DisplayName("검사 — 마감일 이후 배치 → V6 경고(WARNING) · savable=true(PLAN-28: 경고는 저장 가능)")
+    void validateReportsAfterDueDate() throws Exception {
+        UUID planId = insertWeeklyPlan(MAIN, WEEK);
+        insertAvailability(MAIN, "WED", "00:00", "23:55"); // V3·V4·V7 억제 → 순수 V6 시나리오
+        UUID projectId = insertProject(MAIN);
+        UUID taskId = insertTask(projectId, LocalDate.of(2026, 7, 27)); // 마감 월요일, 배치는 수요일
+        insertTaskBlock(planId, taskId, WED_START, WED_END);
+
+        mockMvc.perform(post(PATH + "/" + planId + "/validations").header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.savable").value(true)) // 경고는 차단이 아니다 (US: 차단은 PLAN-24·25만)
+                .andExpect(jsonPath("$.data.issues.length()").value(1))
+                .andExpect(jsonPath("$.data.issues[0].ruleId").value("V6_AFTER_DUE_DATE"))
+                .andExpect(jsonPath("$.data.issues[0].severity").value("WARNING"))
+                .andExpect(jsonPath("$.data.issues[0].taskId").value(taskId.toString()));
+    }
+
+    @Test
+    @DisplayName("검사 — 마감 당일 배치는 위반이 아니다(경계)")
+    void validateAllowsPlacementOnDueDate() throws Exception {
+        UUID planId = insertWeeklyPlan(MAIN, WEEK);
+        insertAvailability(MAIN, "WED", "00:00", "23:55");
+        UUID projectId = insertProject(MAIN);
+        UUID taskId = insertTask(projectId, WED); // 마감일 == 배치일
+        insertTaskBlock(planId, taskId, WED_START, WED_END);
+
+        mockMvc.perform(post(PATH + "/" + planId + "/validations").header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.issues.length()").value(0));
+    }
+
+    @Test
+    @DisplayName("검사 — WBS 기간 밖 배치 → V5 경고(PLAN-27). 스냅샷이 wbs_items를 실어야 판정된다")
+    void validateReportsOutOfWbs() throws Exception {
+        UUID planId = insertWeeklyPlan(MAIN, WEEK);
+        insertAvailability(MAIN, "WED", "00:00", "23:55");
+        UUID projectId = insertProject(MAIN);
+        UUID taskId = insertTask(projectId, null); // 마감일 없음 → V6 배제, 순수 V5
+        insertWbsRange(projectId, taskId, LocalDate.of(2026, 7, 27), LocalDate.of(2026, 7, 28));
+        insertTaskBlock(planId, taskId, WED_START, WED_END); // 기간(월~화) 밖인 수요일
+
+        mockMvc.perform(post(PATH + "/" + planId + "/validations").header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.issues.length()").value(1))
+                .andExpect(jsonPath("$.data.issues[0].ruleId").value("V5_OUT_OF_WBS"))
+                .andExpect(jsonPath("$.data.issues[0].severity").value("WARNING"))
+                .andExpect(jsonPath("$.data.issues[0].taskId").value(taskId.toString()));
+    }
+
+    @Test
+    @DisplayName("검사 — WBS 기간 안 배치는 위반이 아니다")
+    void validateAllowsPlacementInsideWbs() throws Exception {
+        UUID planId = insertWeeklyPlan(MAIN, WEEK);
+        insertAvailability(MAIN, "WED", "00:00", "23:55");
+        UUID projectId = insertProject(MAIN);
+        UUID taskId = insertTask(projectId, null);
+        insertWbsRange(projectId, taskId, LocalDate.of(2026, 7, 27), LocalDate.of(2026, 7, 31));
+        insertTaskBlock(planId, taskId, WED_START, WED_END);
+
+        mockMvc.perform(post(PATH + "/" + planId + "/validations").header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.issues.length()").value(0));
+    }
+
+    @Test
+    @DisplayName("검사(dry-run) — 예상시간만 담은 virtualTaskEdits가 마감일을 지우지 않는다(V6 유지)")
+    void validateDryRunKeepsDueDateWhenEditOmitsIt() throws Exception {
+        UUID planId = insertWeeklyPlan(MAIN, WEEK);
+        insertAvailability(MAIN, "WED", "00:00", "23:55");
+        UUID projectId = insertProject(MAIN);
+        UUID taskId = insertTask(projectId, LocalDate.of(2026, 7, 27));
+
+        mockMvc.perform(post(PATH + "/" + planId + "/validations").header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(("""
+                                {"virtualBlocks":[
+                                  {"blockType":"TASK","taskId":"%s","startAt":"2026-07-29T02:00:00Z","endAt":"2026-07-29T03:00:00Z"}
+                                ],
+                                 "virtualTaskEdits":[{"taskId":"%s","estimatedMinutes":60}]}""")
+                                .formatted(taskId, taskId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.dryRun").value(true))
+                .andExpect(jsonPath("$.data.issues.length()").value(1))
+                .andExpect(jsonPath("$.data.issues[0].ruleId").value("V6_AFTER_DUE_DATE"));
+    }
+
+    @Test
+    @DisplayName("검사(dry-run) — virtualTaskEdits의 마감일은 저장값을 이긴다(미저장 편집 미리보기)")
+    void validateDryRunAppliesEditedDueDate() throws Exception {
+        UUID planId = insertWeeklyPlan(MAIN, WEEK);
+        insertAvailability(MAIN, "WED", "00:00", "23:55");
+        UUID projectId = insertProject(MAIN);
+        UUID taskId = insertTask(projectId, LocalDate.of(2026, 7, 27)); // 저장값은 위반
+
+        mockMvc.perform(post(PATH + "/" + planId + "/validations").header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(("""
+                                {"virtualBlocks":[
+                                  {"blockType":"TASK","taskId":"%s","startAt":"2026-07-29T02:00:00Z","endAt":"2026-07-29T03:00:00Z"}
+                                ],
+                                 "virtualTaskEdits":[{"taskId":"%s","dueDate":"2026-07-31"}]}""")
+                                .formatted(taskId, taskId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.issues.length()").value(0)); // 마감일을 미루면 위반이 사라진다
     }
 
     @Test
@@ -249,6 +365,43 @@ class WeeklyPlanValidationApiTest {
                 VALUES (?, ?, ?, ?, ?, true)
                 """, UUID.randomUUID(), userId, weekday,
                 java.time.LocalTime.parse(start), java.time.LocalTime.parse(end));
+    }
+
+    private UUID insertProject(UUID userId) {
+        UUID id = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO projects (project_id, user_id, name, description, due_date, status,
+                                      priority, closed_at, version, created_at)
+                VALUES (?, ?, '프로젝트', NULL, NULL, 'IN_PROGRESS', NULL, NULL, 0, now())
+                """, id, userId);
+        return id;
+    }
+
+    private UUID insertTask(UUID projectId, LocalDate dueDate) {
+        UUID id = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO tasks (task_id, project_id, category_id, title, memo, estimated_minutes,
+                                   priority, due_date, status, version, created_at)
+                VALUES (?, ?, NULL, '태스크', NULL, NULL, NULL, ?, 'IN_PROGRESS', 0, now())
+                """, id, projectId, dueDate);
+        return id;
+    }
+
+    private void insertWbsRange(UUID projectId, UUID taskId, LocalDate start, LocalDate end) {
+        jdbc.update("""
+                INSERT INTO wbs_items (wbs_item_id, project_id, task_id, start_date, end_date, created_at)
+                VALUES (?, ?, ?, ?, ?, now())
+                """, UUID.randomUUID(), projectId, taskId, start, end);
+    }
+
+    private void insertTaskBlock(UUID planId, UUID taskId, Instant start, Instant end) {
+        jdbc.update("""
+                INSERT INTO plan_blocks (plan_block_id, weekly_plan_id, task_id, schedule_id, block_type,
+                                         start_at, end_at, status, created_at)
+                VALUES (?, ?, ?, NULL, 'TASK', ?, ?, 'SCHEDULED', now())
+                """, UUID.randomUUID(), planId, taskId,
+                OffsetDateTime.ofInstant(start, ZoneOffset.UTC),
+                OffsetDateTime.ofInstant(end, ZoneOffset.UTC));
     }
 
     private void insertScheduleBlock(UUID userId, UUID planId, Instant start, Instant end) {

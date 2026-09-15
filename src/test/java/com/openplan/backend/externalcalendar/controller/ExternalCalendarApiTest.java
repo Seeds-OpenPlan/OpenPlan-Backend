@@ -433,8 +433,10 @@ class ExternalCalendarApiTest {
         Instant day = Instant.now().plus(3, java.time.temporal.ChronoUnit.DAYS)
                 .truncatedTo(java.time.temporal.ChronoUnit.DAYS);
         Instant start = day.plus(hourOfDayUtc, java.time.temporal.ChronoUnit.HOURS);
+        // 🔴 캘린더 **id**("cal-1")를 실어야 삭제 귀속이 성립한다. 이름만 실으면 id 가 null 이라
+        //    삭제 대상에서 제외되고, 이 테스트는 "가드가 막았다" 를 보게 된다.
         return new ProviderEvent(externalId, title, start, start.plus(1, java.time.temporal.ChronoUnit.HOURS),
-                "내 캘린더");
+                "내 캘린더", "cal-1");
     }
 
     @Test

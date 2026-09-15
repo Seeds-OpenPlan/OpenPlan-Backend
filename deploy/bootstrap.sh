@@ -401,13 +401,15 @@ fi
 log "8/8 배포 스탬프"
 be_sha="$(git -C "$APP_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
 fe_sha="$(git -C "$FE_DIR"  rev-parse HEAD 2>/dev/null || echo unknown)"
+ai_sha="$(git -C "$AI_DIR"  rev-parse HEAD 2>/dev/null || echo unknown)"
 if ! sudo tee "$APP_DIR/web/deploy-status.json" >/dev/null <<JSON
 {
   "deployedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "ok": true,
   "source": "bootstrap",
   "backend":  { "branch": "$BE_BRANCH", "sha": "$be_sha" },
-  "frontend": { "branch": "$FE_BRANCH", "sha": "$fe_sha" }
+  "frontend": { "branch": "$FE_BRANCH", "sha": "$fe_sha" },
+  "ai":       { "branch": "$AI_BRANCH", "sha": "$ai_sha" }
 }
 JSON
 then

@@ -4,9 +4,12 @@
 -- 지금까지는 읽기만 했으므로 "무엇을 가져왔나" 만 있으면 됐다. 밖으로 쓰려면
 -- "그것이 제공자 어디에 있는가" 를 알아야 하는데, 그 정보를 전부 버리고 있었다.
 --
---   external_calendar_id  구글 calendarId · 애플 캘린더 href.
---                         지금은 이벤트에 캘린더 **이름**(source_calendar)만 실려 있어
---                         쓰기 대상 주소를 만들 수 없다. 이름은 바뀔 수 있고 중복될 수도 있다.
+--   🟢 external_calendar_id 는 이 마이그레이션에 없다 — V202608290150 이 이미 추가했다.
+--      그 컬럼은 원래 이 PR 의 것이었으나, #70 리뷰의 Blocking(삭제 귀속을 표시 이름으로
+--      판정하던 결함)을 막기 위해 그쪽으로 먼저 당겨 갔다. 여기에 다시 ADD COLUMN 하면
+--      "column already exists" 로 Flyway 가 실패하고 **앱이 기동하지 못한다.**
+--      쓰기 주소의 앞부분으로 쓰는 것은 그대로다 — 컬럼을 추가하지 않을 뿐이다.
+--
 --   resource_href         애플 .ics 리소스 주소. CalDAV 는 이 주소로 PUT/DELETE 한다.
 --                         구글은 calendarId+eventId 로 주소가 정해지므로 NULL.
 --   etag                  If-Match 용. 🔴 이것 없이 PUT 하면 그 사이 남이 고친 것을
@@ -28,13 +31,10 @@
 -- =====================================================================================
 
 ALTER TABLE external_calendar_events
-    ADD COLUMN external_calendar_id VARCHAR(512),
-    ADD COLUMN resource_href        VARCHAR(1024),
-    ADD COLUMN etag                 VARCHAR(255),
-    ADD COLUMN recurring            BOOLEAN NOT NULL DEFAULT false;
+    ADD COLUMN resource_href VARCHAR(1024),
+    ADD COLUMN etag          VARCHAR(255),
+    ADD COLUMN recurring     BOOLEAN NOT NULL DEFAULT false;
 
-COMMENT ON COLUMN external_calendar_events.external_calendar_id IS
-    '제공자 캘린더 식별자 — 구글 calendarId / 애플 캘린더 href. 쓰기 주소의 앞부분.';
 COMMENT ON COLUMN external_calendar_events.resource_href IS
     '애플 CalDAV .ics 리소스 주소(PUT/DELETE 대상). 구글은 NULL.';
 COMMENT ON COLUMN external_calendar_events.etag IS

@@ -55,7 +55,16 @@ public class ExternalCalendarEvent {
     @Column(name = "apply_status", nullable = false, length = 20)
     private ApplyStatus applyStatus;
 
-    /** 제공자 캘린더 식별자 — 구글 calendarId · 애플 캘린더 href. 쓰기 주소의 앞부분(#69). */
+    /**
+     * 이 일정이 온 제공자 캘린더 식별자 — 구글 calendarId · 애플 캘린더 href.
+     *
+     * <p>🔴 표시 이름({@code sourceCalendar})과 달리 <b>유일하다</b>. 삭제 전파에서 "이번에 조회한
+     * 캘린더인가" 를 판정할 때 이름을 쓰면, 같은 이름의 캘린더 둘 중 하나만 선택 해제했을 때
+     * 조회하지도 않은 쪽의 일정을 지운다(2026-08-29 리뷰 Blocking).
+     *
+     * <p>같은 값이 <b>쓰기 주소의 앞부분</b>이기도 하다(#69) — 그래서 이 컬럼 하나가 삭제 귀속과
+     * 쓰기 주소 두 곳에 쓰인다.
+     */
     @Column(name = "external_calendar_id", length = 512)
     private String externalCalendarId;
 
@@ -111,17 +120,29 @@ public class ExternalCalendarEvent {
      * 제외가 무의미해진다. 제목·시각이 바뀌었더라도 판단 자체는 사용자의 것이다.
      */
     /**
-     * 쓰기 참조를 최신으로 맞춘다 (#69).
+     * 출처 캘린더 식별자를 최신으로 맞춘다.
      *
      * <p>{@code candidate()}·{@code resync()} 와 나눠 둔 이유: 그 둘은 <b>사용자에게 보이는 값</b>을
-     * 다루고 이건 <b>제공자 내부 주소</b>를 다룬다. 시그니처에 섞으면 모든 호출부가 쓰기와 무관한
-     * 인자를 들고 다녀야 한다. ETag 는 매 조회마다 바뀔 수 있으므로 값이 왔을 때만 갱신한다 —
-     * 없다고 지우면 다음 쓰기가 If-Match 없이 나간다.
+     * 다루고 이건 <b>제공자 내부 식별자</b>다. 값이 왔을 때만 갱신한다 — 없다고 지우면 이미 귀속돼
+     * 있던 일정이 삭제 대상에서 빠졌다 들어왔다 한다.
      */
-    public void updateWriteRefs(String externalCalendarId, String resourceHref, String etag, boolean recurring) {
+    public void locateIn(String externalCalendarId) {
         if (externalCalendarId != null) {
             this.externalCalendarId = externalCalendarId;
         }
+    }
+
+    /**
+     * 쓰기 참조를 최신으로 맞춘다 (#69).
+     *
+     * <p>캘린더 식별자는 {@link #locateIn} 에 위임한다 — 그 값은 삭제 귀속에도 쓰이므로 갱신 규약이
+     * 한 곳에만 있어야 한다. 나머지 셋은 쓰기 전용이다.
+     *
+     * <p>ETag 는 매 조회마다 바뀔 수 있으므로 값이 왔을 때만 갱신한다 — 없다고 지우면 다음 쓰기가
+     * If-Match 없이 나간다.
+     */
+    public void updateWriteRefs(String externalCalendarId, String resourceHref, String etag, boolean recurring) {
+        locateIn(externalCalendarId);
         if (resourceHref != null) {
             this.resourceHref = resourceHref;
         }

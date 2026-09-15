@@ -34,7 +34,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * ({@code JwtCookieAuthFilterTest}와 같은 이유·같은 방식).
  *
  * <p>검증의 축은 셋이다: ⑴ 계약 shape(쿠키·상태코드·봉투) ⑵ <b>계정 열거 방지</b>(원인이 달라도 같은 코드)
- * ⑶ <b>refresh 재사용 탐지</b>(훔친 토큰이 다시 오면 그 사용자의 세션이 전부 끊긴다).
+ * ⑶ <b>refresh 재사용 탐지</b>(훔친 토큰이 다시 오면 그 사용자의 세션이 전부 끊긴다 —
+ *     단 회전 직후의 중복 갱신은 유예창 안이라 폐기하지 않는다).
  */
 @SpringBootTest(properties = {
         "op.auth.dev-stub=false",
@@ -290,14 +291,42 @@ class AuthApiTest {
     }
 
     @Test
-    @DisplayName("🔴 소진된 refresh 재사용 → 401 E-AUTH-007 + 해당 사용자의 활성 세션 전부 폐기")
-    void refreshReuseRevokesEverySession() throws Exception {
+    @DisplayName("🟢 회전 직후 같은 refresh 가 또 와도 → 401 이지만 세션은 살아 있다 (유예창)")
+    void refreshDuplicateWithinGraceKeepsSessions() throws Exception {
+        Cookie used = login().getResponse().getCookie(AuthCookies.REFRESH);
+
+        // 정상 회전 — used 는 여기서 소진(EXPIRED)되고 rotated_at 이 찍힌다. 새 활성 세션 1개.
+        mockMvc.perform(post(TOKEN_REFRESH).cookie(used))
+                .andExpect(status().isOk());
+        assertThat(activeSessionCount(VERIFIED)).isEqualTo(1);
+
+        // 같은 토큰이 곧바로 한 번 더 — 정상 클라이언트가 실제로 만드는 요청이다. 회전이 커밋된 뒤
+        // Set-Cookie 가 브라우저에 닿기 전 창에서 출발한 두 번째 갱신이 이 모양이다.
+        mockMvc.perform(post(TOKEN_REFRESH).cookie(used))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.code").value("E-AUTH-007"));
+
+        // 🔴 이것이 이 PR 의 핵심 단언 — 방금 발급된 정상 세션이 살아 있어야 한다.
+        //    예전에는 여기서 0 이 되었고, 그래서 액세스 토큰 수명마다 로그인이 풀렸다.
+        assertThat(activeSessionCount(VERIFIED)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("🔴 유예창 밖에서 소진된 refresh 재사용 → 401 E-AUTH-007 + 활성 세션 전부 폐기")
+    void refreshReuseOutsideGraceRevokesEverySession() throws Exception {
         Cookie stolen = login().getResponse().getCookie(AuthCookies.REFRESH);
 
         // 정상 회전 — stolen 은 여기서 소진(EXPIRED)된다. 회전 결과로 새 활성 세션 1개가 생긴다.
         mockMvc.perform(post(TOKEN_REFRESH).cookie(stolen))
                 .andExpect(status().isOk());
         assertThat(activeSessionCount(VERIFIED)).isEqualTo(1);
+
+        // 소진 시각을 유예창 밖으로 밀어 둔다 — "한참 뒤에 훔친 토큰이 왔다" 를 만드는 유일한 방법이다
+        // (테스트가 시계를 못 돌리므로 데이터를 민다).
+        jdbc.update("""
+                UPDATE auth_sessions SET rotated_at = rotated_at - INTERVAL '10 minutes'
+                 WHERE rotated_at IS NOT NULL
+                """);
 
         // 훔친 토큰이 뒤늦게 도착 — 정상 클라이언트는 이런 요청을 보내지 않는다.
         mockMvc.perform(post(TOKEN_REFRESH).cookie(stolen))

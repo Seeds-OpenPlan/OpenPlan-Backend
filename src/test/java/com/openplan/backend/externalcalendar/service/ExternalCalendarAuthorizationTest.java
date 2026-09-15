@@ -86,6 +86,20 @@ class ExternalCalendarAuthorizationTest {
     }
 
     @Test
+    @DisplayName("🔴 신원 scope 도 함께 요구한다 — 빠지면 연동이 통째로 502 가 된다 (2026-08-28 실장애)")
+    void requestsIdentityScopeTogether() {
+        // ExternalCalendarService.exchangeOAuth 는 토큰을 받은 **직후** 그 토큰으로 fetchUserInfo 를
+        // 불러 accountIdentifier(이메일)를 채운다. googleapis.com/oauth2/v3/userinfo 는 openid·email
+        // 없이는 401("insufficient authentication scopes")을 주고, 그 예외가 E-EXT-001(502)로 올라가
+        // 화면에는 "연동하지 못했습니다" 만 남는다 — 구글 동의가 정상적으로 끝난 뒤라 원인이
+        // 구글 쪽으로 보이지도 않는다. 그래서 scope 에서 이 둘을 빼면 안 된다.
+        String url = authorization.authorizationUrl(ExternalCalendarProvider.GOOGLE, FRONTEND + "/settings/calendar");
+
+        assertThat(url).contains("openid");
+        assertThat(url).contains("email");
+    }
+
+    @Test
     @DisplayName("발급한 state 는 그대로 검증을 통과한다")
     void issuedStateVerifies() {
         String url = authorization.authorizationUrl(ExternalCalendarProvider.GOOGLE, FRONTEND + "/cb");

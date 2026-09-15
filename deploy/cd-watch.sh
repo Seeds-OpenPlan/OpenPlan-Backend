@@ -86,13 +86,30 @@ remote_sha() {  # $1=저장소 $2=브랜치
 
 BE_SHA="$(remote_sha "$BE_REPO" "$BE_BRANCH")"
 FE_SHA="$(remote_sha "$FE_REPO" "$FE_BRANCH")"
+HAVE="$(cat "$STATE" 2>/dev/null || printf '(최초)')"
+
 # 🔴 AI 는 없어도 서비스가 도는 부품이다(Spring 이 규칙 폴백한다). 조회가 실패해도
 #    BE·FE 배포까지 끌고 내려가지 않는다 — bootstrap.sh 가 AI_READY 로 같은 방침을
 #    쓰므로 여기서만 엄격하면 어긋난다.
-AI_SHA="$(remote_sha "$AI_REPO" "$AI_BRANCH" || printf 'unknown')"
+#
+# 🔴 그런데 실패를 'unknown' 으로 **기록**하면 안 된다. 기록하면 원격이 복구될 때
+#    unknown → 실제 SHA 로 또 어긋나, BE·FE 코드가 하나도 안 바뀌었는데 전체
+#    재배포가 두 번 돈다. 이 파일이 위에서 경고하는 4GB 박스의 OOM 위험을
+#    스스로 불러오는 셈이다.
+#    조회 실패는 "바뀌었다"가 아니라 **"알 수 없다"** 이므로 직전 값을 이어 쓴다
+#    (D-71 — 조회 실패와 결과 없음은 다른 사실인데 둘 다 빈 출력으로 보인다).
+if AI_SHA="$(remote_sha "$AI_REPO" "$AI_BRANCH")"; then
+  :
+else
+  # 직전 기록의 3번째 칸에서 SHA 만 꺼낸다. 형식은 `브랜치@SHA` 이고 SHA 에는
+  # @ 가 없으므로 마지막 @ 뒤를 취한다(브랜치명에 @ 가 있어도 안전하다).
+  prev_ai="$(printf '%s' "$HAVE" | awk '{print $3}')"
+  AI_SHA="${prev_ai##*@}"
+  [ -n "$AI_SHA" ] || AI_SHA=unknown
+  log "⚠️ AI 원격 조회 실패 — 직전 값($AI_SHA)을 유지한다. 이번 회차는 AI 를 변경으로 보지 않는다"
+fi
 
 WANT="$BE_BRANCH@$BE_SHA $FE_BRANCH@$FE_SHA $AI_BRANCH@$AI_SHA"
-HAVE="$(cat "$STATE" 2>/dev/null || printf '(최초)')"
 
 if [ "${FORCE:-0}" != 1 ] && [ "$WANT" = "$HAVE" ]; then
   log "변경 없음 — $WANT"
