@@ -77,13 +77,16 @@ public class ExternalCalendarEvent {
     private String etag;
 
     /**
-     * 원본이 반복 일정인가.
+     * 원본이 반복 일정인가. <b>null 이면 아직 모른다.</b>
      *
      * <p>🔴 쓰기를 막는 근거다. 읽기는 회차 단위인데 쓰기는 파일 단위라, 회차 하나를 고치려고
      * PUT 하면 반복 일정 전체가 덮인다(마이그레이션 V202608290200 주석 참조).
+     *
+     * <p><b>원시 타입 boolean 이면 안 된다.</b> 그러면 "모름" 을 표현할 수 없어 기본값 false 가
+     * "반복 아님" 으로 읽히고, 아직 동기화되지 않은 행이 쓰기 가능으로 판정된다(#71 리뷰).
      */
-    @Column(name = "recurring", nullable = false)
-    private boolean recurring;
+    @Column(name = "recurring")
+    private Boolean recurring;
 
     @Column(name = "synced_at", nullable = false)
     private Instant syncedAt;
@@ -141,7 +144,7 @@ public class ExternalCalendarEvent {
      * <p>ETag 는 매 조회마다 바뀔 수 있으므로 값이 왔을 때만 갱신한다 — 없다고 지우면 다음 쓰기가
      * If-Match 없이 나간다.
      */
-    public void updateWriteRefs(String externalCalendarId, String resourceHref, String etag, boolean recurring) {
+    public void updateWriteRefs(String externalCalendarId, String resourceHref, String etag, Boolean recurring) {
         locateIn(externalCalendarId);
         if (resourceHref != null) {
             this.resourceHref = resourceHref;
@@ -149,7 +152,11 @@ public class ExternalCalendarEvent {
         if (etag != null) {
             this.etag = etag;
         }
-        this.recurring = recurring;
+        // 나머지 셋과 같은 규약 — 값이 왔을 때만 갱신한다. 모른다는 응답이 이미 아는 값을 지우면,
+        // 한 번 확인된 일정이 다시 "모름" 으로 돌아가 쓰기에서 빠졌다 들어왔다 한다.
+        if (recurring != null) {
+            this.recurring = recurring;
+        }
     }
 
     /**
@@ -157,9 +164,14 @@ public class ExternalCalendarEvent {
      *
      * <p>반복 일정은 제외한다 — 회차 하나를 고치려다 전체를 덮을 수 있다. 캘린더 식별자가 없으면
      * 쓰기 주소를 만들 수 없다. <b>모르면 쓰지 않는다.</b>
+     *
+     * <p>🔴 {@code recurring} 이 <b>명시적으로 false 일 때만</b> 참이다 — null(모름)은 막는다.
+     * {@code !recurring} 으로 쓰면 아직 동기화되지 않은 행이 통과한다(#71 리뷰 Should-fix).
+     * 같은 동기화가 {@code resourceHref} 도 함께 채우므로, "반복 여부를 안다" 는 곧
+     * "쓰기 주소를 만들 재료가 있다" 와 같은 뜻이 된다.
      */
     public boolean isWritable() {
-        return !recurring && externalCalendarId != null;
+        return Boolean.FALSE.equals(recurring) && externalCalendarId != null;
     }
 
     public void resync(String title, Instant startAt, Instant endAt, String sourceCalendar, Instant now) {
@@ -174,6 +186,27 @@ public class ExternalCalendarEvent {
     public void apply(ApplyMode mode) {
         this.applyMode = mode;
         this.applyStatus = (mode == ApplyMode.EXCLUDE) ? ApplyStatus.EXCLUDED : ApplyStatus.APPLIED;
+    }
+
+    /* ── 쓰기 참조 게터 (#69) ─────────────────────────────────────────────
+       🔴 이 넷이 없어서 이 브랜치는 원래 컴파일되지 않았다 — 같은 PR 의 테스트가
+          네 개를 전부 부르는데 엔티티에 없었다. 정적 리뷰는 이것을 잡지 못한다. */
+
+    public String getExternalCalendarId() {
+        return externalCalendarId;
+    }
+
+    public String getResourceHref() {
+        return resourceHref;
+    }
+
+    public String getEtag() {
+        return etag;
+    }
+
+    /** null 이면 아직 모른다 — {@code isWritable()} 이 그 경우를 막는다. */
+    public Boolean getRecurring() {
+        return recurring;
     }
 
     public boolean isCandidate() {

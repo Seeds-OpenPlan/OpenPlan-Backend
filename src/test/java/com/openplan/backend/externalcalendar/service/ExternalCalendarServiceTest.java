@@ -392,7 +392,7 @@ class ExternalCalendarServiceTest {
         assertThat(saved.getExternalCalendarId()).isEqualTo("cal-a");
         assertThat(saved.getResourceHref()).isEqualTo("/cal/abc.ics");
         assertThat(saved.getEtag()).isEqualTo("\"etag-1\"");
-        assertThat(saved.isRecurring()).isFalse();
+        assertThat(saved.getRecurring()).isFalse();
         assertThat(saved.isWritable()).as("단일 일정 + 캘린더 식별자 → 쓰기 가능").isTrue();
     }
 
@@ -412,7 +412,7 @@ class ExternalCalendarServiceTest {
         ArgumentCaptor<List<ExternalCalendarEvent>> captor = ArgumentCaptor.forClass(List.class);
         verify(eventWriter).insertAll(captor.capture());
         ExternalCalendarEvent saved = captor.getValue().get(0);
-        assertThat(saved.isRecurring()).isTrue();
+        assertThat(saved.getRecurring()).isTrue();
         assertThat(saved.isWritable()).as("반복이면 참조가 다 있어도 쓰지 않는다").isFalse();
     }
 

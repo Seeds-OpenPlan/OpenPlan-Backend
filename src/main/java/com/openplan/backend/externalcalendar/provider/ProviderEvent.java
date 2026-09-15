@@ -13,7 +13,7 @@ import java.time.Instant;
  */
 public record ProviderEvent(String externalEventId, String title, Instant startAt, Instant endAt,
                             String sourceCalendar,
-                            String externalCalendarId, String resourceHref, String etag, boolean recurring) {
+                            String externalCalendarId, String resourceHref, String etag, Boolean recurring) {
 
     /**
      * 읽기만 하던 시절의 형태 — 쓰기 참조도 캘린더 id 도 모르는 호출부(테스트·목)를 그대로 두기 위해 남긴다.
@@ -28,18 +28,18 @@ public record ProviderEvent(String externalEventId, String title, Instant startA
      */
     public ProviderEvent(String externalEventId, String title, Instant startAt, Instant endAt,
                          String sourceCalendar) {
-        this(externalEventId, title, startAt, endAt, sourceCalendar, null, null, null, false);
+        this(externalEventId, title, startAt, endAt, sourceCalendar, null, null, null, null);
     }
 
     /**
      * 캘린더 식별자까지만 알던 시절의 형태 — 삭제 귀속(#70)은 성립하고 <b>쓰기만 되지 않는다</b>.
      *
      * <p>{@code resourceHref}·{@code etag} 가 없어 밖으로 쓸 주소를 만들 수 없고, {@code recurring}
-     * 은 false 로 둔다. 쓰기 판정은 {@code ExternalCalendarEvent.isWritable()} 이 식별자와 반복
-     * 여부를 함께 보므로, 이 생성자로 만든 일정이 조용히 쓰기 대상이 되지는 않는다.
+     * 은 <b>null(모름)</b> 이다 — false 로 두면 "반복 아님" 이라는 없는 사실을 주장하게 되고
+     * {@code isWritable()} 이 통과시킨다.
      */
     public ProviderEvent(String externalEventId, String title, Instant startAt, Instant endAt,
                          String sourceCalendar, String externalCalendarId) {
-        this(externalEventId, title, startAt, endAt, sourceCalendar, externalCalendarId, null, null, false);
+        this(externalEventId, title, startAt, endAt, sourceCalendar, externalCalendarId, null, null, null);
     }
 }

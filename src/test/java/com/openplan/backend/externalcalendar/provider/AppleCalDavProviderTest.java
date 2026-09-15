@@ -164,6 +164,29 @@ class AppleCalDavProviderTest {
     }
 
     @Test
+    @DisplayName("🔴 회차 하나를 고친 .ics — 오버라이드 VEVENT 에 RRULE 이 없어도 반복으로 표시한다")
+    void 오버라이드_회차도_반복으로_표시한다() {
+        server.expect(once(), requestTo(BASE + CAL))
+                .andRespond(withSuccess(queryResponseWithoutData(), MediaType.APPLICATION_XML));
+        server.expect(once(), requestTo(BASE + CAL))
+                .andRespond(withSuccess(multigetRecurringWithOverrideResponse(), MediaType.APPLICATION_XML));
+
+        List<ProviderEvent> events = provider.listEvents(CREDENTIAL, CAL, "내 캘린더",
+                Instant.parse("2026-08-17T00:00:00Z"), Instant.parse("2026-08-31T00:00:00Z"));
+
+        // iCloud 는 반복 일정의 회차 하나를 고치면 마스터(RRULE)와 그 회차의 오버라이드
+        // (RECURRENCE-ID 만 있고 RRULE 없음)를 **같은 .ics** 에 함께 담아 보낸다.
+        // VEVENT 단위로 판정하면 오버라이드만 "단일 일정" 으로 읽히는데, 그것은 마스터와
+        // 같은 파일을 공유하므로 거기에 PUT 하면 반복 일정 전체가 덮인다 — 이 클래스가
+        // 막으려는 바로 그 사고다(#71 리뷰 Should-fix).
+        assertThat(events).isNotEmpty();
+        assertThat(events).allMatch(e -> EVENT_HREF.equals(e.resourceHref()));
+        assertThat(events)
+                .as("같은 리소스에서 나온 것은 오버라이드 회차까지 전부 반복이다")
+                .allMatch(ProviderEvent::recurring);
+    }
+
+    @Test
     @DisplayName("DTEND 없이 DURATION 만 쓴 일정도 사라지지 않는다 — 둘 다 RFC5545 표준 표기다")
     void DURATION_만_있어도_후보가_된다() {
         server.expect(once(), requestTo(BASE + CAL))
@@ -303,6 +326,28 @@ class AppleCalDavProviderTest {
                 SUMMARY:길이로 적힌 일정
                 DTSTART;TZID=Asia/Seoul:20260820T100000
                 DURATION:PT1H30M
+                END:VEVENT
+                END:VCALENDAR""");
+    }
+
+    /** 🔴 회차 하나를 고친 .ics — 마스터(RRULE)와 그 회차의 오버라이드(RECURRENCE-ID)가 한 파일에 온다. */
+    private static String multigetRecurringWithOverrideResponse() {
+        return multiget("""
+                BEGIN:VCALENDAR
+                VERSION:2.0
+                BEGIN:VEVENT
+                UID:weekly-tester@icloud.com
+                SUMMARY:주간 회의
+                DTSTART:20260602T010000Z
+                DTEND:20260602T020000Z
+                RRULE:FREQ=WEEKLY;BYDAY=TU
+                END:VEVENT
+                BEGIN:VEVENT
+                UID:weekly-tester@icloud.com
+                RECURRENCE-ID:20260818T010000Z
+                SUMMARY:주간 회의 (시간 변경)
+                DTSTART:20260818T020000Z
+                DTEND:20260818T030000Z
                 END:VEVENT
                 END:VCALENDAR""");
     }

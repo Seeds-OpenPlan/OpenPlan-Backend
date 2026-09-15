@@ -16,6 +16,13 @@
 --                         **말없이 덮는다.** 조회 때 이미 받고 있었는데 읽지 않고 버렸다.
 --   recurring             원본이 반복 일정인가(RRULE / 구글 recurringEventId).
 --                         🔴 쓰기를 막는 근거다 — 아래 참조.
+--                         **NULL 을 허용한다. NULL = 아직 모름이다.**
+--                         NOT NULL DEFAULT false 로 두면 안 된다 — 기존 행이 전부 "반복 아님"
+--                         으로 채워지는데, 그 행들은 이미 external_calendar_id 를 갖고 있어
+--                         (V202608290150, #70) isWritable() 이 곧바로 true 가 된다.
+--                         실제로는 반복인지 **전혀 모르는** 행이 "쓰기 가능" 으로 판정되고,
+--                         그것은 이 파일이 선언한 "모르면 쓰지 않는다" 와 정반대다(#71 리뷰).
+--                         다음 동기화가 값을 채울 때까지 모름으로 남겨 쓰기에서 빠지게 한다.
 --
 -- 🔴 recurring 이 왜 필요한가. 읽기는 **회차 단위**인데 쓰기는 **파일 단위**다.
 --    애플은 .ics 하나(UID 하나)가 여러 회차로 펼쳐지고(AppleCalDavProvider 주석 참조 —
@@ -25,7 +32,7 @@
 --    실제 캘린더가 깨진다. 그래서 당분간 **반복 일정은 쓰기 대상에서 제외**하고, 그 판정을
 --    할 수 있도록 이 플래그를 남긴다. 모르면 쓰지 않는다.
 --
--- 기존 행: 전부 NULL/false 로 시작한다. 다음 동기화가 값을 채운다(resync 가 갱신한다).
+-- 기존 행: 전부 NULL 로 시작한다(recurring 도 NULL = 모름). 다음 동기화가 값을 채운다(resync 가 갱신한다).
 --    소급 채우기를 하지 않는 이유 — 그 정보는 제공자에게 다시 물어야만 알 수 있고,
 --    다음 조회가 어차피 그 일을 한다.
 -- =====================================================================================
@@ -33,11 +40,11 @@
 ALTER TABLE external_calendar_events
     ADD COLUMN resource_href VARCHAR(1024),
     ADD COLUMN etag          VARCHAR(255),
-    ADD COLUMN recurring     BOOLEAN NOT NULL DEFAULT false;
+    ADD COLUMN recurring     BOOLEAN;
 
 COMMENT ON COLUMN external_calendar_events.resource_href IS
     '애플 CalDAV .ics 리소스 주소(PUT/DELETE 대상). 구글은 NULL.';
 COMMENT ON COLUMN external_calendar_events.etag IS
     'If-Match 용. 없으면 남의 변경을 말없이 덮는다.';
 COMMENT ON COLUMN external_calendar_events.recurring IS
-    '원본이 반복 일정인가. true 면 밖으로 쓰지 않는다 — 회차 하나를 고치려다 전체를 덮을 수 있다.';
+    '원본이 반복 일정인가. NULL = 아직 모름(다음 동기화가 채운다). true 이거나 NULL 이면 밖으로 쓰지 않는다 — 회차 하나를 고치려다 전체를 덮을 수 있다.';

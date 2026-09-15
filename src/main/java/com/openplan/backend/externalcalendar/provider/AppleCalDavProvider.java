@@ -261,7 +261,17 @@ public class AppleCalDavProvider implements CalendarProvider {
     private void collect(List<Resource> resources, String externalCalendarId, String calendarName,
                          Instant from, Instant to, List<ProviderEvent> target) {
         for (Resource resource : resources) {
-            for (ICalParser.Component event : ICalParser.parseEvents(resource.body())) {
+            List<ICalParser.Component> components = ICalParser.parseEvents(resource.body());
+            // 🔴 반복 여부는 **리소스 단위**로 판정한다. VEVENT 하나만 보면 놓친다 — iCloud 에서
+            //    반복 일정의 한 회차를 고치면 같은 .ics 안에 마스터(RRULE 있음)와 그 회차의
+            //    오버라이드(RECURRENCE-ID 만 있고 RRULE 없음)가 **함께** 실려 온다. 오버라이드만
+            //    보면 RRULE 이 없어 "단일 일정" 으로 읽히는데, 그 회차는 마스터와 같은 파일을
+            //    공유하므로 거기에 PUT 하면 반복 일정 전체가 덮인다 — 이 클래스가 막으려는 바로
+            //    그 사고다(#71 리뷰 Should-fix). 그래서 이 리소스 안 **어느 VEVENT 든** 반복의
+            //    표시가 있으면 여기서 나온 회차 전부를 반복으로 표시한다.
+            boolean resourceRecurring = components.stream().anyMatch(
+                    c -> c.first("RRULE") != null || c.first("RECURRENCE-ID") != null);
+            for (ICalParser.Component event : components) {
                 ICalParser.Property dtStart = event.first("DTSTART");
                 if (ICalDateTime.isAllDay(dtStart)) {
                     // 종일 일정은 시각이 없어 옮길 자리가 없고, 하루를 통째로 채우면 의도하지 않은 차단이 된다.
@@ -285,10 +295,7 @@ public class AppleCalDavProvider implements CalendarProvider {
 
                 String uid = event.value("UID");
                 String title = event.value("SUMMARY");
-                // 🔴 RRULE 이 있으면 이 .ics 하나가 여러 회차로 펼쳐진다. 그 회차들은 같은 파일을
-                //    공유하므로, 하나만 고치려고 PUT 하면 **전체가 덮인다.** 그래서 반복으로 표시해
-                //    쓰기 대상에서 빼 둔다(#69 · 마이그레이션 V202608290200 주석).
-                boolean recurring = event.first("RRULE") != null;
+                // 반복 판정은 위에서 리소스 단위로 이미 끝났다 — 여기서 VEVENT 를 다시 보지 않는다.
                 for (RecurrenceExpander.Occurrence occurrence :
                         RecurrenceExpander.expand(event, start, end, zone, from, to)) {
                     if (!occurrence.endAt().isAfter(occurrence.startAt())) {
@@ -298,7 +305,7 @@ public class AppleCalDavProvider implements CalendarProvider {
                             occurrenceId(uid, occurrence.startAt()),
                             title != null && !title.isBlank() ? title : "(제목 없음)",
                             occurrence.startAt(), occurrence.endAt(), calendarName,
-                            externalCalendarId, resource.href(), resource.etag(), recurring));
+                            externalCalendarId, resource.href(), resource.etag(), resourceRecurring));
                 }
             }
         }
