@@ -30,4 +30,16 @@ public record ProviderEvent(String externalEventId, String title, Instant startA
                          String sourceCalendar) {
         this(externalEventId, title, startAt, endAt, sourceCalendar, null, null, null, false);
     }
+
+    /**
+     * 캘린더 식별자까지만 알던 시절의 형태 — 삭제 귀속(#70)은 성립하고 <b>쓰기만 되지 않는다</b>.
+     *
+     * <p>{@code resourceHref}·{@code etag} 가 없어 밖으로 쓸 주소를 만들 수 없고, {@code recurring}
+     * 은 false 로 둔다. 쓰기 판정은 {@code ExternalCalendarEvent.isWritable()} 이 식별자와 반복
+     * 여부를 함께 보므로, 이 생성자로 만든 일정이 조용히 쓰기 대상이 되지는 않는다.
+     */
+    public ProviderEvent(String externalEventId, String title, Instant startAt, Instant endAt,
+                         String sourceCalendar, String externalCalendarId) {
+        this(externalEventId, title, startAt, endAt, sourceCalendar, externalCalendarId, null, null, false);
+    }
 }
