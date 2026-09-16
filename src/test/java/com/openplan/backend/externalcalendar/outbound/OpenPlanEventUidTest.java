@@ -73,27 +73,16 @@ class OpenPlanEventUidTest {
         //   weekly_plan_id  자동 배치는 견디나 주차 이동(PLAN-20)이 이 값만 바꾼다(reschedule)
         //   (태스크, 순번)   둘 다 견디나 같은 태스크가 여러 주에 배치되면 충돌한다
         // 그래서 한 번 발급해 매핑 테이블(plan_block_external_refs)이 들고 다닌다.
+        // 🔴 «주차 이동에서 UID 가 유지된다» 는 여기서 검증할 수 없다 — 그것은 매핑 테이블
+        //    (plan_block_external_refs, 5단계)의 동작이지 이 클래스의 동작이 아니다. 발급 함수로
+        //    그 성질을 단언하면 x == x 를 보는 공허한 테스트가 된다. 이 층에서 지킬 수 있는 것은
+        //    «매번 다른 값이 나온다» 뿐이고, 그래서 그것만 본다.
         String first = OpenPlanEventUid.newPlanBlockUid();
         String second = OpenPlanEventUid.newPlanBlockUid();
 
         assertThat(first).isNotEqualTo(second);
         assertThat(OpenPlanEventUid.isOurs(first)).isTrue();
         assertThat(OpenPlanEventUid.isOurs(second)).isTrue();
-    }
-
-    @Test
-    @DisplayName("🔴 주차 이동에서도 외부 일정이 그대로여야 한다 — 저장해 둔 UID 를 다시 쓴다")
-    void 주차_이동은_같은_외부_일정을_수정한다() {
-        // PLAN-20 주차 이동은 blockId 를 그대로 두고 weeklyPlanId 만 새 주 계획으로 바꾼다.
-        // UID 를 weeklyPlanId 로 파생했다면 여기서 값이 달라져, 외부에는 옛 UID 의 일정이
-        // 고아로 남고 새 일정이 또 생겼다 — 이 PR 이 막으려던 바로 그 중복이다.
-        String issued = OpenPlanEventUid.newPlanBlockUid();   // A 주에서 처음 내보낼 때 발급
-
-        // B 주로 옮겨도 매핑 행의 키만 바뀌고 UID 는 그대로다 → 외부에는 수정 한 번.
-        String afterWeekMove = issued;
-
-        assertThat(afterWeekMove).isEqualTo(issued);
-        assertThat(OpenPlanEventUid.isOurs(afterWeekMove)).isTrue();
     }
 
     @Test
