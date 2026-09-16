@@ -19,9 +19,19 @@ import java.util.UUID;
  *       「우리 것이니 무시한다」가 아니라 「우리 것이니 새로 만들지는 않는다」다.</li>
  * </ul>
  *
- * <p><b>블록 UID 에 식별자 셋을 넣는 이유.</b> 자동 배치는 블록을 지웠다 새 UUID 로 다시 만든다
- * ({@code PlanBlockService.applyBatch}). {@code plan_block_id} 를 UID 에 쓰면 그때마다 외부에
- * 새 일정이 생기고 옛 것은 고아로 남는다. (주간계획, 태스크, 순번)은 재배치를 견딘다.
+ * <p><b>🔴 태스크 블록의 UID 는 파생하지 않는다 — 파생할 안정적인 값이 없다.</b> 후보 셋이 전부
+ * 어느 한쪽 경로에서 바뀐다.
+ * <ul>
+ *   <li>{@code plan_block_id} — 주차 이동은 견디지만, <b>자동 배치가 블록을 지웠다 새 UUID 로
+ *       다시 만든다</b>({@code applyBatch} 가 {@code createBlock}·{@code deleteBlock} 를 쓴다).</li>
+ *   <li>{@code weekly_plan_id} — 자동 배치는 견디지만, <b>주차 이동(PLAN-20)이 이 값만 새 주
+ *       계획으로 바꾼다</b>({@code PlanBlockRepository.reschedule}). 블록 행은 그대로인데 UID 만
+ *       달라져, 외부에는 옛 UID 의 일정이 고아로 남고 새 일정이 또 생긴다.</li>
+ *   <li>(태스크, 순번) — 둘 다 견디지만 <b>같은 태스크가 여러 주에 배치되면 충돌한다.</b></li>
+ * </ul>
+ * 그래서 블록은 {@link #newPlanBlockUid()} 로 <b>한 번 발급해 매핑 테이블이 들고 다닌다.</b>
+ * UID 는 «다시 계산할 수 있어야 하는 값» 이 아니라 «그 외부 일정의 이름» 이면 된다 — 블록이
+ * 다른 주로 옮겨 가도 같은 일정을 <b>수정</b>하게 되고, 지웠다 다시 만들지 않는다.
  *
  * <p>도메인 부분은 iCalendar 관례를 따른다(RFC 5545 §3.8.4.7 — 전역 유일성).
  */
@@ -55,16 +65,17 @@ public final class OpenPlanEventUid {
     }
 
     /**
-     * 태스크 블록 — 키가 {@code plan_block_id} 가 아니다(위 클래스 주석 참조).
+     * 태스크 블록 — <b>새로 발급한다.</b> 파생하지 않는 이유는 클래스 주석에 있다.
      *
-     * @param sequence 한 태스크가 한 주에 여러 블록으로 쪼개질 수 있어 순번이 필요하다. 0부터.
+     * <p>호출부는 이 값을 {@code plan_block_external_refs} 에 저장하고, 이후에는 <b>다시 만들지 않고
+     * 읽어 쓴다.</b> 블록이 다른 주로 옮겨 가거나 자동 배치로 새로 만들어져도 매핑 행의 키만
+     * 갱신하면 되고, 외부 일정은 같은 것이 남아 <b>수정</b>으로 처리된다.
+     *
+     * <p>🔴 <b>매 호출마다 다른 값이 나온다.</b> 이미 발급된 블록에 대해 다시 부르면 외부에 중복
+     * 일정이 생긴다 — 발급은 «그 블록을 처음 내보낼 때» 한 번뿐이다.
      */
-    public static String forPlanBlock(UUID weeklyPlanId, UUID taskId, int sequence) {
-        if (sequence < 0) {
-            throw new IllegalArgumentException("sequence 는 음수일 수 없다: " + sequence);
-        }
-        return PREFIX + "block-" + require(weeklyPlanId, "weeklyPlanId")
-                + "-" + require(taskId, "taskId") + "-" + sequence + DOMAIN;
+    public static String newPlanBlockUid() {
+        return PREFIX + "block-" + UUID.randomUUID() + DOMAIN;
     }
 
     /**

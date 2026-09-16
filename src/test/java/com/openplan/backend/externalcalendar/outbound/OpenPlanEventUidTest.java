@@ -25,7 +25,7 @@ class OpenPlanEventUidTest {
         assertThat(OpenPlanEventUid.isOurs(OpenPlanEventUid.forSchedule(A))).isTrue();
         assertThat(OpenPlanEventUid.isOurs(
                 OpenPlanEventUid.forFixedOccurrence(A, LocalDate.of(2026, 9, 22)))).isTrue();
-        assertThat(OpenPlanEventUid.isOurs(OpenPlanEventUid.forPlanBlock(A, B, 0))).isTrue();
+        assertThat(OpenPlanEventUid.isOurs(OpenPlanEventUid.newPlanBlockUid())).isTrue();
     }
 
     @Test
@@ -66,16 +66,34 @@ class OpenPlanEventUidTest {
     }
 
     @Test
-    @DisplayName("🔴 블록 UID 는 plan_block_id 를 쓰지 않는다 — 자동 배치가 블록을 새로 만들어도 같아야 한다")
-    void 블록_UID는_재배치를_견딘다() {
-        // applyBatch 는 블록을 지웠다 새 UUID 로 다시 만든다. plan_block_id 로 UID 를 만들면
-        // 재배치 때마다 외부에 새 일정이 생기고 옛 것은 고아로 남는다.
-        String before = OpenPlanEventUid.forPlanBlock(A, B, 0);
-        String after = OpenPlanEventUid.forPlanBlock(A, B, 0);   // 블록은 새로 만들어졌지만 셋은 같다
-        assertThat(after).isEqualTo(before);
+    @DisplayName("🔴 블록 UID 는 파생하지 않는다 — 파생할 안정적인 값이 없다")
+    void 블록_UID는_발급받는_값이다() {
+        // 후보 셋이 전부 어느 한쪽 경로에서 바뀐다.
+        //   plan_block_id   주차 이동은 견디나 자동 배치가 블록을 새 UUID 로 다시 만든다(applyBatch)
+        //   weekly_plan_id  자동 배치는 견디나 주차 이동(PLAN-20)이 이 값만 바꾼다(reschedule)
+        //   (태스크, 순번)   둘 다 견디나 같은 태스크가 여러 주에 배치되면 충돌한다
+        // 그래서 한 번 발급해 매핑 테이블(plan_block_external_refs)이 들고 다닌다.
+        String first = OpenPlanEventUid.newPlanBlockUid();
+        String second = OpenPlanEventUid.newPlanBlockUid();
 
-        // 한 태스크가 한 주에 둘로 쪼개지면 순번이 가른다.
-        assertThat(OpenPlanEventUid.forPlanBlock(A, B, 1)).isNotEqualTo(before);
+        assertThat(first).isNotEqualTo(second);
+        assertThat(OpenPlanEventUid.isOurs(first)).isTrue();
+        assertThat(OpenPlanEventUid.isOurs(second)).isTrue();
+    }
+
+    @Test
+    @DisplayName("🔴 주차 이동에서도 외부 일정이 그대로여야 한다 — 저장해 둔 UID 를 다시 쓴다")
+    void 주차_이동은_같은_외부_일정을_수정한다() {
+        // PLAN-20 주차 이동은 blockId 를 그대로 두고 weeklyPlanId 만 새 주 계획으로 바꾼다.
+        // UID 를 weeklyPlanId 로 파생했다면 여기서 값이 달라져, 외부에는 옛 UID 의 일정이
+        // 고아로 남고 새 일정이 또 생겼다 — 이 PR 이 막으려던 바로 그 중복이다.
+        String issued = OpenPlanEventUid.newPlanBlockUid();   // A 주에서 처음 내보낼 때 발급
+
+        // B 주로 옮겨도 매핑 행의 키만 바뀌고 UID 는 그대로다 → 외부에는 수정 한 번.
+        String afterWeekMove = issued;
+
+        assertThat(afterWeekMove).isEqualTo(issued);
+        assertThat(OpenPlanEventUid.isOurs(afterWeekMove)).isTrue();
     }
 
     @Test
@@ -85,7 +103,7 @@ class OpenPlanEventUidTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> OpenPlanEventUid.forFixedOccurrence(A, null))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> OpenPlanEventUid.forPlanBlock(A, B, -1))
+        assertThatThrownBy(() -> OpenPlanEventUid.forFixedOccurrence(null, LocalDate.of(2026, 9, 22)))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }

@@ -39,6 +39,9 @@ CREATE TABLE outbound_calendar_ops (
     connection_id UUID         REFERENCES external_calendar_connections (connection_id) ON DELETE CASCADE,
     -- 무엇을 내보내는가. 세 대상이 같은 표를 쓴다 — 전부 "시작·끝이 있는 일정" 으로 나간다.
     target_type   VARCHAR(20)  NOT NULL,
+    -- 🔴 블록의 target_id 는 plan_block_id 가 아니다 — 자동 배치가 블록을 지웠다 새 UUID 로
+    --    다시 만들고, 주차 이동은 weekly_plan_id 만 바꾼다. 무엇으로도 파생되지 않으므로
+    --    외부 일정의 UID 는 한 번 발급해 매핑 테이블이 들고 다닌다(OpenPlanEventUid 주석).
     target_id     UUID         NOT NULL,
     operation     VARCHAR(10)  NOT NULL,
     -- 보낼 때 필요한 값(제목·시각·외부 식별자). 삭제 대상은 원본이 이미 없을 수 있다.
