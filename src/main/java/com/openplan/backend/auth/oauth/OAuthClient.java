@@ -72,7 +72,10 @@ public class OAuthClient {
         return new OAuthTokenSet(
                 accessToken,
                 OAuthProviderType.text(body, "refresh_token"),
-                expiresIn(body));
+                expiresIn(body),
+                // 🔴 우리가 요청한 스코프가 아니라 제공자가 **부여한** 것을 싣는다. 사용자가 동의
+                //    화면에서 일부만 허용할 수 있고, 그 차이는 여기서만 드러난다(#69).
+                OAuthProviderType.text(body, "scope"));
     }
 
     /** {@code expires_in}은 초 단위 정수지만 문자열로 주는 제공자가 있어 텍스트로 읽고 변환한다. */
@@ -114,7 +117,10 @@ public class OAuthClient {
         return new OAuthTokenSet(
                 accessToken,
                 OAuthProviderType.text(body, "refresh_token"),
-                expiresIn(body));
+                expiresIn(body),
+                // 갱신 응답도 scope 를 준다. 사용자가 구글 계정에서 권한을 회수하면 여기서 줄어들고,
+                // 그 변화를 못 보면 이미 없는 권한으로 계속 쓰기를 시도한다.
+                OAuthProviderType.text(body, "scope"));
     }
 
     /** access 토큰 → 사용자 식별 정보. 제공자별 응답 차이는 {@link OAuthProviderType#parse}가 흡수한다. */

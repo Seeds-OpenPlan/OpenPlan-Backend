@@ -61,9 +61,32 @@ public class ExternalCalendarEvent {
      * <p>🔴 표시 이름({@code sourceCalendar})과 달리 <b>유일하다</b>. 삭제 전파에서 "이번에 조회한
      * 캘린더인가" 를 판정할 때 이름을 쓰면, 같은 이름의 캘린더 둘 중 하나만 선택 해제했을 때
      * 조회하지도 않은 쪽의 일정을 지운다(2026-08-29 리뷰 Blocking).
+     *
+     * <p>같은 값이 <b>쓰기 주소의 앞부분</b>이기도 하다(#69) — 그래서 이 컬럼 하나가 삭제 귀속과
+     * 쓰기 주소 두 곳에 쓰인다.
      */
     @Column(name = "external_calendar_id", length = 512)
     private String externalCalendarId;
+
+    /** 애플 CalDAV .ics 리소스 주소(PUT·DELETE 대상). 구글은 null. */
+    @Column(name = "resource_href", length = 1024)
+    private String resourceHref;
+
+    /** If-Match 용. 🔴 없으면 그 사이 남이 고친 것을 말없이 덮는다. */
+    @Column(name = "etag", length = 255)
+    private String etag;
+
+    /**
+     * 원본이 반복 일정인가. <b>null 이면 아직 모른다.</b>
+     *
+     * <p>🔴 쓰기를 막는 근거다. 읽기는 회차 단위인데 쓰기는 파일 단위라, 회차 하나를 고치려고
+     * PUT 하면 반복 일정 전체가 덮인다(마이그레이션 V202609162100 주석 참조).
+     *
+     * <p><b>원시 타입 boolean 이면 안 된다.</b> 그러면 "모름" 을 표현할 수 없어 기본값 false 가
+     * "반복 아님" 으로 읽히고, 아직 동기화되지 않은 행이 쓰기 가능으로 판정된다(#71 리뷰).
+     */
+    @Column(name = "recurring")
+    private Boolean recurring;
 
     @Column(name = "synced_at", nullable = false)
     private Instant syncedAt;
@@ -112,6 +135,45 @@ public class ExternalCalendarEvent {
         }
     }
 
+    /**
+     * 쓰기 참조를 최신으로 맞춘다 (#69).
+     *
+     * <p>캘린더 식별자는 {@link #locateIn} 에 위임한다 — 그 값은 삭제 귀속에도 쓰이므로 갱신 규약이
+     * 한 곳에만 있어야 한다. 나머지 셋은 쓰기 전용이다.
+     *
+     * <p>ETag 는 매 조회마다 바뀔 수 있으므로 값이 왔을 때만 갱신한다 — 없다고 지우면 다음 쓰기가
+     * If-Match 없이 나간다.
+     */
+    public void updateWriteRefs(String externalCalendarId, String resourceHref, String etag, Boolean recurring) {
+        locateIn(externalCalendarId);
+        if (resourceHref != null) {
+            this.resourceHref = resourceHref;
+        }
+        if (etag != null) {
+            this.etag = etag;
+        }
+        // 나머지 셋과 같은 규약 — 값이 왔을 때만 갱신한다. 모른다는 응답이 이미 아는 값을 지우면,
+        // 한 번 확인된 일정이 다시 "모름" 으로 돌아가 쓰기에서 빠졌다 들어왔다 한다.
+        if (recurring != null) {
+            this.recurring = recurring;
+        }
+    }
+
+    /**
+     * 밖으로 쓸 수 있는 일정인가 (#69).
+     *
+     * <p>반복 일정은 제외한다 — 회차 하나를 고치려다 전체를 덮을 수 있다. 캘린더 식별자가 없으면
+     * 쓰기 주소를 만들 수 없다. <b>모르면 쓰지 않는다.</b>
+     *
+     * <p>🔴 {@code recurring} 이 <b>명시적으로 false 일 때만</b> 참이다 — null(모름)은 막는다.
+     * {@code !recurring} 으로 쓰면 아직 동기화되지 않은 행이 통과한다(#71 리뷰 Should-fix).
+     * 같은 동기화가 {@code resourceHref} 도 함께 채우므로, "반복 여부를 안다" 는 곧
+     * "쓰기 주소를 만들 재료가 있다" 와 같은 뜻이 된다.
+     */
+    public boolean isWritable() {
+        return Boolean.FALSE.equals(recurring) && externalCalendarId != null;
+    }
+
     public void resync(String title, Instant startAt, Instant endAt, String sourceCalendar, Instant now) {
         this.title = title;
         this.startAt = startAt;
@@ -124,6 +186,27 @@ public class ExternalCalendarEvent {
     public void apply(ApplyMode mode) {
         this.applyMode = mode;
         this.applyStatus = (mode == ApplyMode.EXCLUDE) ? ApplyStatus.EXCLUDED : ApplyStatus.APPLIED;
+    }
+
+    /* ── 쓰기 참조 게터 (#69) ─────────────────────────────────────────────
+       🔴 이 넷이 없어서 이 브랜치는 원래 컴파일되지 않았다 — 같은 PR 의 테스트가
+          네 개를 전부 부르는데 엔티티에 없었다. 정적 리뷰는 이것을 잡지 못한다. */
+
+    public String getExternalCalendarId() {
+        return externalCalendarId;
+    }
+
+    public String getResourceHref() {
+        return resourceHref;
+    }
+
+    public String getEtag() {
+        return etag;
+    }
+
+    /** null 이면 아직 모른다 — {@code isWritable()} 이 그 경우를 막는다. */
+    public Boolean getRecurring() {
+        return recurring;
     }
 
     public boolean isCandidate() {
