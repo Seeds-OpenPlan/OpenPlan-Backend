@@ -7,9 +7,11 @@ import com.openplan.backend.global.error.OpenPlanException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.net.URI;
@@ -40,6 +42,8 @@ public class GoogleCalendarProvider implements CalendarProvider {
 
     private static final String CALENDAR_LIST_URI = "https://www.googleapis.com/calendar/v3/users/me/calendarList";
     private static final String EVENTS_URI = "https://www.googleapis.com/calendar/v3/calendars/{calendarId}/events";
+    /** 쓰기 경로가 쓰는 루트. 조회와 같은 API 지만 경로 조각을 직접 쌓아야 해 문자열로 둔다(#69). */
+    private static final String CALENDAR_V3 = "https://www.googleapis.com/calendar/v3";
 
     /**
      * 한 번에 받아올 상한 (페이지네이션 미구현).
@@ -117,8 +121,10 @@ public class GoogleCalendarProvider implements CalendarProvider {
                 continue;
             }
             String title = text(item, "summary");
+            // recurringEventId 가 있으면 이 항목은 반복 일정의 **한 회차**다 — 밖으로 쓰지 않는다(#69).
+            boolean recurring = text(item, "recurringEventId") != null;
             events.add(new ProviderEvent(id, title != null ? title : "(제목 없음)", start, end, calendarName,
-                    externalCalendarId));
+                    externalCalendarId, null, text(item, "etag"), recurring));
         }
         if (body.path("items").size() >= MAX_RESULTS) {
             log.warn("구글 캘린더 일정이 조회 상한에 도달했다 — 이후 일정은 보이지 않는다: calendar={} limit={}",
@@ -181,5 +187,106 @@ public class GoogleCalendarProvider implements CalendarProvider {
         }
         String text = value.asText();
         return text.isBlank() ? null : text;
+    }
+
+    // ─────────────────────────────────────────── 쓰기 (#69)
+
+    @Override
+    public ProviderWriteResult createEvent(ProviderCredential credential, String externalCalendarId,
+                                           OutboundEvent event) {
+        // 🔴 iCalUID 로 만든다. 구글은 같은 캘린더에 같은 iCalUID 가 이미 있으면 409 를 주는데,
+        //    그것이 재시도 안전장치다 — 응답이 끊겨 다시 보내도 같은 일정이 둘 생기지 않는다.
+        //    그리고 이 값이 다음 동기화의 에코 차단 근거다(OpenPlanEventUid).
+        URI uri = UriComponentsBuilder.fromUriString(CALENDAR_V3)
+                .pathSegment("calendars", externalCalendarId, "events")
+                .build().encode().toUri();
+        JsonNode created = send(HttpMethod.POST, uri, credential.secret(), null, body(event));
+        return resultOf(created);
+    }
+
+    @Override
+    public ProviderWriteResult updateEvent(ProviderCredential credential, String externalCalendarId,
+                                           ExternalRef ref, OutboundEvent event) {
+        requireEtag(ref, "수정");
+        URI uri = eventUri(externalCalendarId, ref.externalEventId());
+        JsonNode updated = send(HttpMethod.PATCH, uri, credential.secret(), ref.etag(), body(event));
+        return resultOf(updated);
+    }
+
+    @Override
+    public void deleteEvent(ProviderCredential credential, String externalCalendarId, ExternalRef ref) {
+        requireEtag(ref, "삭제");
+        send(HttpMethod.DELETE, eventUri(externalCalendarId, ref.externalEventId()),
+                credential.secret(), ref.etag(), null);
+    }
+
+    private URI eventUri(String externalCalendarId, String eventId) {
+        return UriComponentsBuilder.fromUriString(CALENDAR_V3)
+                .pathSegment("calendars", externalCalendarId, "events", eventId)
+                .build().encode().toUri();
+    }
+
+    /** 구글 이벤트 본문 — 우리가 채우는 것만 보낸다. PATCH 라 적지 않은 필드는 건드리지 않는다. */
+    private static Map<String, Object> body(OutboundEvent event) {
+        return Map.of(
+                "iCalUID", event.uid(),
+                "summary", event.title(),
+                "start", Map.of("dateTime", event.startAt().toString()),
+                "end", Map.of("dateTime", event.endAt().toString()));
+    }
+
+    private ProviderWriteResult resultOf(JsonNode body) {
+        // resourceHref 는 구글에 없다 — 주소가 calendarId + eventId 로 정해진다(애플만 쓰는 값).
+        return new ProviderWriteResult(text(body, "id"), null, text(body, "etag"));
+    }
+
+    private static void requireEtag(ExternalRef ref, String what) {
+        if (!ref.hasEtag()) {
+            // If-Match 없이 보내면 그 사이 남이 고친 것을 말없이 덮는다. 모르면 쓰지 않는다.
+            throw new ProviderWriteConflictException(
+                    what + "에 필요한 ETag 가 없다 — 덮어쓰지 않고 멈춘다. 다시 조회해 채운 뒤 시도할 것.");
+        }
+    }
+
+    /**
+     * 쓰기 한 번. 실패를 <b>세 가지로만</b> 가른다 — 호출부가 할 일이 그 셋뿐이기 때문이다.
+     *
+     * <ul>
+     *   <li>412·409 → {@link ProviderWriteConflictException}: 덮지 않았다. 다시 읽어야 한다.</li>
+     *   <li>404(DELETE) → 성공: 지우려던 결과가 이미 이루어져 있다. 실패로 올리면 아웃박스가 영원히 재시도한다.</li>
+     *   <li>그 외 → 제공자 장애(502). 아웃박스가 다음 동기화에서 다시 시도한다.</li>
+     * </ul>
+     */
+    private JsonNode send(HttpMethod method, URI uri, String accessToken, String ifMatch, Object payload) {
+        try {
+            var spec = restClient.method(method)
+                    .uri(uri)
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken)
+                    .accept(MediaType.APPLICATION_JSON);
+            if (ifMatch != null) {
+                spec = spec.header(HttpHeaders.IF_MATCH, ifMatch);
+            }
+            if (payload != null) {
+                return spec.contentType(MediaType.APPLICATION_JSON).body(payload)
+                        .retrieve().body(JsonNode.class);
+            }
+            return spec.retrieve().body(JsonNode.class);
+        } catch (RestClientResponseException e) {
+            int status = e.getStatusCode().value();
+            if (status == 412 || status == 409) {
+                log.warn("구글 캘린더 쓰기 충돌: status={} uri={}", status, uri);
+                throw new ProviderWriteConflictException("그 사이 외부에서 바뀌었다(status=" + status + ")");
+            }
+            if (status == 404 && method == HttpMethod.DELETE) {
+                log.info("구글 캘린더 삭제 대상이 이미 없다 — 성공으로 친다: uri={}", uri);
+                return null;
+            }
+            // 🔴 본문은 남기지 않는다 — 일정 제목과 토큰이 들어 있다(조회 경로와 같은 규약).
+            log.warn("구글 캘린더 쓰기 실패: status={} uri={}", status, uri);
+            throw providerFailure(e);
+        } catch (Exception e) {
+            log.warn("구글 캘린더 쓰기 호출 실패: uri={}", uri, e);
+            throw providerFailure(e);
+        }
     }
 }
