@@ -465,7 +465,10 @@ public class ExternalCalendarService {
                 //    우리가 방금 만든 일정을 지워진 것으로 읽는다 — 후보를 안 만드는 것과
                 //    "없어졌다" 고 판정하는 것은 전혀 다른 이야기다.
                 seen.add(providerEvent.externalEventId());
-                if (OpenPlanEventUid.isOurs(providerEvent.externalEventId())) {
+                // 🔴 externalEventId 가 아니라 uid 로 묻는다. 구글의 externalEventId 는 이벤트
+                //    id 라 우리 것을 절대 못 알아보고, 애플은 #시작시각 접미사가 붙어 매핑
+                //    조회가 어긋난다 — 그러면 방금 만든 일정이 삭제 대상이 된다(#80 리뷰).
+                if (OpenPlanEventUid.isOurs(providerEvent.uid())) {
                     continue;
                 }
                 ExternalCalendarEvent stored = existing.get(providerEvent.externalEventId());
