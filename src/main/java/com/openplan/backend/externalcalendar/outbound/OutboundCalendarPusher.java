@@ -38,6 +38,7 @@ public class OutboundCalendarPusher {
     private final OutboundCalendarOpRepository opRepository;
     private final ScheduleExternalRefRepository refRepository;
     private final FixedOccurrenceRepository occurrenceRepository;
+    private final PlanBlockExternalRefRepository blockRefRepository;
     private final ExternalCalendarConnectionRepository connectionRepository;
     private final CalendarProviderRegistry registry;
     private final ExternalCalendarTokens tokens;
@@ -46,12 +47,14 @@ public class OutboundCalendarPusher {
     public OutboundCalendarPusher(OutboundCalendarOpRepository opRepository,
                                   ScheduleExternalRefRepository refRepository,
                                   FixedOccurrenceRepository occurrenceRepository,
+                                  PlanBlockExternalRefRepository blockRefRepository,
                                   ExternalCalendarConnectionRepository connectionRepository,
                                   CalendarProviderRegistry registry,
                                   ExternalCalendarTokens tokens, UserClock clock) {
         this.opRepository = opRepository;
         this.refRepository = refRepository;
         this.occurrenceRepository = occurrenceRepository;
+        this.blockRefRepository = blockRefRepository;
         this.connectionRepository = connectionRepository;
         this.registry = registry;
         this.tokens = tokens;
@@ -143,9 +146,9 @@ public class OutboundCalendarPusher {
             case FIXED_OCCURRENCE -> occurrenceRepository.findById(op.getTargetId()).ifPresent(o -> o.recordSent(
                     result.externalEventId(), result.resourceHref(), result.etag(),
                     op.getPayload().title(), op.getPayload().startAt(), op.getPayload().endAt(), now));
-            case PLAN_BLOCK -> {
-                // 5단계에서 자기 매핑에 적는다.
-            }
+            case PLAN_BLOCK -> blockRefRepository.findById(op.getTargetId()).ifPresent(r -> r.recordSent(
+                    result.externalEventId(), result.resourceHref(), result.etag(),
+                    op.getPayload().title(), op.getPayload().startAt(), op.getPayload().endAt(), now));
         }
     }
 }
