@@ -189,8 +189,11 @@ class ExternalCalendarServiceTest {
         ExternalCalendarConnection connection = stubSync();
         String ourUid = OpenPlanEventUid.forSchedule(UUID.randomUUID());
         when(calendarProvider.listEvents(any(), eq("cal-a"), any(), any(), any())).thenReturn(List.of(
-                new ProviderEvent(ourUid, "스터디", Instant.parse("2026-08-20T01:00:00Z"),
-                        Instant.parse("2026-08-20T02:00:00Z"), "내 캘린더")));
+                // 🔴 externalEventId 는 제공자 것(애플은 #접미사), uid 가 우리 것이다 — 이 둘을
+                //    다르게 두어 «uid 로 판정한다» 가 실제로 지켜지는지 본다(#80 리뷰).
+                new ProviderEvent(ourUid + "#1755648000", "스터디",
+                        Instant.parse("2026-08-20T01:00:00Z"), Instant.parse("2026-08-20T02:00:00Z"),
+                        "내 캘린더", null, null, null, false, ourUid)));
         when(calendarProvider.listEvents(any(), eq("cal-b"), any(), any(), any())).thenReturn(List.of());
 
         service.listEvents(USER, connection.getId(), null);
@@ -212,8 +215,11 @@ class ExternalCalendarServiceTest {
                 Instant.parse("2026-08-20T01:00:00Z"), Instant.parse("2026-08-20T02:00:00Z"), "내 캘린더", NOW);
         when(eventRepository.findByConnectionId(connection.getId())).thenReturn(List.of(ours));
         when(calendarProvider.listEvents(any(), eq("cal-a"), any(), any(), any())).thenReturn(List.of(
-                new ProviderEvent(ourUid, "스터디", Instant.parse("2026-08-20T01:00:00Z"),
-                        Instant.parse("2026-08-20T02:00:00Z"), "내 캘린더")));
+                // 🔴 externalEventId 는 제공자 것(애플은 #접미사), uid 가 우리 것이다 — 이 둘을
+                //    다르게 두어 «uid 로 판정한다» 가 실제로 지켜지는지 본다(#80 리뷰).
+                new ProviderEvent(ourUid + "#1755648000", "스터디",
+                        Instant.parse("2026-08-20T01:00:00Z"), Instant.parse("2026-08-20T02:00:00Z"),
+                        "내 캘린더", null, null, null, false, ourUid)));
         when(calendarProvider.listEvents(any(), eq("cal-b"), any(), any(), any())).thenReturn(List.of());
 
         service.listEvents(USER, connection.getId(), null);
@@ -437,7 +443,7 @@ class ExternalCalendarServiceTest {
         when(calendarProvider.listEvents(any(), eq("cal-a"), any(), any(), any())).thenReturn(List.of(
                 new ProviderEvent("evt-1", "회의",
                         Instant.parse("2026-08-20T01:00:00Z"), Instant.parse("2026-08-20T02:00:00Z"),
-                        "개인", "cal-a", "/cal/abc.ics", "\"etag-1\"", false)));
+                        "개인", "cal-a", "/cal/abc.ics", "\"etag-1\"", false, "uid-1@example.com")));
         when(calendarProvider.listEvents(any(), eq("cal-b"), any(), any(), any())).thenReturn(List.of());
 
         service.listEvents(USER, connection.getId(), null);
@@ -460,7 +466,7 @@ class ExternalCalendarServiceTest {
         when(calendarProvider.listEvents(any(), eq("cal-a"), any(), any(), any())).thenReturn(List.of(
                 new ProviderEvent("evt-r#1", "매주 회의",
                         Instant.parse("2026-08-20T01:00:00Z"), Instant.parse("2026-08-20T02:00:00Z"),
-                        "개인", "cal-a", "/cal/weekly.ics", "\"etag-r\"", true)));
+                        "개인", "cal-a", "/cal/weekly.ics", "\"etag-r\"", true, "uid-r@example.com")));
         when(calendarProvider.listEvents(any(), eq("cal-b"), any(), any(), any())).thenReturn(List.of());
 
         service.listEvents(USER, connection.getId(), null);
