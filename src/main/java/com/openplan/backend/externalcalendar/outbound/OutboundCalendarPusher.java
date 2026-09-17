@@ -37,6 +37,7 @@ public class OutboundCalendarPusher {
 
     private final OutboundCalendarOpRepository opRepository;
     private final ScheduleExternalRefRepository refRepository;
+    private final FixedOccurrenceRepository occurrenceRepository;
     private final ExternalCalendarConnectionRepository connectionRepository;
     private final CalendarProviderRegistry registry;
     private final ExternalCalendarTokens tokens;
@@ -44,11 +45,13 @@ public class OutboundCalendarPusher {
 
     public OutboundCalendarPusher(OutboundCalendarOpRepository opRepository,
                                   ScheduleExternalRefRepository refRepository,
+                                  FixedOccurrenceRepository occurrenceRepository,
                                   ExternalCalendarConnectionRepository connectionRepository,
                                   CalendarProviderRegistry registry,
                                   ExternalCalendarTokens tokens, UserClock clock) {
         this.opRepository = opRepository;
         this.refRepository = refRepository;
+        this.occurrenceRepository = occurrenceRepository;
         this.connectionRepository = connectionRepository;
         this.registry = registry;
         this.tokens = tokens;
@@ -133,11 +136,16 @@ public class OutboundCalendarPusher {
 
     /** 보낸 결과를 매핑에 적는다 — 다음 수정의 If-Match 재료이자 되받기의 비교 기준이다. */
     private void recordSent(OutboundCalendarOp op, ProviderWriteResult result, java.time.Instant now) {
-        if (op.getTargetType() != OutboundTargetType.SCHEDULE) {
-            return;   // 고정 회차·태스크 블록은 4·5단계에서 각자의 매핑에 적는다.
+        switch (op.getTargetType()) {
+            case SCHEDULE -> refRepository.findById(op.getTargetId()).ifPresent(ref -> ref.recordSent(
+                    result.externalEventId(), result.resourceHref(), result.etag(),
+                    op.getPayload().title(), op.getPayload().startAt(), op.getPayload().endAt(), now));
+            case FIXED_OCCURRENCE -> occurrenceRepository.findById(op.getTargetId()).ifPresent(o -> o.recordSent(
+                    result.externalEventId(), result.resourceHref(), result.etag(),
+                    op.getPayload().title(), op.getPayload().startAt(), op.getPayload().endAt(), now));
+            case PLAN_BLOCK -> {
+                // 5단계에서 자기 매핑에 적는다.
+            }
         }
-        refRepository.findById(op.getTargetId()).ifPresent(ref -> ref.recordSent(
-                result.externalEventId(), result.resourceHref(), result.etag(),
-                op.getPayload().title(), op.getPayload().startAt(), op.getPayload().endAt(), now));
     }
 }

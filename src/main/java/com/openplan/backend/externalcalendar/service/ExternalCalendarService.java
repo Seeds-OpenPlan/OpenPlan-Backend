@@ -22,6 +22,7 @@ import com.openplan.backend.externalcalendar.dto.SaveSelectionsRequest;
 import com.openplan.backend.externalcalendar.dto.UpdateConnectionRequest;
 import com.openplan.backend.externalcalendar.provider.CalendarProviderRegistry;
 import com.openplan.backend.externalcalendar.outbound.OpenPlanEventUid;
+import com.openplan.backend.externalcalendar.outbound.FixedOccurrenceReconciler;
 import com.openplan.backend.externalcalendar.outbound.OutboundCalendarPusher;
 import com.openplan.backend.externalcalendar.outbound.ScheduleInboundReconciler;
 import com.openplan.backend.externalcalendar.provider.ProviderCredential;
@@ -90,6 +91,7 @@ public class ExternalCalendarService {
     private final UserClock userClock;
     private final OutboundCalendarPusher outboundPusher;
     private final ScheduleInboundReconciler inboundReconciler;
+    private final FixedOccurrenceReconciler fixedOccurrenceReconciler;
 
     public ExternalCalendarService(ExternalCalendarConnectionRepository connectionRepository,
                                    ExternalCalendarSelectionRepository selectionRepository,
@@ -104,9 +106,11 @@ public class ExternalCalendarService {
                                    OAuthProperties oauthProperties,
                                    OutboundCalendarPusher outboundPusher,
                                    ScheduleInboundReconciler inboundReconciler,
+                                   FixedOccurrenceReconciler fixedOccurrenceReconciler,
                                    UserClock userClock) {
         this.outboundPusher = outboundPusher;
         this.inboundReconciler = inboundReconciler;
+        this.fixedOccurrenceReconciler = fixedOccurrenceReconciler;
         this.connectionRepository = connectionRepository;
         this.selectionRepository = selectionRepository;
         this.eventRepository = eventRepository;
@@ -362,6 +366,11 @@ public class ExternalCalendarService {
             //    같은 회차에 우리 UID 로 돌아와 에코 차단에 걸린다. 순서를 바꾸면 그 일정이
             //    다음 회차까지 "외부에 없는 것" 으로 남아 삭제 전파가 오판할 여지가 생긴다.
             //    pushPending 은 예외를 올리지 않는다 — 외부 쓰기 실패로 조회가 깨지면 안 된다.
+            // 🔴 순서가 정해져 있다.
+            //    ① 고정 일정 회차를 맞춘다 — 창이 «오늘부터» 라 여기서 앞으로 밀린다(별도 배치 없음).
+            //    ② 대기열을 밀어낸다 — ①이 적은 것까지 이번 회차에 나간다.
+            //    ③ 읽어 온다 — 방금 만든 것이 우리 UID 로 돌아와 에코 차단에 걸린다.
+            fixedOccurrenceReconciler.reconcile(userId, connection);
             outboundPusher.pushPending(userId);
             synchronize(userId, connection);
         }
