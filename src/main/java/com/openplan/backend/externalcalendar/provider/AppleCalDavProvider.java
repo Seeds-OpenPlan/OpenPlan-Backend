@@ -305,7 +305,10 @@ public class AppleCalDavProvider implements CalendarProvider {
                             occurrenceId(uid, occurrence.startAt()),
                             title != null && !title.isBlank() ? title : "(제목 없음)",
                             occurrence.startAt(), occurrence.endAt(), calendarName,
-                            externalCalendarId, resource.href(), resource.etag(), resourceRecurring));
+                            externalCalendarId, resource.href(), resource.etag(), resourceRecurring,
+                            // 합성 전의 원래 UID. externalEventId 는 회차를 가르려고 #시작시각을
+                            // 붙이지만, «우리 것인가» 와 매핑 조회는 접미사 없는 이 값으로 한다(#80).
+                            uid));
                 }
             }
         }

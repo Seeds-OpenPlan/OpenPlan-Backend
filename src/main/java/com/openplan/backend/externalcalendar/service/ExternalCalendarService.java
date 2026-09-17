@@ -471,12 +471,16 @@ public class ExternalCalendarService {
                 //    우리가 방금 만든 일정을 지워진 것으로 읽는다 — 후보를 안 만드는 것과
                 //    "없어졌다" 고 판정하는 것은 전혀 다른 이야기다.
                 seen.add(providerEvent.externalEventId());
-                if (OpenPlanEventUid.isOurs(providerEvent.externalEventId())) {
+                // 🔴 externalEventId 가 아니라 uid 로 묻는다. 구글의 externalEventId 는 이벤트
+                //    id 라 우리 것을 절대 못 알아보고, 애플은 #시작시각 접미사가 붙어 매핑
+                //    조회가 어긋난다 — 그러면 방금 만든 일정이 삭제 대상이 된다(#80 리뷰).
+                if (OpenPlanEventUid.isOurs(providerEvent.uid())) {
                     // 🔴 «새 후보로 만들지 않는다» 와 «변경을 무시한다» 는 다르다(#69 D4).
                     //    여기서 내보낼 때의 스냅샷과 비교해 사용자가 폰에서 고친 것을 되받는다.
                     //    ETag 도 여기서 갱신한다 — 안 하면 다음 수정이 «남이 고쳤다» 로 튕긴다.
-                    ourUids.add(providerEvent.externalEventId());
-                    inboundReconciler.reconcileOne(userId, providerEvent.externalEventId(),
+                    //    매핑 조회도 uid 로 한다 — 접미사 붙은 값으로 찾으면 절대 일치하지 않는다.
+                    ourUids.add(providerEvent.uid());
+                    inboundReconciler.reconcileOne(userId, providerEvent.uid(),
                             providerEvent.title(), providerEvent.startAt(), providerEvent.endAt(),
                             providerEvent.externalEventId(), providerEvent.resourceHref(), providerEvent.etag());
                     continue;
