@@ -11,6 +11,10 @@ package com.openplan.backend.auth.oauth;
  * @param refreshToken      제공자·동의 조건에 따라 없을 수 있다(구글은 첫 동의에서만 준다).
  *                          없으면 만료 후 재연동이 필요하다.
  * @param expiresInSeconds  access 토큰의 잔여 수명(초). 제공자가 알려주지 않으면 null.
+ * @param grantedScope      제공자가 <b>실제로 부여한</b> 스코프(공백 구분). 우리가 요청한 것과 다를 수 있다 —
+ *                          사용자가 동의 화면에서 일부만 허용할 수 있고, 기존 연동은 옛 스코프로 발급돼 있다.
+ *                          🔴 요청값이 아니라 이 값으로 «밖에 쓸 수 있는가» 를 판단한다.
+ *                          제공자가 알려주지 않으면 null — 그때는 모르는 것이고, 모르면 쓰지 않는다.
  */
-public record OAuthTokenSet(String accessToken, String refreshToken, Long expiresInSeconds) {
+public record OAuthTokenSet(String accessToken, String refreshToken, Long expiresInSeconds, String grantedScope) {
 }
