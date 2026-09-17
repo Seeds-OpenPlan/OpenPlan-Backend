@@ -170,7 +170,7 @@ class ExternalCalendarServiceTest {
     @DisplayName("이미 반영한 일정을 다시 반영하면 409 — 재시도·이중 클릭에 고정 일정이 두 벌 생기면 안 된다")
     void apply_이미_처리한_일정은_409() {
         ExternalCalendarConnection connection = ExternalCalendarConnection.connect(
-                USER, ExternalCalendarProvider.GOOGLE, "me@example.com", "enc", "renc", NOW, NOW);
+                USER, ExternalCalendarProvider.GOOGLE, "me@example.com", "enc", "renc", NOW, null, NOW);
         ExternalCalendarEvent event = ExternalCalendarEvent.candidate(connection.getId(),
                 "evt-1", "팀 회의", Instant.parse("2026-08-20T01:00:00Z"),
                 Instant.parse("2026-08-20T02:00:00Z"), "내 캘린더", NOW);
@@ -351,7 +351,7 @@ class ExternalCalendarServiceTest {
     @DisplayName("🔴 진짜 동시 반영은 500 이 아니라 409 다 — isCandidate() 검사는 check-then-act 라 둘 다 통과한다")
     void 동시_반영은_409다() {
         ExternalCalendarConnection connection = ExternalCalendarConnection.connect(
-                USER, ExternalCalendarProvider.GOOGLE, "me@example.com", "enc", "renc", NOW, NOW);
+                USER, ExternalCalendarProvider.GOOGLE, "me@example.com", "enc", "renc", NOW, null, NOW);
         ExternalCalendarEvent event = ExternalCalendarEvent.candidate(connection.getId(), "evt-1", "회의",
                 Instant.parse("2026-08-20T01:00:00Z"), Instant.parse("2026-08-20T02:00:00Z"), "개인", NOW);
         ReflectionTestUtils.setField(event, "id", UUID.randomUUID());
@@ -436,7 +436,7 @@ class ExternalCalendarServiceTest {
 
     private ExternalCalendarConnection stubSync() {
         ExternalCalendarConnection connection = ExternalCalendarConnection.connect(
-                USER, ExternalCalendarProvider.GOOGLE, "me@example.com", "enc", "renc", NOW, NOW);
+                USER, ExternalCalendarProvider.GOOGLE, "me@example.com", "enc", "renc", NOW, null, NOW);
         when(connectionRepository.findByIdAndUserId(connection.getId(), USER)).thenReturn(Optional.of(connection));
         when(selectionRepository.findByConnectionIdOrderByCalendarNameAsc(connection.getId())).thenReturn(List.of(
                 ExternalCalendarSelection.select(connection.getId(), "cal-a", "개인", NOW),

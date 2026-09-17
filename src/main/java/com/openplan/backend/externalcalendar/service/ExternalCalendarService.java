@@ -169,7 +169,7 @@ public class ExternalCalendarService {
         ExternalCalendarConnection connection = ExternalCalendarConnection.connect(
                 userId, provider, secret.accountIdentifier(),
                 secret.accessTokenEnc(), secret.refreshTokenEnc(), secret.tokenExpiresAt(),
-                userClock.now());
+                secret.grantedScope(), userClock.now());
         try {
             connectionRepository.saveAndFlush(connection);
         } catch (DataIntegrityViolationException e) {
@@ -186,7 +186,8 @@ public class ExternalCalendarService {
      * {@code ExternalCalendarTokens} 의 만료 판정이 그대로 통과시킨다 — 스키마를 바꿀 필요가 없었다.
      */
     private record NewConnectionSecret(String accountIdentifier, String accessTokenEnc,
-                                       String refreshTokenEnc, Instant tokenExpiresAt) {
+                                       String refreshTokenEnc, Instant tokenExpiresAt,
+                                       String grantedScope) {
     }
 
     /** 구글·카카오 — 인가 코드를 토큰으로 바꾸고 계정을 확인한다. */
@@ -205,7 +206,9 @@ public class ExternalCalendarService {
             return new NewConnectionSecret(accountIdentifier,
                     tokens.encrypt(tokenSet.accessToken()),
                     tokens.encrypt(tokenSet.refreshToken()),
-                    tokens.expiresAt(tokenSet.expiresInSeconds()));
+                    tokens.expiresAt(tokenSet.expiresInSeconds()),
+                    // 요청한 스코프가 아니라 부여받은 것을 저장한다 — 사용자가 일부만 허용할 수 있다(#69).
+                    tokenSet.grantedScope());
         } catch (OAuthException e) {
             log.warn("외부 캘린더 연결 실패: provider={}", provider, e);
             throw new OpenPlanException(ErrorCode.E_EXT_001, Map.of("provider", provider.name()));
@@ -225,7 +228,9 @@ public class ExternalCalendarService {
         String appleId = request.appleId().trim();
         providerRegistry.get(provider)
                 .listCalendars(ProviderCredential.basic(appleId, request.appPassword()));
-        return new NewConnectionSecret(appleId, tokens.encrypt(request.appPassword()), null, null);
+        return new NewConnectionSecret(appleId, tokens.encrypt(request.appPassword()), null, null,
+                // 애플은 스코프 개념이 없다 — 앱 암호가 곧 전권이라 canWrite() 가 이 값을 보지 않는다.
+                null);
     }
 
     /**
