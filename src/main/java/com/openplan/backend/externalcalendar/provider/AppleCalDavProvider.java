@@ -193,26 +193,35 @@ public class AppleCalDavProvider implements CalendarProvider {
         return events;
     }
 
-    /** {@code calendar-multiget} — 방언 ①: 본문은 여기서만 온다. */
-    private List<String> fetchBodies(ProviderCredential credential, String calendarHref, List<String> hrefs) {
+    /**
+     * 쓰기 대상을 가리키는 참조 (#69) — 본문과 함께 받아 둔다.
+     *
+     * <p>예전에는 본문만 돌려주고 주소·ETag 를 버렸다. 읽기만 할 때는 필요 없었지만, 밖으로 쓰려면
+     * <b>어디에</b> 쓸지(href)와 <b>그 사이 남이 안 고쳤는지</b>(ETag)가 있어야 한다.
+     */
+    private record Resource(String href, String etag, String body) {
+    }
+
+    /** {@code calendar-multiget} — 방언 ①: 본문은 여기서만 온다. ETag 도 같이 청구한다(#69). */
+    private List<Resource> fetchBodies(ProviderCredential credential, String calendarHref, List<String> hrefs) {
         StringBuilder body = new StringBuilder("""
                 <?xml version="1.0" encoding="utf-8"?>
                 <c:calendar-multiget xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
-                  <d:prop><c:calendar-data/></d:prop>
+                  <d:prop><d:getetag/><c:calendar-data/></d:prop>
                 """);
         for (String href : hrefs) {
             body.append("  <d:href>").append(escapeXml(href)).append("</d:href>\n");
         }
         body.append("</c:calendar-multiget>");
 
-        List<String> bodies = new ArrayList<>();
+        List<Resource> resources = new ArrayList<>();
         for (Element response : children(dav(credential, calendarHref, 1, REPORT, body.toString()), "response")) {
             String data = text(response, "calendar-data");
             if (data != null && !data.isBlank()) {
-                bodies.add(data);
+                resources.add(new Resource(text(response, "href"), text(response, "getetag"), data));
             }
         }
-        return bodies;
+        return resources;
     }
 
     /**
@@ -249,10 +258,20 @@ public class AppleCalDavProvider implements CalendarProvider {
         return null;
     }
 
-    private void collect(List<String> icsBodies, String externalCalendarId, String calendarName,
+    private void collect(List<Resource> resources, String externalCalendarId, String calendarName,
                          Instant from, Instant to, List<ProviderEvent> target) {
-        for (String ics : icsBodies) {
-            for (ICalParser.Component event : ICalParser.parseEvents(ics)) {
+        for (Resource resource : resources) {
+            List<ICalParser.Component> components = ICalParser.parseEvents(resource.body());
+            // 🔴 반복 여부는 **리소스 단위**로 판정한다. VEVENT 하나만 보면 놓친다 — iCloud 에서
+            //    반복 일정의 한 회차를 고치면 같은 .ics 안에 마스터(RRULE 있음)와 그 회차의
+            //    오버라이드(RECURRENCE-ID 만 있고 RRULE 없음)가 **함께** 실려 온다. 오버라이드만
+            //    보면 RRULE 이 없어 "단일 일정" 으로 읽히는데, 그 회차는 마스터와 같은 파일을
+            //    공유하므로 거기에 PUT 하면 반복 일정 전체가 덮인다 — 이 클래스가 막으려는 바로
+            //    그 사고다(#71 리뷰 Should-fix). 그래서 이 리소스 안 **어느 VEVENT 든** 반복의
+            //    표시가 있으면 여기서 나온 회차 전부를 반복으로 표시한다.
+            boolean resourceRecurring = components.stream().anyMatch(
+                    c -> c.first("RRULE") != null || c.first("RECURRENCE-ID") != null);
+            for (ICalParser.Component event : components) {
                 ICalParser.Property dtStart = event.first("DTSTART");
                 if (ICalDateTime.isAllDay(dtStart)) {
                     // 종일 일정은 시각이 없어 옮길 자리가 없고, 하루를 통째로 채우면 의도하지 않은 차단이 된다.
@@ -276,6 +295,7 @@ public class AppleCalDavProvider implements CalendarProvider {
 
                 String uid = event.value("UID");
                 String title = event.value("SUMMARY");
+                // 반복 판정은 위에서 리소스 단위로 이미 끝났다 — 여기서 VEVENT 를 다시 보지 않는다.
                 for (RecurrenceExpander.Occurrence occurrence :
                         RecurrenceExpander.expand(event, start, end, zone, from, to)) {
                     if (!occurrence.endAt().isAfter(occurrence.startAt())) {
@@ -284,7 +304,11 @@ public class AppleCalDavProvider implements CalendarProvider {
                     target.add(new ProviderEvent(
                             occurrenceId(uid, occurrence.startAt()),
                             title != null && !title.isBlank() ? title : "(제목 없음)",
-                            occurrence.startAt(), occurrence.endAt(), calendarName, externalCalendarId));
+                            occurrence.startAt(), occurrence.endAt(), calendarName,
+                            externalCalendarId, resource.href(), resource.etag(), resourceRecurring,
+                            // 합성 전의 원래 UID. externalEventId 는 회차를 가르려고 #시작시각을
+                            // 붙이지만, «우리 것인가» 와 매핑 조회는 접미사 없는 이 값으로 한다(#80).
+                            uid));
                 }
             }
         }
@@ -432,4 +456,148 @@ public class AppleCalDavProvider implements CalendarProvider {
         return new OpenPlanException(ErrorCode.E_EXT_001,
                 Map.of("provider", ExternalCalendarProvider.APPLE.name()));
     }
+
+    // ─────────────────────────────────────────── 쓰기 (#69)
+
+    @Override
+    public ProviderWriteResult createEvent(ProviderCredential credential, String externalCalendarId,
+                                           OutboundEvent event) {
+        // CalDAV 는 리소스 주소를 **클라이언트가 정한다.** UID 로 만들면 재시도해도 같은 주소라,
+        // 아래 If-None-Match 와 합쳐 "응답이 끊겨 다시 보내도 둘 생기지 않는다" 가 성립한다.
+        String href = calendarPath(externalCalendarId) + event.uid() + ".ics";
+        // 🔴 If-None-Match: * — 그 자리에 이미 무언가 있으면 만들지 않는다. 없으면 PUT 이 남의
+        //    일정을 통째로 덮는다(CalDAV 의 PUT 은 리소스 전체 교체다).
+        String etag = put(credential, href, ics(event), null, true);
+        return new ProviderWriteResult(event.uid(), href, etag);
+    }
+
+    @Override
+    public ProviderWriteResult updateEvent(ProviderCredential credential, String externalCalendarId,
+                                           ExternalRef ref, OutboundEvent event) {
+        requireEtag(ref, "수정");
+        String etag = put(credential, ref.resourceHref(), ics(event), ref.etag(), false);
+        return new ProviderWriteResult(ref.externalEventId(), ref.resourceHref(), etag);
+    }
+
+    @Override
+    public void deleteEvent(ProviderCredential credential, String externalCalendarId, ExternalRef ref) {
+        requireEtag(ref, "삭제");
+        try {
+            restClient.method(HttpMethod.DELETE)
+                    .uri(absolute(ref.resourceHref()))
+                    .header(HttpHeaders.AUTHORIZATION, basic(credential))
+                    .header(HttpHeaders.IF_MATCH, ref.etag())
+                    .retrieve()
+                    .toBodilessEntity();
+        } catch (RestClientResponseException e) {
+            int status = e.getStatusCode().value();
+            if (status == 404) {
+                // 지우려던 결과가 이미 이루어져 있다. 실패로 올리면 아웃박스가 영원히 재시도한다.
+                log.info("애플 삭제 대상이 이미 없다 — 성공으로 친다");
+                return;
+            }
+            throw writeFailure(status, "DELETE");
+        } catch (Exception e) {
+            log.warn("애플 삭제 호출 실패", e);
+            throw providerFailure(e.getClass().getSimpleName());
+        }
+    }
+
+    /** PUT 한 번. 성공하면 서버가 준 새 ETag 를 돌려준다(다음 쓰기의 If-Match 재료). */
+    private String put(ProviderCredential credential, String href, String body, String ifMatch, boolean onlyIfAbsent) {
+        try {
+            var spec = restClient.method(HttpMethod.PUT)
+                    .uri(absolute(href))
+                    .header(HttpHeaders.AUTHORIZATION, basic(credential))
+                    .contentType(MediaType.parseMediaType("text/calendar; charset=utf-8"));
+            if (onlyIfAbsent) {
+                spec = spec.header(HttpHeaders.IF_NONE_MATCH, "*");
+            } else if (ifMatch != null) {
+                spec = spec.header(HttpHeaders.IF_MATCH, ifMatch);
+            }
+            var response = spec.body(body).retrieve().toBodilessEntity();
+            // 🔴 ETag 를 안 주는 서버가 있다. 그때는 null 로 두고, 그 일정은 다음 조회가
+            //    값을 채울 때까지 수정할 수 없다 — 모르면 쓰지 않는다.
+            return response.getHeaders().getETag();
+        } catch (RestClientResponseException e) {
+            throw writeFailure(e.getStatusCode().value(), "PUT");
+        } catch (Exception e) {
+            log.warn("애플 쓰기 호출 실패", e);
+            throw providerFailure(e.getClass().getSimpleName());
+        }
+    }
+
+    private RuntimeException writeFailure(int status, String method) {
+        if (status == 412 || status == 409) {
+            // 412 는 두 경우다 — If-Match 어긋남(남이 고쳤다)과 If-None-Match 어긋남(이미 있다).
+            // 둘 다 "덮지 않았다" 이고, 호출부가 할 일은 재시도가 아니라 다시 읽는 것이다.
+            log.warn("애플 CalDAV 쓰기 충돌: status={} method={}", status, method);
+            return new ProviderWriteConflictException("그 사이 외부에서 바뀌었거나 이미 존재한다(status=" + status + ")");
+        }
+        if (status == 401 || status == 403) {
+            log.warn("애플 CalDAV 자격증명 거부(쓰기): status={}", status);
+            return new OpenPlanException(ErrorCode.E_EXT_002,
+                    Map.of("provider", ExternalCalendarProvider.APPLE.name()));
+        }
+        log.warn("애플 CalDAV 쓰기 오류: status={} method={}", status, method);
+        return providerFailure("status=" + status);
+    }
+
+    private static void requireEtag(ExternalRef ref, String what) {
+        if (!ref.hasEtag()) {
+            throw new ProviderWriteConflictException(
+                    what + "에 필요한 ETag 가 없다 — 덮어쓰지 않고 멈춘다. 다시 조회해 채운 뒤 시도할 것.");
+        }
+    }
+
+    private static URI absolute(String href) {
+        return URI.create(href.startsWith("http") ? href : BASE + href);
+    }
+
+    private static String calendarPath(String externalCalendarId) {
+        String path = externalCalendarId.startsWith("http")
+                ? URI.create(externalCalendarId).getPath()
+                : externalCalendarId;
+        return path.endsWith("/") ? path : path + "/";
+    }
+
+    /**
+     * 최소 iCalendar 본문.
+     *
+     * <p>🔴 {@code RRULE}·{@code EXDATE} 를 쓰지 않는다 — 고정 일정도 2개월치를 <b>회차로 펼쳐</b>
+     * 개별 일정으로 넣기 때문이다(계획 D1). 반복 규칙을 만들지 않으므로 «회차 하나를 고치려다
+     * 파일 전체를 덮는» 경로가 이 어댑터에는 존재하지 않는다.
+     *
+     * <p>시각은 전부 UTC({@code Z})로 적는다 — {@code VTIMEZONE} 을 만들 필요가 없고, 읽기 쪽
+     * {@code ICalParser} 가 겪은 «VTIMEZONE 안에도 DTSTART·RRULE 이 있다» 함정을 만들지 않는다.
+     */
+    private static String ics(OutboundEvent event) {
+        String stamp = UTC_STAMP.format(Instant.now());
+        return """
+                BEGIN:VCALENDAR
+                VERSION:2.0
+                PRODID:-//OpenPlan//KO
+                BEGIN:VEVENT
+                UID:%s
+                DTSTAMP:%s
+                DTSTART:%s
+                DTEND:%s
+                SUMMARY:%s
+                END:VEVENT
+                END:VCALENDAR
+                """.formatted(event.uid(), stamp,
+                UTC_STAMP.format(event.startAt()), UTC_STAMP.format(event.endAt()), escape(event.title()));
+    }
+
+    /** RFC 5545 §3.3.11 — 쉼표·세미콜론·역슬래시·줄바꿈은 이스케이프해야 본문이 깨지지 않는다. */
+    private static String escape(String text) {
+        return text == null ? "" : text
+                .replace("\\", "\\\\")
+                .replace(";", "\\;")
+                .replace(",", "\\,")
+                .replace("\n", "\\n");
+    }
+
+    private static final DateTimeFormatter UTC_STAMP =
+            DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'").withZone(java.time.ZoneOffset.UTC);
 }
