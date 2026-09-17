@@ -81,6 +81,16 @@ public class ExternalCalendarConnection {
     @Column(name = "granted_scope", columnDefinition = "text")
     private String grantedScope;
 
+    /**
+     * 새 일정을 만들 대상 캘린더 (#69). null 이면 <b>아직 안 골랐다</b>.
+     *
+     * <p>🔴 읽기만 할 때는 없던 문제다. 연동이 여럿이고 캘린더도 여럿이면 «어디에 만들 것인가» 를
+     * 정해야 하고, 아무 데나 고르면 <b>사용자가 모르는 곳에 일정이 생긴다.</b> 안 골랐으면
+     * 내보내지 않는다 — 모르면 쓰지 않는다.
+     */
+    @Column(name = "write_calendar_id", length = 512)
+    private String writeCalendarId;
+
     /** JPA 전용. */
     protected ExternalCalendarConnection() {
     }
@@ -140,6 +150,15 @@ public class ExternalCalendarConnection {
 
     /** 구글 쓰기 범위의 표식. {@code calendar} 단독(전권)도 쓰기를 포함하지만 우리는 요청하지 않는다. */
     private static final String WRITE_SCOPE_MARKER = "auth/calendar.events";
+
+    /** 사용자가 설정 화면에서 대상 캘린더를 고른다. null 로 되돌리면 내보내기가 멈춘다. */
+    public void chooseWriteCalendar(String writeCalendarId) {
+        this.writeCalendarId = writeCalendarId;
+    }
+
+    public String getWriteCalendarId() {
+        return writeCalendarId;
+    }
 
     public String getGrantedScope() {
         return grantedScope;

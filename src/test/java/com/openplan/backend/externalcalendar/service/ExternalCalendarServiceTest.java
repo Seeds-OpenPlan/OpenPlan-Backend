@@ -13,6 +13,8 @@ import com.openplan.backend.externalcalendar.domain.ExternalCalendarSelection;
 import com.openplan.backend.externalcalendar.provider.CalendarProvider;
 import com.openplan.backend.externalcalendar.provider.CalendarProviderRegistry;
 import com.openplan.backend.externalcalendar.provider.ProviderCredential;
+import com.openplan.backend.externalcalendar.outbound.OpenPlanEventUid;
+import com.openplan.backend.externalcalendar.outbound.OutboundCalendarPusher;
 import com.openplan.backend.externalcalendar.provider.ProviderEvent;
 import com.openplan.backend.externalcalendar.repository.ExternalCalendarConnectionRepository;
 import com.openplan.backend.externalcalendar.repository.ExternalCalendarEventRepository;
@@ -90,6 +92,9 @@ class ExternalCalendarServiceTest {
     @Mock
     private CalendarProvider calendarProvider;
 
+    @Mock
+    private OutboundCalendarPusher outboundPusher;
+
     @InjectMocks
     private ExternalCalendarService service;
 
@@ -164,6 +169,46 @@ class ExternalCalendarServiceTest {
         doThrow(new DataIntegrityViolationException("uq_external_event")).when(eventWriter).insertOne(any());
 
         assertThatCode(() -> service.listEvents(USER, connection.getId(), null)).doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("🔴 우리가 내보낸 일정은 후보로 다시 들이지 않는다 — 막지 않으면 무한히 늘어난다 (#69 에코)")
+    void listEvents_우리가_만든_일정은_후보가_되지_않는다() {
+        ExternalCalendarConnection connection = stubSync();
+        String ourUid = OpenPlanEventUid.forSchedule(UUID.randomUUID());
+        when(calendarProvider.listEvents(any(), eq("cal-a"), any(), any(), any())).thenReturn(List.of(
+                new ProviderEvent(ourUid, "스터디", Instant.parse("2026-08-20T01:00:00Z"),
+                        Instant.parse("2026-08-20T02:00:00Z"), "내 캘린더")));
+        when(calendarProvider.listEvents(any(), eq("cal-b"), any(), any(), any())).thenReturn(List.of());
+
+        service.listEvents(USER, connection.getId(), null);
+
+        // 우리가 만든 것이 «외부에서 온 새 후보» 로 들어오면 화면에 자기 일정이 한 번 더 뜨고,
+        // 그것을 또 내보내면 무한히 늘어난다. 되돌릴 수 없으므로 첫 배포부터 막혀 있어야 한다.
+        // 넣을 것이 하나도 없어 저장 호출 자체가 일어나지 않는다 — 빈 목록을 넘기는 것보다 강한 단언이다.
+        verify(eventWriter, never()).insertAll(any());
+        verify(eventWriter, never()).insertOne(any());
+    }
+
+    @Test
+    @DisplayName("🔴 그래도 삭제 대상으로 읽히면 안 된다 — 내보내기가 되살아났다 지워지는 것을 반복한다")
+    void listEvents_우리_일정을_사라진_것으로_보지_않는다() {
+        ExternalCalendarConnection connection = stubSync();
+        String ourUid = OpenPlanEventUid.forSchedule(UUID.randomUUID());
+        // 이미 저장돼 있는 우리 일정이 이번 조회에도 그대로 왔다.
+        ExternalCalendarEvent ours = ExternalCalendarEvent.candidate(connection.getId(), ourUid, "스터디",
+                Instant.parse("2026-08-20T01:00:00Z"), Instant.parse("2026-08-20T02:00:00Z"), "내 캘린더", NOW);
+        when(eventRepository.findByConnectionId(connection.getId())).thenReturn(List.of(ours));
+        when(calendarProvider.listEvents(any(), eq("cal-a"), any(), any(), any())).thenReturn(List.of(
+                new ProviderEvent(ourUid, "스터디", Instant.parse("2026-08-20T01:00:00Z"),
+                        Instant.parse("2026-08-20T02:00:00Z"), "내 캘린더")));
+        when(calendarProvider.listEvents(any(), eq("cal-b"), any(), any(), any())).thenReturn(List.of());
+
+        service.listEvents(USER, connection.getId(), null);
+
+        // «후보로 안 만든다» 와 «없어졌다» 는 전혀 다른 이야기다. seen 에서 빼면 삭제 전파(#68)가
+        // 우리가 방금 만든 일정을 지워진 것으로 읽는다.
+        assertThat(ours.getApplyStatus()).as("삭제 전파가 우리 일정을 건드리지 않았다").isNotNull();
     }
 
     @Test
