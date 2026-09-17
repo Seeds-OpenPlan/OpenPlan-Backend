@@ -70,6 +70,17 @@ public class ExternalCalendarConnection {
     @Column(name = "token_expires_at")
     private Instant tokenExpiresAt;
 
+    /**
+     * 제공자가 <b>실제로 부여한</b> 스코프(공백 구분). null 이면 모른다.
+     *
+     * <p>🔴 우리가 요청한 값이 아니다. 사용자가 동의 화면에서 일부만 허용할 수 있고, <b>스코프를
+     * 넓히기 전에 연동한 사용자는 옛 권한의 토큰을 들고 있다.</b> 그 토큰으로 쓰기를 시도하면
+     * 제공자가 403 을 주고, 화면에는 "연동돼 있는데 안 된다" 만 남는다. 요청값으로 판단하면
+     * 그 차이를 영영 볼 수 없다.
+     */
+    @Column(name = "granted_scope", columnDefinition = "text")
+    private String grantedScope;
+
     /** JPA 전용. */
     protected ExternalCalendarConnection() {
     }
@@ -78,7 +89,7 @@ public class ExternalCalendarConnection {
     public static ExternalCalendarConnection connect(UUID userId, ExternalCalendarProvider provider,
                                                      String accountIdentifier, String accessTokenEnc,
                                                      String refreshTokenEnc, Instant tokenExpiresAt,
-                                                     Instant now) {
+                                                     String grantedScope, Instant now) {
         ExternalCalendarConnection connection = new ExternalCalendarConnection();
         connection.id = UUID.randomUUID();
         connection.userId = userId;
@@ -91,6 +102,7 @@ public class ExternalCalendarConnection {
         connection.accessTokenEnc = accessTokenEnc;
         connection.refreshTokenEnc = refreshTokenEnc;
         connection.tokenExpiresAt = tokenExpiresAt;
+        connection.grantedScope = grantedScope;
         return connection;
     }
 
@@ -100,6 +112,39 @@ public class ExternalCalendarConnection {
     }
 
     /** 토큰 갱신 결과 반영. refresh 토큰을 새로 주지 않는 제공자가 있어 기존 값을 지우지 않는다. */
+    /**
+     * 부여 스코프를 최신으로 맞춘다. <b>값이 왔을 때만</b> 갱신한다 — 제공자가 갱신 응답에서
+     * scope 를 생략하는 경우가 있고, 그때 지우면 쓸 수 있던 연동이 «모름» 으로 돌아간다.
+     */
+    public void updateGrantedScope(String grantedScope) {
+        if (grantedScope != null && !grantedScope.isBlank()) {
+            this.grantedScope = grantedScope;
+        }
+    }
+
+    /**
+     * 이 연동으로 <b>밖에 쓸 수 있는가</b> (#69).
+     *
+     * <p>애플(CalDAV)은 스코프 개념이 없다 — 앱 암호가 곧 전권이라 붙을 수 있으면 쓸 수 있다.
+     *
+     * <p>OAuth 제공자는 <b>부여받은 스코프에 쓰기 범위가 실제로 들어 있을 때만</b> 참이다.
+     * null(모름)은 거짓 — 스코프를 넓히기 전에 연동한 행이 여기 해당하고, 그 토큰으로 쓰면
+     * 403 이 난다. <b>모르면 쓰지 않는다.</b>
+     */
+    public boolean canWrite() {
+        if (provider.authModel() == ExternalCalendarProvider.CalendarAuthModel.CALDAV_BASIC) {
+            return isActive();
+        }
+        return isActive() && grantedScope != null && grantedScope.contains(WRITE_SCOPE_MARKER);
+    }
+
+    /** 구글 쓰기 범위의 표식. {@code calendar} 단독(전권)도 쓰기를 포함하지만 우리는 요청하지 않는다. */
+    private static final String WRITE_SCOPE_MARKER = "auth/calendar.events";
+
+    public String getGrantedScope() {
+        return grantedScope;
+    }
+
     public void refreshTokens(String accessTokenEnc, String refreshTokenEnc, Instant tokenExpiresAt) {
         this.accessTokenEnc = accessTokenEnc;
         if (refreshTokenEnc != null) {
