@@ -77,6 +77,9 @@ public class ExternalCalendarTokens {
                     cipher.encrypt(refreshed.accessToken()),
                     cipher.encrypt(refreshed.refreshToken()),
                     expiresAt(refreshed.expiresInSeconds()));
+            // 갱신 응답의 스코프도 반영한다. 사용자가 구글 계정에서 권한을 회수하면 여기서 줄어들고,
+            // 그 변화를 못 보면 이미 없는 권한으로 계속 쓰기를 시도해 403 만 쌓인다(#69).
+            connection.updateGrantedScope(refreshed.grantedScope());
             return refreshed.accessToken();
         } catch (OAuthException e) {
             log.warn("외부 캘린더 토큰 갱신 실패: connectionId={}", connection.getId(), e);

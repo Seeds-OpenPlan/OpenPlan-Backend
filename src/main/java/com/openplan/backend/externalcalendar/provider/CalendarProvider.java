@@ -32,4 +32,39 @@ public interface CalendarProvider {
      */
     List<ProviderEvent> listEvents(ProviderCredential credential, String externalCalendarId, String calendarName,
                                    Instant from, Instant to);
+
+    // ─────────────────────────────────────────── 쓰기 (#69 양방향)
+    //
+    // 🔴 읽기와 달리 **되돌릴 수 없다.** 잘못 쓰면 사용자의 실제 캘린더가 바뀌고, 우리에게는
+    //    되돌릴 재료가 없다. 그래서 세 메서드 모두 «모르면 쓰지 않는다» 를 계약으로 갖는다 —
+    //    ExternalRef 에 ETag 가 없으면 수정·삭제를 거부한다(남의 변경을 말없이 덮지 않기 위해).
+
+    /**
+     * 새 일정을 만든다.
+     *
+     * <p>같은 UID 가 이미 있으면 <b>만들지 않고</b> {@link ProviderWriteConflictException} 을 던진다 —
+     * 응답이 끊겨 재시도할 때 같은 일정이 둘 생기는 것을 막는다.
+     *
+     * @param externalCalendarId 대상 캘린더(구글 calendarId · 애플 캘린더 href). 호출부가 사용자 설정
+     *                           ({@code write_calendar_id})에서 가져오며, 없으면 부르지 않는다.
+     */
+    ProviderWriteResult createEvent(ProviderCredential credential, String externalCalendarId, OutboundEvent event);
+
+    /**
+     * 이미 있는 일정을 고친다. {@code ref.etag()} 가 없으면 <b>거부한다.</b>
+     *
+     * <p>그 사이 남이 고쳤으면 {@link ProviderWriteConflictException} — 덮지 않는다.
+     * 대상이 이미 없으면 {@link ProviderWriteResult} 대신 예외 없이 <b>다시 만들지 않는다</b>:
+     * 구현은 404 를 «사용자가 지웠다» 로 읽고 호출부가 매핑을 정리하도록 예외를 올린다.
+     */
+    ProviderWriteResult updateEvent(ProviderCredential credential, String externalCalendarId,
+                                    ExternalRef ref, OutboundEvent event);
+
+    /**
+     * 일정을 지운다. {@code ref.etag()} 가 없으면 <b>거부한다.</b>
+     *
+     * <p>이미 없으면(404) 성공으로 친다 — 지우려던 결과가 이미 이루어져 있다. 그것을 실패로 올리면
+     * 아웃박스가 영원히 재시도한다.
+     */
+    void deleteEvent(ProviderCredential credential, String externalCalendarId, ExternalRef ref);
 }

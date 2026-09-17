@@ -89,4 +89,20 @@ public class Schedule {
         this.priority = priority;
         this.memo = memo;
     }
+
+    /**
+     * 외부 캘린더에서 고쳐진 것을 되받는다 (#69 D4).
+     *
+     * <p><b>{@code edit()} 과 나눠 둔 이유</b> — 그쪽은 «시각은 편집으로 못 바꾼다(블록 이동
+     * 소관)» 는 규약을 갖는다. 그 규약은 <b>OpenPlan 화면 안에서</b> 옳다. 외부 캘린더에서는
+     * 사용자가 일정을 끌어 옮기는 것이 곧 시각 변경이고, 그것을 되받으려면 여기를 지나야 한다.
+     * 같은 메서드에 합치면 화면 쪽 규약이 조용히 풀린다.
+     *
+     * <p>호출부는 <b>블록도 함께</b> 옮겨야 한다 — 일정만 바꾸면 주간 계획에는 옛 자리가 남는다.
+     */
+    public void relocatedFromExternal(String title, Instant startAt, Instant endAt) {
+        this.title = title;
+        this.startAt = startAt;
+        this.endAt = endAt;
+    }
 }
