@@ -2,6 +2,7 @@ package com.openplan.backend.weeklyplan.service;
 
 import com.openplan.backend.global.error.ErrorCode;
 import com.openplan.backend.global.error.OpenPlanException;
+import com.openplan.backend.externalcalendar.outbound.PlanBlockOutboundReconciler;
 import com.openplan.backend.global.time.UserClock;
 import com.openplan.backend.rule.model.BlockType;
 import com.openplan.backend.rule.model.BlockView;
@@ -50,19 +51,22 @@ public class WeeklyPlanValidationService {
     private final PlanSnapshotAssembler assembler;
     private final PlanValidationPort validationPort;
     private final UserClock clock;
+    private final PlanBlockOutboundReconciler planBlockOutbound;
 
     public WeeklyPlanValidationService(WeeklyPlanRepository weeklyPlanRepository,
                                        PlanBlockRepository planBlockRepository,
                                        ValidationIssueRecordRepository validationIssueRepository,
                                        PlanSnapshotAssembler assembler,
                                        PlanValidationPort validationPort,
-                                       UserClock clock) {
+                                       UserClock clock,
+                                       PlanBlockOutboundReconciler planBlockOutbound) {
         this.weeklyPlanRepository = weeklyPlanRepository;
         this.planBlockRepository = planBlockRepository;
         this.validationIssueRepository = validationIssueRepository;
         this.assembler = assembler;
         this.validationPort = validationPort;
         this.clock = clock;
+        this.planBlockOutbound = planBlockOutbound;
     }
 
     /**
@@ -136,6 +140,10 @@ public class WeeklyPlanValidationService {
         int confirmed = weeklyPlanRepository.confirmIfDraft(planId, clock.now());
         if (confirmed == 1) {
             persistIssues(planId, report); // 승자만 이슈 영속(경고 잔존 포함)
+            // 확정 = "이대로 하겠다" — 이때만 밖으로 내보낸다(#69 D3). 초안 단계의 드래그마다
+            // 내보내면 실제 캘린더가 흔들리고, 자동 배치 한 번에 수십 건이 API 로 나간다.
+            // 승자만 부른다 — 동시 확정에서 둘 다 적으면 같은 변경이 두 번 나간다.
+            planBlockOutbound.onConfirmed(userId, planId);
         }
         // confirmIfDraft(clearAutomatically)로 컨텍스트가 비었으니 재조회 = 최신 CONFIRMED 상태
         WeeklyPlan latest = weeklyPlanRepository.findByIdAndUserId(planId, userId)

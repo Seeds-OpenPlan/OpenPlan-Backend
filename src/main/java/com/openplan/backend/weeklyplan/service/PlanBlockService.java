@@ -3,6 +3,7 @@ package com.openplan.backend.weeklyplan.service;
 import com.openplan.backend.global.error.ErrorCode;
 import com.openplan.backend.global.error.ErrorMessages;
 import com.openplan.backend.global.error.OpenPlanException;
+import com.openplan.backend.externalcalendar.outbound.OutboundCalendarQueue;
 import com.openplan.backend.global.time.UserClock;
 import com.openplan.backend.project.service.port.WeeklyPlanTotalsRecalculator;
 import com.openplan.backend.schedule.domain.Schedule;
@@ -55,12 +56,14 @@ public class PlanBlockService {
     private final WeeklyPlanTotalsRecalculator recalculator;
     private final ErrorMessages errorMessages;
     private final UserClock clock;
+    private final OutboundCalendarQueue outboundQueue;
     private final EntityManager entityManager;
 
     public PlanBlockService(PlanBlockRepository planBlockRepository, WeeklyPlanRepository weeklyPlanRepository,
                             TaskRepository taskRepository, ScheduleRepository scheduleRepository,
                             ScheduleValidator scheduleValidator, WeeklyPlanTotalsRecalculator recalculator,
                             ErrorMessages errorMessages, UserClock clock,
+                            OutboundCalendarQueue outboundQueue,
                             EntityManager entityManager) {
         this.planBlockRepository = planBlockRepository;
         this.weeklyPlanRepository = weeklyPlanRepository;
@@ -70,6 +73,7 @@ public class PlanBlockService {
         this.recalculator = recalculator;
         this.errorMessages = errorMessages;
         this.clock = clock;
+        this.outboundQueue = outboundQueue;
         this.entityManager = entityManager;
     }
 
@@ -115,6 +119,9 @@ public class PlanBlockService {
             schedule = new Schedule(userId, title, s.estimatedMinutes(), s.priority(),
                     req.startAt(), req.endAt(), s.memo(), clock.now());
             scheduleRepository.save(schedule);
+            // 밖으로 내보낼 것을 적기만 한다 — 외부 호출은 하지 않는다. 구글이 느리다고
+            // 일정 저장이 같이 실패하면 사용자에게는 "내 앱이 고장났다" 로 보인다(#69 D5).
+            outboundQueue.enqueueScheduleUpsert(userId, schedule);
         }
 
         plan.reopenToDraftIfConfirmed(); // 결정 C — 확정 편집 재개 → DRAFT
@@ -165,6 +172,9 @@ public class PlanBlockService {
             UUID scheduleId = block.getScheduleId();
             planBlockRepository.delete(block);
             if (scheduleId != null) {
+                // 🔴 지우기 **전에** 적는다. ON DELETE CASCADE 로 매핑이 함께 사라지면
+                //    무엇을 외부에서 지워야 하는지 알 수 없게 된다(#69 D5).
+                outboundQueue.enqueueScheduleDelete(userId, scheduleId);
                 scheduleRepository.deleteById(scheduleId);
             }
         }
