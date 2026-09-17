@@ -23,6 +23,7 @@ import com.openplan.backend.externalcalendar.dto.UpdateConnectionRequest;
 import com.openplan.backend.externalcalendar.provider.CalendarProviderRegistry;
 import com.openplan.backend.externalcalendar.outbound.OpenPlanEventUid;
 import com.openplan.backend.externalcalendar.outbound.OutboundCalendarPusher;
+import com.openplan.backend.externalcalendar.outbound.ScheduleInboundReconciler;
 import com.openplan.backend.externalcalendar.provider.ProviderCredential;
 import com.openplan.backend.externalcalendar.provider.ProviderCalendar;
 import com.openplan.backend.externalcalendar.provider.ProviderEvent;
@@ -88,6 +89,7 @@ public class ExternalCalendarService {
     private final OAuthProperties oauthProperties;
     private final UserClock userClock;
     private final OutboundCalendarPusher outboundPusher;
+    private final ScheduleInboundReconciler inboundReconciler;
 
     public ExternalCalendarService(ExternalCalendarConnectionRepository connectionRepository,
                                    ExternalCalendarSelectionRepository selectionRepository,
@@ -101,8 +103,10 @@ public class ExternalCalendarService {
                                    OAuthClient oauthClient,
                                    OAuthProperties oauthProperties,
                                    OutboundCalendarPusher outboundPusher,
+                                   ScheduleInboundReconciler inboundReconciler,
                                    UserClock userClock) {
         this.outboundPusher = outboundPusher;
+        this.inboundReconciler = inboundReconciler;
         this.connectionRepository = connectionRepository;
         this.selectionRepository = selectionRepository;
         this.eventRepository = eventRepository;
@@ -450,6 +454,8 @@ public class ExternalCalendarService {
         // 🔴 이번 회차에 제공자가 실제로 돌려준 일정 — 삭제 판정의 유일한 근거다(#68).
         //    "안 왔다" 를 곧바로 "지워졌다" 로 읽으면 안 된다. 아래 propagateDeletions 참고.
         Set<String> seen = new HashSet<>();
+        // 이번 회차에 실제로 돌아온 **우리** 일정 — 외부 삭제 판정의 근거다(#69).
+        Set<String> ourUids = new HashSet<>();
         // 원격에서 값이 바뀐 것 — 반영된 고정 일정을 따라 고쳐야 한다.
         List<ExternalCalendarEvent> remoteChanged = new ArrayList<>();
         for (ExternalCalendarSelection selection : selections) {
@@ -466,6 +472,13 @@ public class ExternalCalendarService {
                 //    "없어졌다" 고 판정하는 것은 전혀 다른 이야기다.
                 seen.add(providerEvent.externalEventId());
                 if (OpenPlanEventUid.isOurs(providerEvent.externalEventId())) {
+                    // 🔴 «새 후보로 만들지 않는다» 와 «변경을 무시한다» 는 다르다(#69 D4).
+                    //    여기서 내보낼 때의 스냅샷과 비교해 사용자가 폰에서 고친 것을 되받는다.
+                    //    ETag 도 여기서 갱신한다 — 안 하면 다음 수정이 «남이 고쳤다» 로 튕긴다.
+                    ourUids.add(providerEvent.externalEventId());
+                    inboundReconciler.reconcileOne(userId, providerEvent.externalEventId(),
+                            providerEvent.title(), providerEvent.startAt(), providerEvent.endAt(),
+                            providerEvent.externalEventId(), providerEvent.resourceHref(), providerEvent.etag());
                     continue;
                 }
                 ExternalCalendarEvent stored = existing.get(providerEvent.externalEventId());
@@ -499,6 +512,8 @@ public class ExternalCalendarService {
         }
         propagateRemoteUpdates(userId, remoteChanged);
         propagateRemoteDeletions(connection, existing, seen, selections, from, to);
+        // 우리 일정이 외부에서 지워졌는가. 같은 «창 안에 있어야 하는데 없다» 원칙을 쓴다.
+        inboundReconciler.propagateDeletions(connection.getId(), ourUids, from, to);
 
         if (created.isEmpty()) {
             return;

@@ -102,6 +102,16 @@ public class ScheduleExternalRef {
                 || !java.util.Objects.equals(sentEndAt, endAt);
     }
 
+    /**
+     * 내보낸 시각이 이 동기화 창 안에 있었나 — 삭제 판정의 전제.
+     *
+     * <p>아직 안 보낸 것(스냅샷 없음)은 «창 안» 이 아니다. 보내지도 않은 일정을 외부에 없다고
+     * 지우면 사용자 데이터가 사라진다.
+     */
+    public boolean wasSentWithin(Instant from, Instant to) {
+        return sentStartAt != null && !sentStartAt.isBefore(from) && sentStartAt.isBefore(to);
+    }
+
     public UUID getScheduleId() {
         return scheduleId;
     }

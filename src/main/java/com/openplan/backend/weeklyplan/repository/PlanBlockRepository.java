@@ -92,4 +92,12 @@ public interface PlanBlockRepository extends JpaRepository<PlanBlock, UUID> {
             """)
     void reschedule(@Param("blockId") UUID blockId, @Param("startAt") Instant startAt,
                     @Param("endAt") Instant endAt, @Param("planId") UUID planId);
+
+    /**
+     * 이 개인 일정이 어느 블록으로 배치돼 있나 (#69 되받기).
+     *
+     * <p>외부에서 일정을 옮기면 <b>일정과 블록을 함께</b> 옮겨야 한다 — 일정만 바꾸면 주간 계획에는
+     * 옛 자리가 그대로 남는다. 배치되지 않은 일정도 있으므로 {@code Optional} 이다.
+     */
+    Optional<PlanBlock> findByScheduleId(UUID scheduleId);
 }
