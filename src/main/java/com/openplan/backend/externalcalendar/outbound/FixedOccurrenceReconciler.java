@@ -5,6 +5,7 @@ import com.openplan.backend.externalcalendar.domain.ExternalCalendarConnection;
 import com.openplan.backend.global.time.UserClock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -104,9 +105,26 @@ public class FixedOccurrenceReconciler {
             if (storedUids.contains(entry.getKey())) {
                 continue;
             }
-            FixedOccurrence created = occurrenceRepository.save(FixedOccurrence.reserve(
-                    wantedSchedule.get(entry.getKey()), userId, connection.getId(),
-                    entry.getValue().date(), now));
+            // 🔴 saveAndFlush 로 **여기서** 위반을 받는다. 앱이 UUID 를 직접 채워
+            //    @GeneratedValue 가 없으므로, 그냥 save 하면 하이버네이트가 INSERT 를 커밋
+            //    시점까지 미룬다 — 그러면 위반이 이 메서드를 벗어난 뒤 바깥(조회 트랜잭션)
+            //    커밋에서 터져 **단순 조회가 500 으로 끝난다**(#81 리뷰 Blocking).
+            //
+            //    언제 겹치나: 탭 두 개·새로고침 연타로 listEvents 가 거의 동시에 두 번 오면
+            //    두 트랜잭션이 같은 (고정일정, 날짜)를 "아직 없음" 으로 보고 각자 INSERT 한다.
+            //    ux_fixed_occurrence 가 바로 그것을 막으려고 있는 제약이고, 여기서 그 제약을
+            //    **최종 판정자**로 쓴다 — 같은 클래스의 동기화 경합 처리와 같은 방식이다.
+            FixedOccurrence created;
+            try {
+                created = occurrenceRepository.saveAndFlush(FixedOccurrence.reserve(
+                        wantedSchedule.get(entry.getKey()), userId, connection.getId(),
+                        entry.getValue().date(), now));
+            } catch (DataIntegrityViolationException e) {
+                // 진 쪽은 조용히 물러난다 — 이긴 쪽이 이미 옳은 행을 만들었고, 그 행의 CREATE 도
+                // 함께 적혔다. 여기서 다시 적으면 같은 일정이 두 번 나간다.
+                log.debug("고정 회차 생성 경합 — 이미 만들어진 회차를 건너뛴다: uid={}", entry.getKey());
+                continue;
+            }
             enqueue(userId, connection, created, wantedTitle.get(entry.getKey()), entry.getValue(),
                     calendarId, OutboundOperation.CREATE, now);
         }
