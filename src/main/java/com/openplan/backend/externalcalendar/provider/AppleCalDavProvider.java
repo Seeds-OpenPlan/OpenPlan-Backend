@@ -453,4 +453,148 @@ public class AppleCalDavProvider implements CalendarProvider {
         return new OpenPlanException(ErrorCode.E_EXT_001,
                 Map.of("provider", ExternalCalendarProvider.APPLE.name()));
     }
+
+    // ─────────────────────────────────────────── 쓰기 (#69)
+
+    @Override
+    public ProviderWriteResult createEvent(ProviderCredential credential, String externalCalendarId,
+                                           OutboundEvent event) {
+        // CalDAV 는 리소스 주소를 **클라이언트가 정한다.** UID 로 만들면 재시도해도 같은 주소라,
+        // 아래 If-None-Match 와 합쳐 "응답이 끊겨 다시 보내도 둘 생기지 않는다" 가 성립한다.
+        String href = calendarPath(externalCalendarId) + event.uid() + ".ics";
+        // 🔴 If-None-Match: * — 그 자리에 이미 무언가 있으면 만들지 않는다. 없으면 PUT 이 남의
+        //    일정을 통째로 덮는다(CalDAV 의 PUT 은 리소스 전체 교체다).
+        String etag = put(credential, href, ics(event), null, true);
+        return new ProviderWriteResult(event.uid(), href, etag);
+    }
+
+    @Override
+    public ProviderWriteResult updateEvent(ProviderCredential credential, String externalCalendarId,
+                                           ExternalRef ref, OutboundEvent event) {
+        requireEtag(ref, "수정");
+        String etag = put(credential, ref.resourceHref(), ics(event), ref.etag(), false);
+        return new ProviderWriteResult(ref.externalEventId(), ref.resourceHref(), etag);
+    }
+
+    @Override
+    public void deleteEvent(ProviderCredential credential, String externalCalendarId, ExternalRef ref) {
+        requireEtag(ref, "삭제");
+        try {
+            restClient.method(HttpMethod.DELETE)
+                    .uri(absolute(ref.resourceHref()))
+                    .header(HttpHeaders.AUTHORIZATION, basic(credential))
+                    .header(HttpHeaders.IF_MATCH, ref.etag())
+                    .retrieve()
+                    .toBodilessEntity();
+        } catch (RestClientResponseException e) {
+            int status = e.getStatusCode().value();
+            if (status == 404) {
+                // 지우려던 결과가 이미 이루어져 있다. 실패로 올리면 아웃박스가 영원히 재시도한다.
+                log.info("애플 삭제 대상이 이미 없다 — 성공으로 친다");
+                return;
+            }
+            throw writeFailure(status, "DELETE");
+        } catch (Exception e) {
+            log.warn("애플 삭제 호출 실패", e);
+            throw providerFailure(e.getClass().getSimpleName());
+        }
+    }
+
+    /** PUT 한 번. 성공하면 서버가 준 새 ETag 를 돌려준다(다음 쓰기의 If-Match 재료). */
+    private String put(ProviderCredential credential, String href, String body, String ifMatch, boolean onlyIfAbsent) {
+        try {
+            var spec = restClient.method(HttpMethod.PUT)
+                    .uri(absolute(href))
+                    .header(HttpHeaders.AUTHORIZATION, basic(credential))
+                    .contentType(MediaType.parseMediaType("text/calendar; charset=utf-8"));
+            if (onlyIfAbsent) {
+                spec = spec.header(HttpHeaders.IF_NONE_MATCH, "*");
+            } else if (ifMatch != null) {
+                spec = spec.header(HttpHeaders.IF_MATCH, ifMatch);
+            }
+            var response = spec.body(body).retrieve().toBodilessEntity();
+            // 🔴 ETag 를 안 주는 서버가 있다. 그때는 null 로 두고, 그 일정은 다음 조회가
+            //    값을 채울 때까지 수정할 수 없다 — 모르면 쓰지 않는다.
+            return response.getHeaders().getETag();
+        } catch (RestClientResponseException e) {
+            throw writeFailure(e.getStatusCode().value(), "PUT");
+        } catch (Exception e) {
+            log.warn("애플 쓰기 호출 실패", e);
+            throw providerFailure(e.getClass().getSimpleName());
+        }
+    }
+
+    private RuntimeException writeFailure(int status, String method) {
+        if (status == 412 || status == 409) {
+            // 412 는 두 경우다 — If-Match 어긋남(남이 고쳤다)과 If-None-Match 어긋남(이미 있다).
+            // 둘 다 "덮지 않았다" 이고, 호출부가 할 일은 재시도가 아니라 다시 읽는 것이다.
+            log.warn("애플 CalDAV 쓰기 충돌: status={} method={}", status, method);
+            return new ProviderWriteConflictException("그 사이 외부에서 바뀌었거나 이미 존재한다(status=" + status + ")");
+        }
+        if (status == 401 || status == 403) {
+            log.warn("애플 CalDAV 자격증명 거부(쓰기): status={}", status);
+            return new OpenPlanException(ErrorCode.E_EXT_002,
+                    Map.of("provider", ExternalCalendarProvider.APPLE.name()));
+        }
+        log.warn("애플 CalDAV 쓰기 오류: status={} method={}", status, method);
+        return providerFailure("status=" + status);
+    }
+
+    private static void requireEtag(ExternalRef ref, String what) {
+        if (!ref.hasEtag()) {
+            throw new ProviderWriteConflictException(
+                    what + "에 필요한 ETag 가 없다 — 덮어쓰지 않고 멈춘다. 다시 조회해 채운 뒤 시도할 것.");
+        }
+    }
+
+    private static URI absolute(String href) {
+        return URI.create(href.startsWith("http") ? href : BASE + href);
+    }
+
+    private static String calendarPath(String externalCalendarId) {
+        String path = externalCalendarId.startsWith("http")
+                ? URI.create(externalCalendarId).getPath()
+                : externalCalendarId;
+        return path.endsWith("/") ? path : path + "/";
+    }
+
+    /**
+     * 최소 iCalendar 본문.
+     *
+     * <p>🔴 {@code RRULE}·{@code EXDATE} 를 쓰지 않는다 — 고정 일정도 2개월치를 <b>회차로 펼쳐</b>
+     * 개별 일정으로 넣기 때문이다(계획 D1). 반복 규칙을 만들지 않으므로 «회차 하나를 고치려다
+     * 파일 전체를 덮는» 경로가 이 어댑터에는 존재하지 않는다.
+     *
+     * <p>시각은 전부 UTC({@code Z})로 적는다 — {@code VTIMEZONE} 을 만들 필요가 없고, 읽기 쪽
+     * {@code ICalParser} 가 겪은 «VTIMEZONE 안에도 DTSTART·RRULE 이 있다» 함정을 만들지 않는다.
+     */
+    private static String ics(OutboundEvent event) {
+        String stamp = UTC_STAMP.format(Instant.now());
+        return """
+                BEGIN:VCALENDAR
+                VERSION:2.0
+                PRODID:-//OpenPlan//KO
+                BEGIN:VEVENT
+                UID:%s
+                DTSTAMP:%s
+                DTSTART:%s
+                DTEND:%s
+                SUMMARY:%s
+                END:VEVENT
+                END:VCALENDAR
+                """.formatted(event.uid(), stamp,
+                UTC_STAMP.format(event.startAt()), UTC_STAMP.format(event.endAt()), escape(event.title()));
+    }
+
+    /** RFC 5545 §3.3.11 — 쉼표·세미콜론·역슬래시·줄바꿈은 이스케이프해야 본문이 깨지지 않는다. */
+    private static String escape(String text) {
+        return text == null ? "" : text
+                .replace("\\", "\\\\")
+                .replace(";", "\\;")
+                .replace(",", "\\,")
+                .replace("\n", "\\n");
+    }
+
+    private static final DateTimeFormatter UTC_STAMP =
+            DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'").withZone(java.time.ZoneOffset.UTC);
 }
