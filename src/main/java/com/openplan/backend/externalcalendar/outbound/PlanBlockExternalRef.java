@@ -52,6 +52,18 @@ public class PlanBlockExternalRef {
     @Column(name = "etag", length = 255)
     private String etag;
 
+    /**
+     * 이 블록이 <b>실제로 들어 있는</b> 외부 캘린더 (이슈 #69).
+     *
+     * <p><b>«지금 설정된 대상» 과 다를 수 있고, 그 차이가 이 컬럼의 존재 이유다.</b> 사용자가
+     * 대상을 A→B 로 바꿔도 이미 A 에 만들어 둔 이벤트는 A 에 남는다 — 수정·삭제는 A 로 보내야
+     * 한다. B 로 보내면 «없는 것을 고치려 드는» 404 가 영구히 반복된다.
+     *
+     * <p>null 은 «모름» 이다(이 컬럼 이전에 내보낸 행). 그때는 적재 시점 설정으로 폴백한다.
+     */
+    @Column(name = "sent_calendar_id", length = 512)
+    private String sentCalendarId;
+
     @Column(name = "sent_title", length = 255)
     private String sentTitle;
 
@@ -90,6 +102,21 @@ public class PlanBlockExternalRef {
     public void movedTo(UUID weeklyPlanId, Instant now) {
         this.weeklyPlanId = weeklyPlanId;
         this.updatedAt = now;
+    }
+
+    /**
+     * 방금 이 캘린더로 보냈다 (이슈 #69). <b>값이 있을 때만</b> 갱신한다 — 되받기 경로의
+     * recordSent 는 캘린더를 모르므로, 거기서 null 로 지워지면 안 된다.
+     */
+    public void locateInCalendar(String calendarId) {
+        if (calendarId != null && !calendarId.isBlank()) {
+            this.sentCalendarId = calendarId;
+        }
+    }
+
+    /** 내보낸 캘린더 — 없으면 null(모름). */
+    public String getSentCalendarId() {
+        return sentCalendarId;
     }
 
     public void recordSent(String externalEventId, String resourceHref, String etag,

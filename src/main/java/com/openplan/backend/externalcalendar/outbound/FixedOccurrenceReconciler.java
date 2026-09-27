@@ -145,7 +145,8 @@ public class FixedOccurrenceReconciler {
                          String title, FixedOccurrencePlanner.Occurrence want, String calendarId,
                          OutboundOperation operation, java.time.Instant now) {
         OutboundPayload payload = new OutboundPayload(occurrence.getExternalUid(), title,
-                want.startAt(), want.endAt(), calendarId,
+                want.startAt(), want.endAt(),
+                OutboundPayload.targetCalendar(occurrence.getSentCalendarId(), calendarId),
                 occurrence.getExternalEventId(), occurrence.getResourceHref(), occurrence.getEtag());
         opRepository.save(OutboundCalendarOp.queue(userId, connection.getId(),
                 OutboundTargetType.FIXED_OCCURRENCE, occurrence.getId(), operation, payload, now));
@@ -153,7 +154,8 @@ public class FixedOccurrenceReconciler {
 
     private void enqueueDelete(UUID userId, ExternalCalendarConnection connection, FixedOccurrence occurrence,
                                String calendarId, java.time.Instant now) {
-        OutboundPayload payload = new OutboundPayload(occurrence.getExternalUid(), null, null, null, calendarId,
+        OutboundPayload payload = new OutboundPayload(occurrence.getExternalUid(), null, null, null,
+                OutboundPayload.targetCalendar(occurrence.getSentCalendarId(), calendarId),
                 occurrence.getExternalEventId(), occurrence.getResourceHref(), occurrence.getEtag());
         opRepository.save(OutboundCalendarOp.queue(userId, connection.getId(),
                 OutboundTargetType.FIXED_OCCURRENCE, occurrence.getId(), OutboundOperation.DELETE, payload, now));

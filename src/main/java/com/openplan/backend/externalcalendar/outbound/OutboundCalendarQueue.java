@@ -68,7 +68,8 @@ public class OutboundCalendarQueue {
 
         OutboundPayload payload = new OutboundPayload(
                 ref.getExternalUid(), schedule.getTitle(), schedule.getStartAt(), schedule.getEndAt(),
-                connection.getWriteCalendarId(),
+                // 이미 내보낸 일정은 «있는 곳» 으로 — 대상 설정이 바뀌어도 그 이벤트는 옛 캘린더에 있다.
+                OutboundPayload.targetCalendar(ref.getSentCalendarId(), connection.getWriteCalendarId()),
                 ref.getExternalEventId(), ref.getResourceHref(), ref.getEtag());
 
         opRepository.save(OutboundCalendarOp.queue(userId, connection.getId(),
@@ -95,7 +96,8 @@ public class OutboundCalendarQueue {
         var now = clock.now();
         OutboundPayload payload = new OutboundPayload(
                 ref.getExternalUid(), null, null, null,
-                target.get().getWriteCalendarId(),
+                // 삭제는 특히 «있는 곳» 이어야 한다 — 매핑 행이 CASCADE 로 곧 사라져 나중에 알 길이 없다.
+                OutboundPayload.targetCalendar(ref.getSentCalendarId(), target.get().getWriteCalendarId()),
                 ref.getExternalEventId(), ref.getResourceHref(), ref.getEtag());
 
         opRepository.save(OutboundCalendarOp.queue(userId, ref.getConnectionId(),
