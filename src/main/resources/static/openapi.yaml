@@ -753,7 +753,8 @@ paths:
       x-user-stories: [FIX-15]
       parameters: [{ $ref: "#/components/parameters/ConnectionId" }]
       requestBody:
-        required: true
+        required: false
+        description: "본문 전체 생략 가능 — 생략·{}·null 은 전부 해제(내보내지 않음)로 읽는다."
         content:
           application/json:
             schema:
@@ -772,6 +773,9 @@ paths:
                 type: object
                 properties:
                   data: { $ref: "#/components/schemas/ExternalConnection" }
+        "404": { description: E-COM-004 연동 부재 또는 타인 소유 (구별해 알려주지 않는다 — NFR-030), content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "422": { description: E-COM-009 제공자 캘린더 목록에 없는 식별자, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "502": { description: E-EXT-001 목록 대조를 위한 제공자 호출 실패 (지정할 때만 — 해제는 제공자를 부르지 않는다), content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
   /external-calendar-connections/{connectionId}/events:
     get:
       tags: [external-calendar-connections]
