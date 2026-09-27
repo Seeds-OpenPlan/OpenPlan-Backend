@@ -68,7 +68,7 @@ class ExternalCalendarApplyGuardTest {
     @DisplayName("이미 반영한 일정을 다시 반영하면 409 E-EXT-005 — 고정 일정이 두 벌 생기면 안 된다")
     void 재적용은_409() {
         ExternalCalendarConnection connection = ExternalCalendarConnection.connect(
-                USER, ExternalCalendarProvider.GOOGLE, "me@example.com", "enc", "renc", NOW, NOW);
+                USER, ExternalCalendarProvider.GOOGLE, "me@example.com", "enc", "renc", NOW, null, NOW);
         ExternalCalendarEvent event = ExternalCalendarEvent.candidate(connection.getId(),
                 "evt-1", "팀 회의", Instant.parse("2026-08-20T01:00:00Z"),
                 Instant.parse("2026-08-20T02:00:00Z"), "내 캘린더", NOW);

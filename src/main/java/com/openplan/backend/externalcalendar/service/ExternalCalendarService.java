@@ -20,7 +20,13 @@ import com.openplan.backend.externalcalendar.dto.ExternalEventResponse;
 import com.openplan.backend.externalcalendar.dto.ProviderCalendarResponse;
 import com.openplan.backend.externalcalendar.dto.SaveSelectionsRequest;
 import com.openplan.backend.externalcalendar.dto.UpdateConnectionRequest;
+import com.openplan.backend.externalcalendar.dto.WriteCalendarRequest;
 import com.openplan.backend.externalcalendar.provider.CalendarProviderRegistry;
+import com.openplan.backend.externalcalendar.outbound.OpenPlanEventUid;
+import com.openplan.backend.externalcalendar.outbound.FixedOccurrenceReconciler;
+import com.openplan.backend.externalcalendar.outbound.OutboundCalendarPusher;
+import com.openplan.backend.externalcalendar.outbound.PlanBlockInboundReconciler;
+import com.openplan.backend.externalcalendar.outbound.ScheduleInboundReconciler;
 import com.openplan.backend.externalcalendar.provider.ProviderCredential;
 import com.openplan.backend.externalcalendar.provider.ProviderCalendar;
 import com.openplan.backend.externalcalendar.provider.ProviderEvent;
@@ -85,6 +91,10 @@ public class ExternalCalendarService {
     private final OAuthClient oauthClient;
     private final OAuthProperties oauthProperties;
     private final UserClock userClock;
+    private final OutboundCalendarPusher outboundPusher;
+    private final ScheduleInboundReconciler inboundReconciler;
+    private final FixedOccurrenceReconciler fixedOccurrenceReconciler;
+    private final PlanBlockInboundReconciler blockInboundReconciler;
 
     public ExternalCalendarService(ExternalCalendarConnectionRepository connectionRepository,
                                    ExternalCalendarSelectionRepository selectionRepository,
@@ -97,7 +107,15 @@ public class ExternalCalendarService {
                                    ExternalCalendarAuthorization authorization,
                                    OAuthClient oauthClient,
                                    OAuthProperties oauthProperties,
+                                   OutboundCalendarPusher outboundPusher,
+                                   ScheduleInboundReconciler inboundReconciler,
+                                   FixedOccurrenceReconciler fixedOccurrenceReconciler,
+                                   PlanBlockInboundReconciler blockInboundReconciler,
                                    UserClock userClock) {
+        this.outboundPusher = outboundPusher;
+        this.inboundReconciler = inboundReconciler;
+        this.fixedOccurrenceReconciler = fixedOccurrenceReconciler;
+        this.blockInboundReconciler = blockInboundReconciler;
         this.connectionRepository = connectionRepository;
         this.selectionRepository = selectionRepository;
         this.eventRepository = eventRepository;
@@ -169,7 +187,7 @@ public class ExternalCalendarService {
         ExternalCalendarConnection connection = ExternalCalendarConnection.connect(
                 userId, provider, secret.accountIdentifier(),
                 secret.accessTokenEnc(), secret.refreshTokenEnc(), secret.tokenExpiresAt(),
-                userClock.now());
+                secret.grantedScope(), userClock.now());
         try {
             connectionRepository.saveAndFlush(connection);
         } catch (DataIntegrityViolationException e) {
@@ -186,7 +204,8 @@ public class ExternalCalendarService {
      * {@code ExternalCalendarTokens} 의 만료 판정이 그대로 통과시킨다 — 스키마를 바꿀 필요가 없었다.
      */
     private record NewConnectionSecret(String accountIdentifier, String accessTokenEnc,
-                                       String refreshTokenEnc, Instant tokenExpiresAt) {
+                                       String refreshTokenEnc, Instant tokenExpiresAt,
+                                       String grantedScope) {
     }
 
     /** 구글·카카오 — 인가 코드를 토큰으로 바꾸고 계정을 확인한다. */
@@ -205,7 +224,9 @@ public class ExternalCalendarService {
             return new NewConnectionSecret(accountIdentifier,
                     tokens.encrypt(tokenSet.accessToken()),
                     tokens.encrypt(tokenSet.refreshToken()),
-                    tokens.expiresAt(tokenSet.expiresInSeconds()));
+                    tokens.expiresAt(tokenSet.expiresInSeconds()),
+                    // 요청한 스코프가 아니라 부여받은 것을 저장한다 — 사용자가 일부만 허용할 수 있다(#69).
+                    tokenSet.grantedScope());
         } catch (OAuthException e) {
             log.warn("외부 캘린더 연결 실패: provider={}", provider, e);
             throw new OpenPlanException(ErrorCode.E_EXT_001, Map.of("provider", provider.name()));
@@ -225,7 +246,9 @@ public class ExternalCalendarService {
         String appleId = request.appleId().trim();
         providerRegistry.get(provider)
                 .listCalendars(ProviderCredential.basic(appleId, request.appPassword()));
-        return new NewConnectionSecret(appleId, tokens.encrypt(request.appPassword()), null, null);
+        return new NewConnectionSecret(appleId, tokens.encrypt(request.appPassword()), null, null,
+                // 애플은 스코프 개념이 없다 — 앱 암호가 곧 전권이라 canWrite() 가 이 값을 보지 않는다.
+                null);
     }
 
     /**
@@ -288,6 +311,52 @@ public class ExternalCalendarService {
     }
 
     /**
+     * 내보낼 대상 캘린더 지정 (이슈 #69) — <b>이 값이 없으면 아웃바운드는 조용히 0건이다.</b>
+     *
+     * <p>계획 0단계가 「대상 캘린더 설정 + 설정 화면」을 요구했는데 컬럼만 만들고 이 경로를 빼 두어,
+     * 내보내기 구현 전부가 실제로는 한 건도 내보내지 못하는 상태였다. 그 구멍을 메우는 메서드다.
+     *
+     * <p><b>받은 식별자가 실재하는지 제공자 목록과 대조한다.</b> 여기서 대조하지 않으면 틀린 값이
+     * 그대로 저장되고, 실패는 한참 뒤 {@code OutboundCalendarPusher} 가 제공자에게 404 를 받는
+     * 자리에서야 드러난다 — 사용자는 «저장은 됐는데 안 나간다» 만 본다. 저장 시점에 422 로 막는 쪽이
+     * 원인을 가리키고, 값을 고칠 사람도 그 화면 앞에 서 있다.
+     *
+     * <p><b>해제({@code null}·빈 문자열)는 제공자를 부르지 않는다.</b> 내보내기를 멈추려는 사용자가
+     * 제공자 장애 때문에 멈출 수 없게 되면 안 된다. 빈 문자열도 {@code null} 로 접어 저장하는 이유는
+     * {@code OutboundCalendarQueue} 가 blank 를 «안 고름» 으로 취급하므로, DB 에 {@code ""} 를 남기면
+     * 화면·질의·로그에서 «고른 것처럼 보이지만 안 나가는» 세 번째 상태가 생긴다.
+     */
+    @Transactional
+    public ExternalConnectionResponse setWriteCalendar(UUID userId, UUID connectionId,
+                                                      WriteCalendarRequest request) {
+        ExternalCalendarConnection connection = requireConnection(userId, connectionId);
+
+        String requested = request == null ? null : request.externalCalendarId();
+        String normalized = (requested == null || requested.isBlank()) ? null : requested.trim();
+
+        if (normalized != null) {
+            requireProviderHasCalendar(connection, normalized);
+        }
+
+        connection.chooseWriteCalendar(normalized);
+        log.info("내보낼 대상 캘린더를 {}: connectionId={} calendarId={}",
+                normalized == null ? "해제했다" : "지정했다", connectionId, normalized);
+
+        return ExternalConnectionResponse.of(connection,
+                selectionRepository.findByConnectionIdOrderByCalendarNameAsc(connectionId));
+    }
+
+    /** 제공자가 실제로 갖고 있는 캘린더인지 — 없으면 422 E-COM-009(허용되지 않는 값). */
+    private void requireProviderHasCalendar(ExternalCalendarConnection connection, String externalCalendarId) {
+        boolean exists = providerRegistry.get(connection.getProvider())
+                .listCalendars(tokens.usableCredential(connection)).stream()
+                .anyMatch(calendar -> externalCalendarId.equals(calendar.externalCalendarId()));
+        if (!exists) {
+            throw new OpenPlanException(ErrorCode.E_COM_009, Map.of("externalCalendarId", externalCalendarId));
+        }
+    }
+
+    /**
      * 연동 해제 (FIX-17) — 유래 고정 일정·선택·후보 일정이 FK CASCADE 로 함께 사라진다(AC4).
      * 그래서 이후 주간 계획에 반영되지 않는다.
      */
@@ -344,6 +413,16 @@ public class ExternalCalendarService {
     public List<ExternalEventResponse> listEvents(UUID userId, UUID connectionId, ApplyStatus applyStatus) {
         ExternalCalendarConnection connection = requireConnection(userId, connectionId);
         if (connection.isActive()) {
+            // 🔴 **내보내기가 먼저다.** 대기 중인 변경을 밀어낸 뒤에 읽어야, 방금 만든 일정이
+            //    같은 회차에 우리 UID 로 돌아와 에코 차단에 걸린다. 순서를 바꾸면 그 일정이
+            //    다음 회차까지 "외부에 없는 것" 으로 남아 삭제 전파가 오판할 여지가 생긴다.
+            //    pushPending 은 예외를 올리지 않는다 — 외부 쓰기 실패로 조회가 깨지면 안 된다.
+            // 🔴 순서가 정해져 있다.
+            //    ① 고정 일정 회차를 맞춘다 — 창이 «오늘부터» 라 여기서 앞으로 밀린다(별도 배치 없음).
+            //    ② 대기열을 밀어낸다 — ①이 적은 것까지 이번 회차에 나간다.
+            //    ③ 읽어 온다 — 방금 만든 것이 우리 UID 로 돌아와 에코 차단에 걸린다.
+            fixedOccurrenceReconciler.reconcile(userId, connection);
+            outboundPusher.pushPending(userId);
             synchronize(userId, connection);
         }
         List<ExternalCalendarEvent> events = (applyStatus == null)
@@ -435,6 +514,8 @@ public class ExternalCalendarService {
         // 🔴 이번 회차에 제공자가 실제로 돌려준 일정 — 삭제 판정의 유일한 근거다(#68).
         //    "안 왔다" 를 곧바로 "지워졌다" 로 읽으면 안 된다. 아래 propagateDeletions 참고.
         Set<String> seen = new HashSet<>();
+        // 이번 회차에 실제로 돌아온 **우리** 일정 — 외부 삭제 판정의 근거다(#69).
+        Set<String> ourUids = new HashSet<>();
         // 원격에서 값이 바뀐 것 — 반영된 고정 일정을 따라 고쳐야 한다.
         List<ExternalCalendarEvent> remoteChanged = new ArrayList<>();
         for (ExternalCalendarSelection selection : selections) {
@@ -442,7 +523,31 @@ public class ExternalCalendarService {
                     .listEvents(credential, selection.getExternalCalendarId(), selection.getCalendarName(), from, to);
 
             for (ProviderEvent providerEvent : fetched) {
+                // 🔴 에코 차단 (#69). 우리가 밖에 만든 일정은 다음 조회에 그대로 읽혀 온다.
+                //    그것을 «외부에서 온 새 후보» 로 들이면 사용자 화면에 자기 일정이 한 번 더
+                //    뜨고, 그것을 또 내보내면 **무한히 늘어난다.** 이미 쌓인 뒤에는 되돌릴 수 없다.
+                //
+                //    🔴 seen 에는 **넣는다.** 빼면 "이번에 안 왔다" 가 되어 삭제 전파(#68)가
+                //    우리가 방금 만든 일정을 지워진 것으로 읽는다 — 후보를 안 만드는 것과
+                //    "없어졌다" 고 판정하는 것은 전혀 다른 이야기다.
                 seen.add(providerEvent.externalEventId());
+                // 🔴 externalEventId 가 아니라 uid 로 묻는다. 구글의 externalEventId 는 이벤트
+                //    id 라 우리 것을 절대 못 알아보고, 애플은 #시작시각 접미사가 붙어 매핑
+                //    조회가 어긋난다 — 그러면 방금 만든 일정이 삭제 대상이 된다(#80 리뷰).
+                if (OpenPlanEventUid.isOurs(providerEvent.uid())) {
+                    // 🔴 «새 후보로 만들지 않는다» 와 «변경을 무시한다» 는 다르다(#69 D4).
+                    //    여기서 내보낼 때의 스냅샷과 비교해 사용자가 폰에서 고친 것을 되받는다.
+                    //    ETag 도 여기서 갱신한다 — 안 하면 다음 수정이 «남이 고쳤다» 로 튕긴다.
+                    //    매핑 조회도 uid 로 한다 — 접미사 붙은 값으로 찾으면 절대 일치하지 않는다.
+                    ourUids.add(providerEvent.uid());
+                    blockInboundReconciler.reconcileOne(providerEvent.uid(),
+                            providerEvent.title(), providerEvent.startAt(), providerEvent.endAt(),
+                            providerEvent.externalEventId(), providerEvent.resourceHref(), providerEvent.etag());
+                    inboundReconciler.reconcileOne(userId, providerEvent.uid(),
+                            providerEvent.title(), providerEvent.startAt(), providerEvent.endAt(),
+                            providerEvent.externalEventId(), providerEvent.resourceHref(), providerEvent.etag());
+                    continue;
+                }
                 ExternalCalendarEvent stored = existing.get(providerEvent.externalEventId());
                 if (stored != null) {
                     // resync 는 값을 덮어쓰므로 **덮어쓰기 전에** 비교해야 한다.
@@ -451,7 +556,9 @@ public class ExternalCalendarService {
                             || !Objects.equals(stored.getEndAt(), providerEvent.endAt());
                     stored.resync(providerEvent.title(), providerEvent.startAt(), providerEvent.endAt(),
                             providerEvent.sourceCalendar(), now);
-                    stored.locateIn(providerEvent.externalCalendarId());
+                    // 쓰기 참조는 매 조회마다 바뀔 수 있다(특히 ETag). 값이 왔을 때만 갱신한다(#69).
+                    stored.updateWriteRefs(providerEvent.externalCalendarId(), providerEvent.resourceHref(),
+                            providerEvent.etag(), providerEvent.recurring());
                     if (differs) {
                         remoteChanged.add(stored);
                     }
@@ -463,7 +570,8 @@ public class ExternalCalendarService {
                             providerEvent.externalEventId(), providerEvent.title(),
                             providerEvent.startAt(), providerEvent.endAt(),
                             providerEvent.sourceCalendar(), now);
-                    candidate.locateIn(providerEvent.externalCalendarId());
+                    candidate.updateWriteRefs(providerEvent.externalCalendarId(), providerEvent.resourceHref(),
+                            providerEvent.etag(), providerEvent.recurring());
                     created.add(candidate);
                     existing.put(providerEvent.externalEventId(), candidate);
                 }
@@ -471,6 +579,9 @@ public class ExternalCalendarService {
         }
         propagateRemoteUpdates(userId, remoteChanged);
         propagateRemoteDeletions(connection, existing, seen, selections, from, to);
+        // 우리 일정이 외부에서 지워졌는가. 같은 «창 안에 있어야 하는데 없다» 원칙을 쓴다.
+        inboundReconciler.propagateDeletions(connection.getId(), ourUids, from, to);
+        blockInboundReconciler.propagateDeletions(userId, ourUids, from, to);
 
         if (created.isEmpty()) {
             return;

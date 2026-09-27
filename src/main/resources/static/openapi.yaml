@@ -734,6 +734,48 @@ paths:
                       name: { type: string }
       responses:
         "200": { description: 저장 완료 }
+  /external-calendar-connections/{connectionId}/write-calendar:
+    put:
+      tags: [external-calendar-connections]
+      operationId: setWriteCalendar
+      summary: "내보낼 대상 캘린더 지정 (이슈 #69 — 이것이 비면 내보내기가 0건)"
+      description: |
+        OpenPlan 의 변경을 **어느 외부 캘린더에 쓸지** 정한다. 이 값이 비어 있으면
+        아웃바운드는 조용히 아무것도 내보내지 않는다(내보내기 대상 불명 — «모르면 쓰지 않는다»).
+
+        `externalCalendarId` 는 같은 연동의 `listProviderCalendars` 가 돌려준 값이어야 한다 —
+        그 목록에 없으면 422 E-COM-009 다. 목록 대조를 위해 서버가 제공자를 한 번 호출하므로,
+        제공자가 죽어 있으면 502 E-EXT-001 로 실패한다(**지정만** 그렇고, 해제는 제공자를 부르지 않는다).
+
+        **null 또는 생략은 «내보내지 않음» 으로 해제**한다 — 이미 내보낸 일정은 외부에 그대로 남고,
+        이후 변경만 더 나가지 않는다.
+      x-lane: BE-1
+      x-user-stories: [FIX-15]
+      parameters: [{ $ref: "#/components/parameters/ConnectionId" }]
+      requestBody:
+        required: false
+        description: "본문 전체 생략 가능 — 생략·{}·null 은 전부 해제(내보내지 않음)로 읽는다."
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                externalCalendarId:
+                  type: string
+                  nullable: true
+                  description: "제공자 캘린더 식별자. null·생략·빈 문자열은 해제(내보내지 않음)."
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/ExternalConnection" }
+        "404": { description: E-COM-004 연동 부재 또는 타인 소유 (구별해 알려주지 않는다 — NFR-030), content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "422": { description: E-COM-009 제공자 캘린더 목록에 없는 식별자, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "502": { description: E-EXT-001 목록 대조를 위한 제공자 호출 실패 (지정할 때만 — 해제는 제공자를 부르지 않는다), content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
   /external-calendar-connections/{connectionId}/events:
     get:
       tags: [external-calendar-connections]
@@ -1750,6 +1792,16 @@ paths:
       tags: [weekly-plans]
       operationId: confirmWeeklyPlan
       summary: "주간 계획 저장=확정 (서버가 검증 재실행 — 차단 존재 시 409, PLAN-28 규칙)"
+      description: |
+        🔴 **외부 부수효과 있음 (이슈 #69).** 외부 캘린더 연동이 있고 쓰기 권한과 대상 캘린더가
+        모두 정해져 있으면, **확정된 이 주의 태스크 배치가** 구글·애플 캘린더에도 반영된다.
+
+        호출 시점에 외부를 부르지는 않는다 — 변경을 대기열(`outbound_calendar_ops`)에 적고
+        커밋만 하며, 실제 전송은 다음 동기화가 한다. 따라서 **이 응답이 200이라고 외부 반영이
+        끝난 것은 아니다.** 외부가 느리거나 죽어도 이 호출은 성공한다.
+
+        연동이 없거나, 쓰기 권한이 없거나, 대상 캘린더를 안 골랐으면 조용히 내보내지 않는다 —
+        오류가 아니라 "아직 아니다" 이므로 응답이 달라지지 않는다.
       x-lane: BE-2
       x-user-stories: [PLAN-03, PLAN-28]
       parameters: [{ $ref: "#/components/parameters/PlanId" }, { $ref: "#/components/parameters/IdempotencyKey" }]
@@ -1929,6 +1981,16 @@ paths:
       tags: [schedules]
       operationId: updateSchedule
       summary: "일정 편집 (제목·예상시간·우선순위·메모 — B2 보강 컬럼, version 필수)"
+      description: |
+        🔴 **외부 부수효과 있음 (이슈 #69).** 외부 캘린더 연동이 있고 쓰기 권한과 대상 캘린더가
+        모두 정해져 있으면, 이 변경은 구글·애플 캘린더에도 반영된다.
+
+        호출 시점에 외부를 부르지는 않는다 — 변경을 대기열(`outbound_calendar_ops`)에 적고
+        커밋만 하며, 실제 전송은 다음 동기화가 한다. 따라서 **이 응답이 200이라고 외부 반영이
+        끝난 것은 아니다.** 외부가 느리거나 죽어도 이 호출은 성공한다.
+
+        연동이 없거나, 쓰기 권한이 없거나, 대상 캘린더를 안 골랐으면 조용히 내보내지 않는다 —
+        오류가 아니라 "아직 아니다" 이므로 응답이 달라지지 않는다.
       x-lane: BE-2
       x-user-stories: [PLAN-17]
       parameters: [{ name: scheduleId, in: path, required: true, schema: { type: string, format: uuid } }]
@@ -2524,6 +2586,15 @@ components:
         syncMode: { type: string }
         status: { type: string, enum: [CONNECTED, DISABLED] }
         connectedAt: { type: string, format: date-time }
+        # 이슈 #69 — 화면이 «왜 안 나가는가» 를 말할 수 있어야 한다. 둘 중 하나라도
+        # 거짓이면 아웃바운드는 조용히 0건이고, 그 침묵의 이유가 이 두 값이다.
+        writeCalendarId:
+          type: string
+          nullable: true
+          description: "내보낼 대상 캘린더(setWriteCalendar 로 지정). null 이면 내보내지 않는다."
+        canWrite:
+          type: boolean
+          description: "이 연동으로 밖에 쓸 수 있는가 — 구글은 부여 스코프에 쓰기가 포함될 때만 참(애플은 앱 암호가 전권)."
         selectedCalendars:
           type: array
           items:

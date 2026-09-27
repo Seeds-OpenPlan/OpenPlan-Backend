@@ -101,7 +101,8 @@ class ExternalCalendarApiTest {
         given(googleProvider.provider()).willReturn(ExternalCalendarProvider.GOOGLE);
 
         given(oauthClient.exchangeCodeForTokens(any(), any(), any(), any()))
-                .willReturn(new OAuthTokenSet("provider-access", "provider-refresh", 3600L));
+                .willReturn(new OAuthTokenSet("provider-access", "provider-refresh", 3600L,
+                        "openid email https://www.googleapis.com/auth/calendar.events"));
         given(oauthClient.fetchUserInfo(any(), anyString()))
                 .willReturn(new OAuthUserInfo("google-user-1", "owner@gmail.com"));
     }

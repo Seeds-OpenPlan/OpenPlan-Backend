@@ -31,8 +31,16 @@ public enum ExternalCalendarProvider {
     //    구글 동의까지 정상적으로 끝난 뒤라 원인이 구글 쪽으로 보이지도 않는다.
     //    profile 은 넣지 않는다: 우리가 쓰는 값은 email(과 폴백 sub)뿐이라
     //    이름·사진까지 동의받는 것은 최소 권한에 어긋난다.
+    // 🔴 calendar.events 는 **쓰기 권한**이다(#69 양방향). readonly 에서 넓히면 두 가지가 따라온다.
+    //    ① 기존 연동 사용자는 전원 재동의해야 한다 — 갖고 있는 토큰은 옛 스코프로 발급됐다.
+    //       그 토큰으로 쓰면 구글이 403 insufficient scope 를 준다. 그래서 «부여받은 스코프» 를
+    //       연동에 저장하고(granted_scope), 쓰기 전에 그 값을 본다 — 요청값이 아니라.
+    //    ② 민감 스코프라 구글 인증 심사를 다시 받아야 한다. 개인정보처리방침·이용약관 페이지가
+    //       프로덕션에 살아 있어야 제출할 수 있다.
+    //    읽기만 하던 때로 되돌리려면 이 문자열만 calendar.readonly 로 바꾸면 된다 — 저장된
+    //    granted_scope 가 자동으로 «쓸 수 없음» 이 되어 쓰기 경로가 조용히 닫힌다.
     GOOGLE(OAuthProviderType.GOOGLE,
-            "openid email https://www.googleapis.com/auth/calendar.readonly",
+            "openid email https://www.googleapis.com/auth/calendar.events",
             CalendarAuthModel.OAUTH),
 
     /**
