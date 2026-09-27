@@ -87,7 +87,21 @@ public class OutboundOpExecutor {
             ExternalCalendarConnection connection = found.get();
             CalendarProvider provider = registry.get(connection.getProvider());
             ProviderCredential credential = tokens.usableCredential(connection);
-            String calendarId = op.getPayload().writeCalendarId();
+            // 🔴 CREATE 만 «지금 설정» 을 따른다. payload 의 writeCalendarId 는 적재 시점 스냅샷이라,
+            //    전송 전에 사용자가 대상을 바꾸면(setWriteCalendar) 이미 버린 캘린더에 새 일정이 생긴다 —
+            //    제공자 장애로 CREATE 가 FAILED 로 남아 있는 동안 대상을 옮기면 그렇게 된다.
+            //    UPDATE·DELETE 는 반대로 스냅샷이 정답이다: 그 일정은 그때의 그 캘린더 안에 실재하므로
+            //    지금 설정을 따르면 «없는 곳에서 고치려 드는» 404 가 된다.
+            String calendarId = op.getOperation() == OutboundOperation.CREATE
+                    ? connection.getWriteCalendarId()
+                    : op.getPayload().writeCalendarId();
+
+            if (calendarId == null || calendarId.isBlank()) {
+                // 사용자가 내보내기를 껐다(또는 아직 안 골랐다). FAILED 는 다시 집히므로,
+                // 대상을 다시 고르면 이 op 이 그때 나간다 — 버리지 않는다.
+                op.fail("대상 캘린더가 없다 — 내보내기가 해제된 상태다", now);
+                return;
+            }
 
             switch (op.getOperation()) {
                 case CREATE -> recordSent(op, provider.createEvent(credential, calendarId,
