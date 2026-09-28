@@ -119,7 +119,8 @@ public class OutboundOpExecutor {
                     .map(ref -> new ExternalRef(ref.getExternalEventId(), ref.getResourceHref(), ref.getEtag()));
             case FIXED_OCCURRENCE -> occurrenceRepository.findById(op.getTargetId())
                     .map(o -> new ExternalRef(o.getExternalEventId(), o.getResourceHref(), o.getEtag()));
-            default -> Optional.empty();
+            case PLAN_BLOCK -> blockRefRepository.findById(op.getTargetId())
+                    .map(r -> new ExternalRef(r.getExternalEventId(), r.getResourceHref(), r.getEtag()));
         };
         return current.orElseGet(() -> op.getPayload().toRef());
     }

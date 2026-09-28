@@ -109,6 +109,11 @@ public class PlanBlockOutboundReconciler {
         for (PlanBlockExternalRef ref : stored) {
             String key = ref.getTaskId() + "#" + ref.getSequence();
             storedKeys.add(key);
+            // 🔴 다른 연동으로 나간 매핑은 그 연동의 것이다 — 이 연동의 자격증명·캘린더로 지목하지
+            //    않는다(#79 리뷰와 같은 뿌리). 자리는 차지한 것으로 둬 새 UID 를 또 만들지 않는다.
+            if (!connection.getId().equals(ref.getConnectionId())) {
+                continue;
+            }
             PlanBlock block = wanted.get(key);
             if (block == null) {
                 // 그 자리가 없어졌다 — 태스크를 빼거나 세션을 줄였다.
@@ -124,17 +129,56 @@ public class PlanBlockOutboundReconciler {
         }
 
         // ③ 새로 생긴 자리
-        for (var entry : wanted.entrySet()) {
-            if (storedKeys.contains(entry.getKey())) {
+        //    🔴 새 UID 를 발급하기 전에 **다른 주에서 자리를 잃은 같은 태스크의 매핑**을 먼저 데려온다.
+        //    주차 이동(PLAN-20)은 블록의 weekly_plan_id 만 바꾸고 매핑은 따라가지 않는다. 데려오지
+        //    않으면 외부에 같은 태스크가 하나 더 생기고, 원래 주의 이벤트는 그 주를 다시 확정하기
+        //    전까지 고아로 남는다(#82 리뷰 Blocking). 이동 경로(수동·자동 배치·재계획)마다 훅을 거는
+        //    대신 확정 시점에 맞춘다 — 이 클래스가 블록 단위 훅을 쓰지 않는 것과 같은 이유다.
+        Map<UUID, List<PlanBlockExternalRef>> strays = new HashMap<>();
+        List<String> newKeys = wanted.keySet().stream().filter(k -> !storedKeys.contains(k)).sorted().toList();
+        for (String key : newKeys) {
+            PlanBlock block = wanted.get(key);
+            int sequence = Integer.parseInt(key.substring(key.indexOf('#') + 1));
+            List<PlanBlockExternalRef> candidates = strays.computeIfAbsent(block.getTaskId(),
+                    taskId -> straysOf(userId, weeklyPlanId, taskId, connection));
+            PlanBlockExternalRef ref;
+            OutboundOperation operation;
+            if (!candidates.isEmpty()) {
+                ref = candidates.removeFirst();
+                ref.relocate(weeklyPlanId, sequence, now);
+                operation = ref.neverSent() ? OutboundOperation.CREATE : OutboundOperation.UPDATE;
+            } else {
+                ref = refRepository.save(PlanBlockExternalRef.reserve(
+                        userId, connection.getId(), weeklyPlanId, block.getTaskId(), sequence, now));
+                operation = OutboundOperation.CREATE;
+            }
+            enqueue(userId, connection, ref, titleOf(block.getTaskId()), block, calendarId, operation, now);
+        }
+    }
+
+    /**
+     * 이 태스크의 다른 주 매핑 중 <b>자기 주에서 자리가 사라진 것</b> — 그 주의 이 태스크 블록 수가
+     * 매핑의 순번 이하로 줄었다. 블록이 다른 주로 옮겨 가면 원래 주에 이런 매핑이 남는다.
+     * 같은 연동의 것만 데려온다.
+     */
+    private List<PlanBlockExternalRef> straysOf(UUID userId, UUID weeklyPlanId, UUID taskId,
+                                                ExternalCalendarConnection connection) {
+        Map<UUID, Long> countByPlan = new HashMap<>();
+        List<PlanBlockExternalRef> strays = new ArrayList<>();
+        for (PlanBlockExternalRef ref : refRepository.findByUserIdAndTaskId(userId, taskId)) {
+            if (ref.getWeeklyPlanId().equals(weeklyPlanId) || !connection.getId().equals(ref.getConnectionId())) {
                 continue;
             }
-            PlanBlock block = entry.getValue();
-            int sequence = Integer.parseInt(entry.getKey().substring(entry.getKey().indexOf('#') + 1));
-            PlanBlockExternalRef ref = refRepository.save(PlanBlockExternalRef.reserve(
-                    userId, connection.getId(), weeklyPlanId, block.getTaskId(), sequence, now));
-            enqueue(userId, connection, ref, titleOf(block.getTaskId()), block, calendarId,
-                    OutboundOperation.CREATE, now);
+            long remaining = countByPlan.computeIfAbsent(ref.getWeeklyPlanId(),
+                    planId -> planBlockRepository.findByWeeklyPlanId(planId).stream()
+                            .filter(b -> b.getBlockType() == PlanBlockType.TASK && taskId.equals(b.getTaskId()))
+                            .count());
+            if (ref.getSequence() >= remaining) {
+                strays.add(ref);
+            }
         }
+        strays.sort(Comparator.comparing(PlanBlockExternalRef::getSequence).thenComparing(PlanBlockExternalRef::getId));
+        return strays;
     }
 
     /**
@@ -148,18 +192,29 @@ public class PlanBlockOutboundReconciler {
         return found.isEmpty() ? "" : found.getFirst();
     }
 
+    /** 대상마다 안 나간 작업은 하나만 둔다 — 있으면 새로 쌓지 않고 내용을 고친다(#80 리뷰). */
     private void enqueue(UUID userId, ExternalCalendarConnection connection, PlanBlockExternalRef ref,
                          String title, PlanBlock block, String calendarId,
                          OutboundOperation operation, Instant now) {
         OutboundPayload payload = new OutboundPayload(ref.getExternalUid(), title,
                 block.getStartAt(), block.getEndAt(), calendarId,
                 ref.getExternalEventId(), ref.getResourceHref(), ref.getEtag());
+        List<OutboundCalendarOp> unsent = opRepository.findUnsentByTarget(OutboundTargetType.PLAN_BLOCK, ref.getId());
+        if (!unsent.isEmpty()) {
+            unsent.get(unsent.size() - 1).replacePayload(payload, now);
+            return;
+        }
         opRepository.save(OutboundCalendarOp.queue(userId, connection.getId(),
                 OutboundTargetType.PLAN_BLOCK, ref.getId(), operation, payload, now));
     }
 
+    /** 🔴 나간 적 없으면 대기 CREATE 를 거두고 DELETE 를 쌓지 않는다 — 유령·영구 실패를 막는다(#80 리뷰). */
     private void enqueueDelete(UUID userId, ExternalCalendarConnection connection, PlanBlockExternalRef ref,
                                String calendarId, Instant now) {
+        opRepository.deleteAll(opRepository.findUnsentByTarget(OutboundTargetType.PLAN_BLOCK, ref.getId()));
+        if (ref.neverSent()) {
+            return;
+        }
         OutboundPayload payload = new OutboundPayload(ref.getExternalUid(), null, null, null, calendarId,
                 ref.getExternalEventId(), ref.getResourceHref(), ref.getEtag());
         opRepository.save(OutboundCalendarOp.queue(userId, connection.getId(),
