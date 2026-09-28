@@ -129,6 +129,19 @@ public class PlanBlockExternalRef {
                 || !Objects.equals(sentEndAt, endAt);
     }
 
+    /**
+     * 보낸 <b>시각</b>과 다른가 — 되받기 판정용. 제목은 되받지 않으므로 제목만 바뀐 것은 «옮겼다» 가
+     * 아니다. 제목까지 보면 캘린더에서 이름만 고쳐도 확정이 풀린다(#83 리뷰 Blocking).
+     */
+    public boolean timeDiffersFrom(Instant startAt, Instant endAt) {
+        return !Objects.equals(sentStartAt, startAt) || !Objects.equals(sentEndAt, endAt);
+    }
+
+    /** 마지막으로 보낸 시각에 놓인 블록인가 — 순번 대신 이것으로 대상을 찾는다(#83 리뷰 Blocking). */
+    public boolean wasSentAt(Instant startAt, Instant endAt) {
+        return sentStartAt != null && sentStartAt.equals(startAt) && Objects.equals(sentEndAt, endAt);
+    }
+
     /** 내보낸 시각이 이 창 안이었나 — 외부 삭제 판정의 전제(#69 D4). */
     public boolean wasSentWithin(Instant from, Instant to) {
         return sentStartAt != null && !sentStartAt.isBefore(from) && sentStartAt.isBefore(to);
