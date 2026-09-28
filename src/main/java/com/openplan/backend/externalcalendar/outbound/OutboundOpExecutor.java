@@ -111,12 +111,14 @@ public class OutboundOpExecutor {
      * 매핑이 이미 없으면(삭제 CASCADE 뒤) payload 가 유일한 근거다 — 그래서 거기 담아 둔 것이다.
      */
     private ExternalRef currentRef(OutboundCalendarOp op) {
-        if (op.getTargetType() != OutboundTargetType.SCHEDULE) {
-            return op.getPayload().toRef();
-        }
-        return refRepository.findById(op.getTargetId())
-                .map(ref -> new ExternalRef(ref.getExternalEventId(), ref.getResourceHref(), ref.getEtag()))
-                .orElseGet(() -> op.getPayload().toRef());
+        Optional<ExternalRef> current = switch (op.getTargetType()) {
+            case SCHEDULE -> refRepository.findById(op.getTargetId())
+                    .map(ref -> new ExternalRef(ref.getExternalEventId(), ref.getResourceHref(), ref.getEtag()));
+            case FIXED_OCCURRENCE -> occurrenceRepository.findById(op.getTargetId())
+                    .map(o -> new ExternalRef(o.getExternalEventId(), o.getResourceHref(), o.getEtag()));
+            default -> Optional.empty();
+        };
+        return current.orElseGet(() -> op.getPayload().toRef());
     }
 
     /** 보낸 결과를 매핑에 적는다 — 다음 수정의 If-Match 재료이자 되받기의 비교 기준이다. */
