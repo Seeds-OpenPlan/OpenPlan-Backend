@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -52,16 +53,26 @@ public class OutboundCalendarQueue {
      *
      * <p>매핑이 없으면 UID 를 발급해 CREATE 로, 있으면 UPDATE 로 적는다. UID 는 <b>일정 id 에서
      * 파생</b>하므로(개인 일정은 재생성되지 않는다) 같은 일정이 두 UID 를 갖는 일이 없다.
+     *
+     * <p>🔴 <b>이미 매핑이 있으면 그 매핑의 연동으로만 보낸다.</b> 지금 계산한 «쓸 수 있는 연동» 은
+     * 그 사이 바뀔 수 있다(먼저 연결한 쪽의 쓰기 권한이 사라지면 다음 연동이 뽑힌다). 섞으면 구글
+     * 자격증명으로 애플 캘린더 id 를 지목하게 되고, 구글은 404 를 주며 그것은 «이미 지워짐» 으로
+     * 읽혀 <b>밖에 일정이 남은 채 성공으로 기록된다</b>(#79 리뷰 Blocking).
+     *
+     * <p>🔴 <b>아직 안 나간 작업이 있으면 새로 쌓지 않고 그것을 고친다.</b> CREATE 가 대기 중인데
+     * UPDATE 를 따로 쌓으면 그 UPDATE 는 참조(ETag)가 비어 영원히 실패한다(#80 리뷰 Blocking).
      */
     public void enqueueScheduleUpsert(UUID userId, Schedule schedule) {
-        Optional<ExternalCalendarConnection> target = writableConnection(userId);
+        Optional<ScheduleExternalRef> existing = refRepository.findById(schedule.getId());
+        Optional<ExternalCalendarConnection> target = existing.isPresent()
+                ? homeConnection(existing.get())
+                : writableConnection(userId);
         if (target.isEmpty()) {
             return;
         }
         ExternalCalendarConnection connection = target.get();
         var now = clock.now();
 
-        Optional<ScheduleExternalRef> existing = refRepository.findById(schedule.getId());
         boolean isNew = existing.isEmpty();
         ScheduleExternalRef ref = existing.orElseGet(() -> refRepository.save(ScheduleExternalRef.reserve(
                 schedule.getId(), connection.getId(), OpenPlanEventUid.forSchedule(schedule.getId()), now)));
@@ -71,6 +82,12 @@ public class OutboundCalendarQueue {
                 connection.getWriteCalendarId(),
                 ref.getExternalEventId(), ref.getResourceHref(), ref.getEtag());
 
+        List<OutboundCalendarOp> unsent = opRepository.findUnsentByTarget(OutboundTargetType.SCHEDULE, schedule.getId());
+        if (!unsent.isEmpty()) {
+            // 대기 중인 CREATE 는 CREATE 로 남는다 — 아직 밖에 없으니 «고칠» 대상이 없다. 내용만 최신으로.
+            unsent.get(unsent.size() - 1).replacePayload(payload, now);
+            return;
+        }
         opRepository.save(OutboundCalendarOp.queue(userId, connection.getId(),
                 OutboundTargetType.SCHEDULE, schedule.getId(),
                 isNew ? OutboundOperation.CREATE : OutboundOperation.UPDATE, payload, now));
@@ -81,6 +98,10 @@ public class OutboundCalendarQueue {
      *
      * <p>🔴 <b>지우기 전에 불려야 한다.</b> {@code ON DELETE CASCADE} 로 매핑 행이 함께 사라지면
      * "무엇을 외부에서 지워야 하는지" 를 알 수 없게 된다. 그래서 필요한 값을 payload 에 담는다.
+     *
+     * <p>🔴 <b>아직 밖에 나간 적이 없으면 DELETE 를 쌓지 않고 대기 중인 CREATE 를 거둔다.</b>
+     * 그대로 두면 CREATE 가 뒤늦게 성공해 <b>OpenPlan 에서 지운 일정이 외부에 유령으로 남고</b>,
+     * 참조 없이 쌓인 DELETE 는 영원히 실패한다(#80 리뷰 Blocking).
      */
     public void enqueueScheduleDelete(UUID userId, UUID scheduleId) {
         Optional<ScheduleExternalRef> found = refRepository.findById(scheduleId);
@@ -88,18 +109,35 @@ public class OutboundCalendarQueue {
             return;   // 내보낸 적이 없다 — 밖에 지울 것도 없다.
         }
         ScheduleExternalRef ref = found.get();
-        Optional<ExternalCalendarConnection> target = writableConnection(userId);
-        if (target.isEmpty()) {
+        List<OutboundCalendarOp> unsent = opRepository.findUnsentByTarget(OutboundTargetType.SCHEDULE, scheduleId);
+        if (!ref.isSent()) {
+            opRepository.deleteAll(unsent);
+            return;
+        }
+        Optional<ExternalCalendarConnection> home = homeConnection(ref);
+        if (home.isEmpty()) {
             return;
         }
         var now = clock.now();
+        // 밖에 이미 있으니 대기 중인 UPDATE 는 의미가 없다 — 곧 지울 것을 고치러 갈 이유가 없다.
+        opRepository.deleteAll(unsent);
         OutboundPayload payload = new OutboundPayload(
                 ref.getExternalUid(), null, null, null,
-                target.get().getWriteCalendarId(),
+                home.get().getWriteCalendarId(),
                 ref.getExternalEventId(), ref.getResourceHref(), ref.getEtag());
 
         opRepository.save(OutboundCalendarOp.queue(userId, ref.getConnectionId(),
                 OutboundTargetType.SCHEDULE, scheduleId, OutboundOperation.DELETE, payload, now));
+    }
+
+    /**
+     * 이미 매핑이 있는 일정의 연동 — <b>그 일정이 원래 나간 곳</b>이다. 쓸 수 없게 됐으면 비어
+     * 있다(닿을 수 없는 곳에 보낼 수는 없다). 다른 연동으로 갈아타지 않는다.
+     */
+    private Optional<ExternalCalendarConnection> homeConnection(ScheduleExternalRef ref) {
+        return connectionRepository.findById(ref.getConnectionId())
+                .filter(ExternalCalendarConnection::canWrite)
+                .filter(c -> c.getWriteCalendarId() != null && !c.getWriteCalendarId().isBlank());
     }
 
     /** 내보낼 수 있는 연동 하나. 여럿이면 가장 먼저 연결한 것 — 대상 선택은 설정 화면의 몫이다. */
