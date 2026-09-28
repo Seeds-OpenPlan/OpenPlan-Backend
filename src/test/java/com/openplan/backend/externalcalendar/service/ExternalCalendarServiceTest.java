@@ -524,20 +524,22 @@ class ExternalCalendarServiceTest {
 
         service.listEvents(USER, connection.getId(), null);
 
-        verify(inboundReconciler).propagateDeletions(eq(connection.getId()), eq(Set.of(ourUid)), any(), any());
+        verify(inboundReconciler).propagateDeletions(eq(connection.getId()), eq(Set.of(ourUid)),
+                eq(Set.of("cal-a", "cal-b", "cal-w")), eq("cal-w"), any(), any());
         // 선택하지 않은 캘린더다 — 남의 일정은 후보로 들이지 않는다.
         verify(eventWriter, never()).insertAll(any());
     }
 
     @Test
-    @DisplayName("🔴 내보낸 곳을 모르면 우리 일정의 삭제를 판정하지 않는다 — 모르면 지우지 않는다")
-    void 쓰기_대상이_없으면_삭제를_판정하지_않는다() {
+    @DisplayName("🔴 내보낸 곳을 모르면 읽은 캘린더만 넘긴다 — 대상이 없으니 어디 있는지 모르는 것은 판정 밖이다")
+    void 쓰기_대상이_없으면_읽은_캘린더만_넘긴다() {
         ExternalCalendarConnection connection = stubSync();
         when(calendarProvider.listEvents(any(), any(), any(), any(), any())).thenReturn(List.of());
 
         service.listEvents(USER, connection.getId(), null);
 
-        verify(inboundReconciler, never()).propagateDeletions(any(), any(), any(), any());
+        verify(inboundReconciler).propagateDeletions(eq(connection.getId()), eq(Set.of()),
+                eq(Set.of("cal-a", "cal-b")), eq(null), any(), any());
     }
 
     @Test
@@ -552,7 +554,8 @@ class ExternalCalendarServiceTest {
         service.listEvents(USER, connection.getId(), null);
 
         verify(calendarProvider).listEvents(any(), eq("cal-a"), any(), any(), any());
-        verify(inboundReconciler).propagateDeletions(eq(connection.getId()), eq(Set.of(ourUid)), any(), any());
+        verify(inboundReconciler).propagateDeletions(eq(connection.getId()), eq(Set.of(ourUid)),
+                eq(Set.of("cal-a", "cal-b")), eq("cal-a"), any(), any());
     }
 
     private ExternalCalendarConnection stubSync() {

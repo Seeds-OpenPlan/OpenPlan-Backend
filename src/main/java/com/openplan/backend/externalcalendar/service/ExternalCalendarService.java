@@ -587,12 +587,17 @@ public class ExternalCalendarService {
         propagateRemoteUpdates(userId, remoteChanged);
         propagateRemoteDeletions(connection, existing, seen, selections, from, to);
         // 우리 일정이 외부에서 지워졌는가. 같은 «창 안에 있어야 하는데 없다» 원칙을 쓴다.
-        // 내보낸 곳을 이번에 읽지 못했으면(대상 미설정) 판정하지 않는다 — 모르면 지우지 않는다.
+        // 🔴 판정은 **이번에 읽은 캘린더에 있는 것**만 한다. 대상을 바꾼 뒤 옛 캘린더에 남은 일정,
+        //    대상을 비워 어디 있는지 모르는 일정은 건너뛴다 — 모르면 지우지 않는다.
+        //    이 연동으로 나간 것만 본다 — 다른 연동은 이번에 읽지 않았다(#83 리뷰).
+        Set<String> readCalendarIds = new HashSet<>();
+        selections.forEach(selection -> readCalendarIds.add(selection.getExternalCalendarId()));
         if (writeCalendarRead) {
-            inboundReconciler.propagateDeletions(connection.getId(), ourUids, from, to);
-            // 🔴 이 연동으로 나간 블록만 판정한다 — 다른 연동의 블록은 이번에 읽지 않았다(#83 리뷰).
-            blockInboundReconciler.propagateDeletions(connection.getId(), ourUids, from, to);
+            readCalendarIds.add(writeCalendarId);
         }
+        String currentTarget = hasWriteCalendar ? writeCalendarId : null;
+        inboundReconciler.propagateDeletions(connection.getId(), ourUids, readCalendarIds, currentTarget, from, to);
+        blockInboundReconciler.propagateDeletions(connection.getId(), ourUids, readCalendarIds, currentTarget, from, to);
 
         if (created.isEmpty()) {
             return;

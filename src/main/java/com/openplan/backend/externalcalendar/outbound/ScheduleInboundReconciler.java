@@ -134,10 +134,17 @@ public class ScheduleInboundReconciler {
      * <b>원래 안 보이고</b>, 연동이 잠시 실패하면 빈 목록이 온다. 그래서 <b>창 안에 있어야 하는데
      * 없을 때만</b> 지운다 — #70 리뷰가 세운 «귀속을 못 하면 지우지 않는다» 와 같은 원칙이다.
      */
-    public void propagateDeletions(UUID connectionId, Set<String> seenUids, Instant from, Instant to) {
+    public void propagateDeletions(UUID connectionId, Set<String> seenUids, Set<String> readCalendarIds,
+                                   String currentTarget, Instant from, Instant to) {
         List<ScheduleExternalRef> refs = refRepository.findByConnectionId(connectionId);
         for (ScheduleExternalRef ref : refs) {
             if (seenUids.contains(ref.getExternalUid())) {
+                continue;
+            }
+            // 🔴 이번에 읽은 캘린더에 있는 것만 판정한다. 대상을 A→B 로 바꾼 뒤엔 A 에 남은 일정이
+            //    있는데, A 를 안 읽었으면 «안 왔다» 는 아무 뜻이 없다 — 모르면 지우지 않는다.
+            String calendar = OutboundPayload.targetCalendar(ref.getSentCalendarId(), currentTarget);
+            if (calendar == null || !readCalendarIds.contains(calendar)) {
                 continue;
             }
             if (!ref.wasSentWithin(from, to)) {

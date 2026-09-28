@@ -128,7 +128,7 @@ class PlanBlockInboundReconcilerTest {
         mine.recordSent("evt", null, "etag", "스터디", WED_14, WED_14.plusSeconds(3600), NOW);
         given(refRepository.findByConnectionId(connection)).willReturn(List.of(mine));
 
-        reconciler.propagateDeletions(connection, Set.of(), MON_09, MON_09.plusSeconds(7 * 86400));
+        reconciler.propagateDeletions(connection, Set.of(), Set.of("cal-w"), "cal-w", MON_09, MON_09.plusSeconds(7 * 86400));
 
         verify(refRepository).delete(mine);
         verify(refRepository, never()).findByUserId(any());

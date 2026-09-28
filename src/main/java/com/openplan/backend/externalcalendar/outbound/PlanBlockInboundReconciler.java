@@ -140,11 +140,17 @@ public class PlanBlockInboundReconciler {
      *
      * <p>«없음» 의 원인이 여럿이라 <b>창 안에 있어야 하는데 없을 때만</b> 지운다.
      */
-    public void propagateDeletions(UUID connectionId, Set<String> seenUids, Instant from, Instant to) {
+    public void propagateDeletions(UUID connectionId, Set<String> seenUids, Set<String> readCalendarIds,
+                                   String currentTarget, Instant from, Instant to) {
         // 🔴 이 연동으로 나간 것만 본다. seenUids 는 이번에 읽은 연동 하나에서만 모였다 — 사용자의
         //    모든 매핑을 보면 다른 연동으로 나간 블록이 «안 왔다» 로 읽혀 지워진다(#83 리뷰 Blocking).
         for (PlanBlockExternalRef ref : refRepository.findByConnectionId(connectionId)) {
             if (seenUids.contains(ref.getExternalUid()) || !ref.wasSentWithin(from, to)) {
+                continue;
+            }
+            // 이번에 읽은 캘린더에 있는 것만 판정한다 — 안 읽은 캘린더의 «안 왔다» 는 아무 뜻이 없다.
+            String calendar = OutboundPayload.targetCalendar(ref.getSentCalendarId(), currentTarget);
+            if (calendar == null || !readCalendarIds.contains(calendar)) {
                 continue;
             }
             weeklyPlanRepository.findById(ref.getWeeklyPlanId())
