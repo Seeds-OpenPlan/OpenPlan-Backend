@@ -102,6 +102,11 @@ public class ScheduleExternalRef {
                 || !java.util.Objects.equals(sentEndAt, endAt);
     }
 
+    /** 밖에 실제로 만들어졌는가 — 제공자가 준 참조가 하나라도 있으면 그렇다. */
+    public boolean isSent() {
+        return externalEventId != null || resourceHref != null;
+    }
+
     public UUID getScheduleId() {
         return scheduleId;
     }
