@@ -12,5 +12,9 @@ public interface PlanBlockExternalRefRepository extends JpaRepository<PlanBlockE
 
     List<PlanBlockExternalRef> findByUserId(UUID userId);
 
+    List<PlanBlockExternalRef> findByConnectionId(UUID connectionId);
+
+    List<PlanBlockExternalRef> findByUserIdAndTaskId(UUID userId, UUID taskId);
+
     Optional<PlanBlockExternalRef> findByExternalUid(String externalUid);
 }
