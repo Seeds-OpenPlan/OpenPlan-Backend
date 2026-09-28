@@ -23,4 +23,18 @@ public interface OutboundCalendarOpRepository extends JpaRepository<OutboundCale
              order by o.createdAt asc
             """)
     List<OutboundCalendarOp> findPending(@Param("userId") UUID userId);
+
+    /**
+     * 한 대상의 <b>아직 안 나간</b> 작업. 대상마다 많아야 하나를 유지하려고 쓴다 — 여럿이 쌓이면
+     * 앞의 것이 실행되기 전에 적재된 뒤의 것이 빈 참조를 들고 영원히 실패한다(#80 리뷰).
+     */
+    @Query("""
+            select o from OutboundCalendarOp o
+             where o.targetType = :targetType
+               and o.targetId = :targetId
+               and o.status <> com.openplan.backend.externalcalendar.outbound.OutboundStatus.DONE
+             order by o.createdAt asc
+            """)
+    List<OutboundCalendarOp> findUnsentByTarget(@Param("targetType") OutboundTargetType targetType,
+                                                @Param("targetId") UUID targetId);
 }
