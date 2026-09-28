@@ -3,6 +3,7 @@ package com.openplan.backend.externalcalendar.outbound;
 import com.openplan.backend.externalcalendar.domain.ExternalCalendarConnection;
 import com.openplan.backend.externalcalendar.provider.CalendarProvider;
 import com.openplan.backend.externalcalendar.provider.CalendarProviderRegistry;
+import com.openplan.backend.externalcalendar.provider.ExternalRef;
 import com.openplan.backend.externalcalendar.provider.ProviderCredential;
 import com.openplan.backend.externalcalendar.provider.ProviderWriteConflictException;
 import com.openplan.backend.externalcalendar.provider.ProviderWriteResult;
@@ -93,8 +94,8 @@ public class OutboundOpExecutor {
                 case CREATE -> recordSent(op, provider.createEvent(credential, calendarId,
                         op.getPayload().toEvent()), now);
                 case UPDATE -> recordSent(op, provider.updateEvent(credential, calendarId,
-                        op.getPayload().toRef(), op.getPayload().toEvent()), now);
-                case DELETE -> provider.deleteEvent(credential, calendarId, op.getPayload().toRef());
+                        currentRef(op), op.getPayload().toEvent()), now);
+                case DELETE -> provider.deleteEvent(credential, calendarId, currentRef(op));
             }
             op.succeed(now);
         } catch (ProviderWriteConflictException e) {
@@ -105,6 +106,23 @@ public class OutboundOpExecutor {
             log.warn("외부 캘린더 쓰기 실패: opId={} op={}", opId, op.getOperation(), e);
             op.fail(e.getClass().getSimpleName() + ": " + e.getMessage(), now);
         }
+    }
+
+    /**
+     * 수정·삭제가 지목할 참조. <b>매핑이 남아 있으면 그 최신 값</b>을 쓴다 — payload 는 적재 시점에
+     * 얼린 값이라, 그 사이 앞선 작업이나 되받기가 ETag 를 바꿨으면 낡은 ETag 로 영원히 충돌한다.
+     * 매핑이 이미 없으면(삭제 CASCADE 뒤) payload 가 유일한 근거다 — 그래서 거기 담아 둔 것이다.
+     */
+    private ExternalRef currentRef(OutboundCalendarOp op) {
+        Optional<ExternalRef> current = switch (op.getTargetType()) {
+            case SCHEDULE -> refRepository.findById(op.getTargetId())
+                    .map(ref -> new ExternalRef(ref.getExternalEventId(), ref.getResourceHref(), ref.getEtag()));
+            case FIXED_OCCURRENCE -> occurrenceRepository.findById(op.getTargetId())
+                    .map(o -> new ExternalRef(o.getExternalEventId(), o.getResourceHref(), o.getEtag()));
+            case PLAN_BLOCK -> blockRefRepository.findById(op.getTargetId())
+                    .map(r -> new ExternalRef(r.getExternalEventId(), r.getResourceHref(), r.getEtag()));
+        };
+        return current.orElseGet(() -> op.getPayload().toRef());
     }
 
     /** 보낸 결과를 매핑에 적는다 — 다음 수정의 If-Match 재료이자 되받기의 비교 기준이다. */
