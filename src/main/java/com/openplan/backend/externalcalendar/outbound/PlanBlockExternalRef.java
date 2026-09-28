@@ -92,6 +92,16 @@ public class PlanBlockExternalRef {
         this.updatedAt = now;
     }
 
+    /**
+     * 다른 주의 자리로 옮긴다 — 주차 이동으로 원래 주에서 자리를 잃은 매핑을 새 주가 데려갈 때.
+     * UID 는 그대로라 외부에는 새로 만들지 않고 <b>수정 한 번</b>이 나간다(#82 리뷰 Blocking).
+     */
+    public void relocate(UUID weeklyPlanId, int sequence, Instant now) {
+        this.weeklyPlanId = weeklyPlanId;
+        this.sequence = sequence;
+        this.updatedAt = now;
+    }
+
     public void recordSent(String externalEventId, String resourceHref, String etag,
                            String title, Instant startAt, Instant endAt, Instant now) {
         if (externalEventId != null) {
