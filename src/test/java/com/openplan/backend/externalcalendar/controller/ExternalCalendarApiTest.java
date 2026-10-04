@@ -428,9 +428,13 @@ class ExternalCalendarApiTest {
      * <p>🔴 기존 {@link #providerEvent} 는 2026-08-20 고정인데, 그 날짜는 시간이 지나면 창(과거 7일 ~
      * 미래 56일) 밖으로 밀려난다. 창 밖 일정은 <b>삭제 판정에서 제외</b>되므로(그게 옳다) 그대로 쓰면
      * 이 테스트가 "가드가 막았다" 를 "쿼리가 돌았다" 로 착각하게 된다. 오늘 기준 상대 날짜로 만든다.
+     *
+     * <p>🔴 «오늘» 은 벽시계가 아니라 {@link FixedClockConfig#FIXED_NOW} 다. 서버는 창을 고정 시계로
+     * 계산하므로, {@code Instant.now()} 로 만들면 실제 날짜가 고정일 + 53일을 넘는 순간(2026-09-06)
+     * 창 밖으로 밀려나 이 테스트가 날짜만으로 실패한다.
      */
     private static ProviderEvent inWindowEvent(String externalId, String title, int hourOfDayUtc) {
-        Instant day = Instant.now().plus(3, java.time.temporal.ChronoUnit.DAYS)
+        Instant day = FixedClockConfig.FIXED_NOW.plus(3, java.time.temporal.ChronoUnit.DAYS)
                 .truncatedTo(java.time.temporal.ChronoUnit.DAYS);
         Instant start = day.plus(hourOfDayUtc, java.time.temporal.ChronoUnit.HOURS);
         // 🔴 캘린더 **id**("cal-1")를 실어야 삭제 귀속이 성립한다. 이름만 실으면 id 가 null 이라
