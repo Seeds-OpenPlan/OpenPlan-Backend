@@ -49,6 +49,9 @@ public class ProjectDuplicationService {
     private static final String COPY_SUFFIX = " (복제)";
     private static final int NAME_MAX = 100;
 
+    /** us-decisions-kr.md §5.1 (ASSUMPTION-D3) — 공용 "마감 임박" 정의. 대시보드·구조화 경고와 같은 창. */
+    private static final int DEADLINE_SOON_DAYS = 3;
+
     /** 로그에 남길 클라이언트 헤더 최대 길이(정본상 uuid=36자 — 여유를 두고 자른다). */
     private static final int LOG_HEADER_MAX = 64;
 
@@ -135,7 +138,12 @@ public class ProjectDuplicationService {
 
         log.info("project duplicated: sourceId={}, newId={}, userId={}, idempotencyKey={}",
                 projectId, copy.getId(), userId, sanitizeForLog(idempotencyKey));
-        return ProjectResponse.from(copy);
+
+        // badges·taskStats(이슈#17) — 복제본은 태스크가 전량 UNASSIGNED로 막 생겼으니 응답도 그걸 반영해야
+        // GET /projects/{id} 재조회와 어긋나지 않는다(0으로 고정하면 방금 응답과 재조회가 서로 다른 말을 한다).
+        LocalDate today = clock.todayOf(userId);
+        var stats = taskRepository.findStatsByProjectId(copy.getId(), today, today.plusDays(DEADLINE_SOON_DAYS));
+        return ProjectResponse.from(copy, stats);
     }
 
     /**
