@@ -1,6 +1,7 @@
 package com.openplan.backend.project.controller;
 
 import com.openplan.backend.project.domain.ProjectStatus;
+import com.openplan.backend.task.domain.TaskStatus;
 import com.openplan.backend.support.FixedClockConfig;
 import com.openplan.backend.support.TestcontainersConfig;
 import org.junit.jupiter.api.BeforeEach;
@@ -56,6 +57,8 @@ class ProjectReadApiTest {
     void setUp() {
         seedUser(MAIN);
         seedUser(OTHER);
+        jdbc.update("DELETE FROM tasks WHERE project_id IN (SELECT project_id FROM projects WHERE user_id IN (?, ?))",
+                MAIN, OTHER);
         jdbc.update("DELETE FROM projects WHERE user_id IN (?, ?)", MAIN, OTHER);
     }
 
@@ -211,6 +214,58 @@ class ProjectReadApiTest {
                 .andExpect(jsonPath("$.data.closedAt").isNotEmpty());
     }
 
+    // ---------- PROJ-01/04 배지 · taskStats (이슈#17) ----------
+
+    @Test
+    @DisplayName("상세 — badges(미배치/배치됨/마감임박) · taskStats(전체/미배치/진행중/완료) 정확히 집계")
+    void detailIncludesBadgesAndTaskStats() throws Exception {
+        UUID id = insert(MAIN, "배지대상", ProjectStatus.IN_PROGRESS, null, BASE, null);
+        insertTask(id, "미배치1", TaskStatus.UNASSIGNED, null, BASE);
+        insertTask(id, "미배치2(마감무관)", TaskStatus.UNASSIGNED, FIXED_TODAY.plusDays(100), BASE);
+        insertTask(id, "진행중(마감임박)", TaskStatus.IN_PROGRESS, FIXED_TODAY.plusDays(1), BASE);
+        insertTask(id, "완료(마감임박이지만완료라제외)", TaskStatus.COMPLETED, FIXED_TODAY.plusDays(1), BASE);
+
+        mockMvc.perform(get(PATH + "/" + id).header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.badges.unassignedCount").value(2))
+                .andExpect(jsonPath("$.data.badges.assignedCount").value(2)) // IN_PROGRESS 1 + COMPLETED 1
+                .andExpect(jsonPath("$.data.badges.deadlineSoon").value(true)) // 미완료(IN_PROGRESS) 마감임박 1건
+                .andExpect(jsonPath("$.data.taskStats.total").value(4))
+                .andExpect(jsonPath("$.data.taskStats.unassigned").value(2))
+                .andExpect(jsonPath("$.data.taskStats.inProgress").value(1))
+                .andExpect(jsonPath("$.data.taskStats.completed").value(1));
+    }
+
+    @Test
+    @DisplayName("상세 — 태스크 0건 프로젝트는 badges·taskStats 전부 0 (GROUP BY 빈 결과 기본값)")
+    void detailWithNoTasksHasZeroBadges() throws Exception {
+        UUID id = insert(MAIN, "태스크없음", ProjectStatus.IN_PROGRESS, null, BASE, null);
+
+        mockMvc.perform(get(PATH + "/" + id).header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.badges.unassignedCount").value(0))
+                .andExpect(jsonPath("$.data.badges.assignedCount").value(0))
+                .andExpect(jsonPath("$.data.badges.deadlineSoon").value(false))
+                .andExpect(jsonPath("$.data.taskStats.total").value(0));
+    }
+
+    @Test
+    @DisplayName("목록 — 프로젝트별 badges가 서로 다른 집계로 각자 반영 (배치 조회, N+1 아님)")
+    void listIncludesPerProjectBadges() throws Exception {
+        UUID withTasks = insert(MAIN, "태스크있음", ProjectStatus.IN_PROGRESS, null, BASE, null);
+        insertTask(withTasks, "미배치", TaskStatus.UNASSIGNED, null, BASE);
+        insertTask(withTasks, "진행중", TaskStatus.IN_PROGRESS, null, BASE);
+        UUID empty = insert(MAIN, "태스크없음", ProjectStatus.IN_PROGRESS, null, BASE.plusSeconds(1), null);
+
+        mockMvc.perform(get(PATH).param("status", "IN_PROGRESS").header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].projectId").value(empty.toString()))
+                .andExpect(jsonPath("$.data[0].badges.unassignedCount").value(0))
+                .andExpect(jsonPath("$.data[1].projectId").value(withTasks.toString()))
+                .andExpect(jsonPath("$.data[1].badges.unassignedCount").value(1))
+                .andExpect(jsonPath("$.data[1].badges.assignedCount").value(1));
+    }
+
     // ---------- fixtures ----------
 
     private void seedUser(UUID id) {
@@ -236,5 +291,15 @@ class ProjectReadApiTest {
                 closedAt == null ? null : OffsetDateTime.ofInstant(closedAt, ZoneOffset.UTC),
                 OffsetDateTime.ofInstant(createdAt, ZoneOffset.UTC));
         return id;
+    }
+
+    private void insertTask(UUID projectId, String title, TaskStatus status, LocalDate dueDate, Instant createdAt) {
+        jdbc.update("""
+                INSERT INTO tasks (task_id, project_id, category_id, title, memo, estimated_minutes,
+                                   priority, due_date, status, version, created_at)
+                VALUES (?, ?, NULL, ?, NULL, NULL, NULL, ?, ?, 0, ?)
+                """,
+                UUID.randomUUID(), projectId, title, dueDate, status.name(),
+                OffsetDateTime.ofInstant(createdAt, ZoneOffset.UTC));
     }
 }

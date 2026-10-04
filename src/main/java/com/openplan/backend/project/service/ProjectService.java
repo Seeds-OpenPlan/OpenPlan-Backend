@@ -11,6 +11,8 @@ import com.openplan.backend.project.domain.Project;
 import com.openplan.backend.project.domain.ProjectStatus;
 import com.openplan.backend.project.repository.ProjectRepository;
 import com.openplan.backend.project.service.port.WeeklyPlanTotalsRecalculator;
+import com.openplan.backend.task.repository.ProjectTaskStatsRow;
+import com.openplan.backend.task.repository.TaskRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -24,24 +26,42 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Service
 public class ProjectService {
 
+    /** us-decisions-kr.md §5.1 (ASSUMPTION-D3) — 공용 "마감 임박" 정의. 대시보드·구조화 경고와 같은 창. */
+    private static final int DEADLINE_SOON_DAYS = 3;
+
     private final ProjectRepository projectRepository;
+    private final TaskRepository taskRepository;
     private final ProjectValidator validator;
     private final ProjectAutoCloseEvaluator autoCloseEvaluator;
     private final WeeklyPlanTotalsRecalculator weeklyPlanTotalsRecalculator;
     private final UserClock clock;
 
-    public ProjectService(ProjectRepository projectRepository, ProjectValidator validator,
-                          ProjectAutoCloseEvaluator autoCloseEvaluator,
+    public ProjectService(ProjectRepository projectRepository, TaskRepository taskRepository,
+                          ProjectValidator validator, ProjectAutoCloseEvaluator autoCloseEvaluator,
                           WeeklyPlanTotalsRecalculator weeklyPlanTotalsRecalculator, UserClock clock) {
         this.projectRepository = projectRepository;
+        this.taskRepository = taskRepository;
         this.validator = validator;
         this.autoCloseEvaluator = autoCloseEvaluator;
         this.weeklyPlanTotalsRecalculator = weeklyPlanTotalsRecalculator;
         this.clock = clock;
+    }
+
+    /**
+     * 단건 응답 조립 — badges·taskStats를 실제 집계로 채운다(PROJ-01/04, 이슈#17). {@code today}는 호출자가
+     * 이미 구해 둔 값을 받는다 — 매 호출마다 {@code clock.todayOf}로 다시 구하면 쓰기 경로마다 user_profiles
+     * 조회가 중복된다(update·changeStatus는 검증 단계에서 이미 today가 필요하다).
+     */
+    private ProjectResponse buildResponse(Project project, LocalDate today) {
+        ProjectTaskStatsRow stats = taskRepository.findStatsByProjectId(
+                project.getId(), today, today.plusDays(DEADLINE_SOON_DAYS));
+        return ProjectResponse.from(project, stats);
     }
 
     /**
@@ -56,7 +76,7 @@ public class ProjectService {
 
         Project project = new Project(userId, name, req.description(), req.dueDate(), req.priority(), clock.now());
         projectRepository.save(project);
-        return ProjectResponse.from(project);
+        return buildResponse(project, today);
     }
 
     @Transactional
@@ -65,16 +85,16 @@ public class ProjectService {
 
         Project project = projectRepository.findByIdAndUserId(projectId, userId)
                 .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404
+        LocalDate today = clock.todayOf(userId);
 
         if (project.getStatus() == ProjectStatus.CLOSED) { // 422 — 종료는 수정 불가, 재개 먼저(Q-E1). 편집 전용 코드(전이불허 E-PROJ-003과 구분)
             throw new OpenPlanException(ErrorCode.E_PROJ_005);
         }
         if (req.version() != project.getVersion()) { // 409 — 종료 아닌 경우의 동시수정 보호, latest 동봉(SYS-05)
             throw new OpenPlanException(ErrorCode.E_COM_006,
-                    Map.of("latest", ProjectResponse.from(project)));
+                    Map.of("latest", buildResponse(project, today)));
         }
 
-        LocalDate today = clock.todayOf(userId);
         String name = validator.validateName(req.name());          // 422 — 생성과 동일 규칙(AC-06-2)
 
         boolean requestKeepsPastDue = req.dueDate() != null && req.dueDate().isBefore(today);
@@ -87,9 +107,13 @@ public class ProjectService {
 
         project.edit(name, req.description(), req.dueDate(), req.priority());
         projectRepository.flush();
-        return ProjectResponse.from(project);
+        return buildResponse(project, today);
     }
 
+    /**
+     * 목록 (PROJ-01). badges는 PROJ-01/04(이슈#17) — 페이지에 실린 프로젝트 id만 모아 집계를
+     * 한 번에 배치 조회한다(프로젝트마다 개별 조회하면 N+1, {@link ProjectTaskStatsRow} 선례 참고).
+     */
     public Page<ProjectResponse> list(UUID userId, int page, int size, List<String> statusRaw) {
         Collection<ProjectStatus> statuses = parseStatuses(statusRaw);
 
@@ -97,15 +121,23 @@ public class ProjectService {
 
         Pageable pageable = PageRequest.of(page - 1, size,
                 Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id")));
-        return projectRepository.findByUserIdAndStatusIn(userId, statuses, pageable)
-                .map(ProjectResponse::from);
+        Page<Project> projects = projectRepository.findByUserIdAndStatusIn(userId, statuses, pageable);
+
+        List<UUID> ids = projects.getContent().stream().map(Project::getId).toList();
+        LocalDate today = clock.todayOf(userId);
+        Map<UUID, ProjectTaskStatsRow> statsById = ids.isEmpty() ? Map.of()
+                : taskRepository.findStatsByProjectIds(ids, today, today.plusDays(DEADLINE_SOON_DAYS)).stream()
+                        .collect(Collectors.toMap(ProjectTaskStatsRow::projectId, Function.identity()));
+
+        return projects.map(p -> ProjectResponse.from(p,
+                statsById.getOrDefault(p.getId(), ProjectTaskStatsRow.empty(p.getId()))));
     }
 
     public ProjectResponse detail(UUID userId, UUID projectId) {
         autoCloseEvaluator.closeOverdue(userId);
         Project project = projectRepository.findByIdAndUserId(projectId, userId)
                 .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004));
-        return ProjectResponse.from(project);
+        return buildResponse(project, clock.todayOf(userId));
     }
 
     @Transactional
@@ -115,19 +147,19 @@ public class ProjectService {
 
         Project project = projectRepository.findByIdAndUserId(projectId, userId)
                 .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404
+        LocalDate today = clock.todayOf(userId);
 
         if (project.getStatus() == target) {   // no-op: version 미증가·dueDate 무시 (AC-07-3)
-            return ProjectResponse.from(project);
+            return buildResponse(project, today);
         }
         if (req.getVersion() != project.getVersion()) { // 409 (AC-07-5)
-            throw new OpenPlanException(ErrorCode.E_COM_006, Map.of("latest", ProjectResponse.from(project)));
+            throw new OpenPlanException(ErrorCode.E_COM_006, Map.of("latest", buildResponse(project, today)));
         }
         if (!project.getStatus().canTransitionTo(target)) { // T6 CLOSED→PAUSED → 422 (AC-07-2)
             throw new OpenPlanException(ErrorCode.E_PROJ_003);
         }
 
         if (target == ProjectStatus.IN_PROGRESS) {          // 재개 (T3/T5) + G-1 가드 (Q-C2)
-            LocalDate today = clock.todayOf(userId);
             if (req.isDueDateProvided()) {
                 validator.validateDueDate(req.getDueDate(), today); // 동반값이 과거면 422 E-COM-009
             }
@@ -145,7 +177,7 @@ public class ProjectService {
         }
 
         projectRepository.flush(); // @Version 증가를 응답에 반영
-        return ProjectResponse.from(project);
+        return buildResponse(project, today);
     }
 
     /** status 문자열 → enum. 미정의 값 → 422 E-COM-009 (전이 오류 E-PROJ-003과 구분). */
