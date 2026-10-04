@@ -20,6 +20,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -102,6 +103,46 @@ class WeeklyPlanApiTest {
                         .contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("E-COM-001"));
+    }
+
+    @Test
+    @DisplayName("동시 생성 요청 — 같은 사용자·같은 주차로 병렬 2건, 500 없이 201/200으로 수렴 (UNIQUE 경합 방어, 이슈#25)")
+    void concurrentCreateSameWeekConvergesWithout500() throws Exception {
+        String body = "{\"weekStartDate\":\"2026-07-27\"}";
+
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        java.util.concurrent.CountDownLatch ready = new java.util.concurrent.CountDownLatch(2);
+        java.util.concurrent.CountDownLatch go = new java.util.concurrent.CountDownLatch(1);
+        try {
+            // 두 스레드를 go 신호에 맞춰 같은 순간 출발시켜 경합 창을 넓힌다.
+            java.util.concurrent.Future<Integer> f1 = pool.submit(() -> createStatus(body, ready, go));
+            java.util.concurrent.Future<Integer> f2 = pool.submit(() -> createStatus(body, ready, go));
+            ready.await();
+            go.countDown();
+            int s1 = f1.get();
+            int s2 = f2.get();
+
+            // 어느 쪽도 500이 아니어야 한다 — 하나는 201(신규), 다른 하나는 200(기존 반환)으로 수렴.
+            assertThat(s1).isNotEqualTo(500);
+            assertThat(s2).isNotEqualTo(500);
+            assertThat(java.util.List.of(s1, s2)).containsExactlyInAnyOrder(200, 201);
+        } finally {
+            pool.shutdownNow();
+        }
+
+        // 계획은 정확히 1행(중복 생성 없음).
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM weekly_plans WHERE user_id = ? AND week_start_date = ?",
+                Integer.class, MAIN, WEEK)).isEqualTo(1);
+    }
+
+    /** 두 스레드가 go 신호에 맞춰 동시에 POST하고 HTTP 상태를 돌려준다. */
+    private int createStatus(String body, java.util.concurrent.CountDownLatch ready,
+                             java.util.concurrent.CountDownLatch go) throws Exception {
+        ready.countDown();
+        go.await();
+        return mockMvc.perform(post(PATH).header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andReturn().getResponse().getStatus();
     }
 
     // ---------- GET 조회 ----------
