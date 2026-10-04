@@ -44,11 +44,6 @@ public record ProjectResponse(
                 p.getCreatedAt());
     }
 
-    /** 태스크 집계 전이면(아직 조회 전) 신규 프로젝트처럼 빈 집계로 — 생성 직후(PROJ-02)가 유일한 실사용처. */
-    public static ProjectResponse from(Project p) {
-        return from(p, ProjectTaskStatsRow.empty(p.getId()));
-    }
-
     /** PROJ-01/04 FR-135~138 — 미배치·배치됨 개수 + 마감임박 강조. */
     public record Badges(long unassignedCount, long assignedCount, boolean deadlineSoon) {
     }
