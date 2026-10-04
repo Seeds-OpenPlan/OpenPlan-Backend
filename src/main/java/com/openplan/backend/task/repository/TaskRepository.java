@@ -9,6 +9,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDate;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -138,4 +139,38 @@ public interface TaskRepository extends JpaRepository<Task, UUID> {
              where t.projectId = :projectId
             """)
     TaskStructureCounts countStructure(@Param("projectId") UUID projectId);
+
+    /**
+     * 프로젝트 배지·taskStats 집계 (PROJ-01/04, 이슈#17). projectIds를 한 번에 받아 GROUP BY로 모은다 —
+     * 목록에서 프로젝트마다 개별 조회하면 N+1이라({@link #findUnassignedWithProjectName} 선례와 같은 이유)
+     * 쓰지 않는다. "마감 임박"은 공용 정의({@code DEADLINE_SOON_DAYS}, us-decisions-kr.md §5.1 — 대시보드·
+     * 구조화 경고와 같은 창이어야 한다)를 그대로 적용해 호출자가 넘긴 [today, threshold] 구간으로 센다.
+     * 태스크가 0건인 프로젝트는 GROUP BY 특성상 행이 없다 — {@link #findStatsByProjectId}가 기본값을 메운다.
+     */
+    @Query("""
+            select new com.openplan.backend.task.repository.ProjectTaskStatsRow(
+                       t.projectId,
+                       coalesce(sum(case when t.status = com.openplan.backend.task.domain.TaskStatus.UNASSIGNED
+                                         then 1L else 0L end), 0L),
+                       coalesce(sum(case when t.status = com.openplan.backend.task.domain.TaskStatus.IN_PROGRESS
+                                         then 1L else 0L end), 0L),
+                       coalesce(sum(case when t.status = com.openplan.backend.task.domain.TaskStatus.COMPLETED
+                                         then 1L else 0L end), 0L),
+                       coalesce(sum(case when t.status <> com.openplan.backend.task.domain.TaskStatus.COMPLETED
+                                              and t.dueDate is not null
+                                              and t.dueDate >= :today and t.dueDate <= :threshold
+                                         then 1L else 0L end), 0L))
+              from Task t
+             where t.projectId in :projectIds
+             group by t.projectId
+            """)
+    List<ProjectTaskStatsRow> findStatsByProjectIds(@Param("projectIds") Collection<UUID> projectIds,
+                                                     @Param("today") LocalDate today,
+                                                     @Param("threshold") LocalDate threshold);
+
+    /** {@link #findStatsByProjectIds} 단건 편의 — 태스크 0건이면 {@link ProjectTaskStatsRow#empty}로 수렴. */
+    default ProjectTaskStatsRow findStatsByProjectId(UUID projectId, LocalDate today, LocalDate threshold) {
+        return findStatsByProjectIds(List.of(projectId), today, threshold).stream()
+                .findFirst().orElseGet(() -> ProjectTaskStatsRow.empty(projectId));
+    }
 }
