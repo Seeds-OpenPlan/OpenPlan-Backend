@@ -101,6 +101,30 @@ class GoogleCalendarProviderTest {
     }
 
     @Test
+    @DisplayName("🔴 recurringEventId 가 있으면 반복 회차다 — 밖으로 쓰지 않도록 표시한다")
+    void 반복_회차를_반복으로_표시한다() {
+        server.expect(once(), requestTo(startsWith("https://www.googleapis.com/calendar/v3/calendars/")))
+                .andRespond(withSuccess(recurringOccurrenceEvents(), MediaType.APPLICATION_JSON));
+
+        List<ProviderEvent> result = provider.listEvents(CREDENTIAL, CALENDAR_ID, "내 캘린더",
+                Instant.parse("2026-08-17T00:00:00Z"), Instant.parse("2026-08-31T00:00:00Z"));
+
+        // 구글은 singleEvents=true 로 받으므로 반복이 회차 단위로 펼쳐져 오고, 그 회차들은
+        // 원본 반복 일정 하나를 공유한다. 회차 하나만 고치려고 쓰면 원본이 바뀌므로
+        // 쓰기 대상에서 빼야 한다(#69) — 그 판정 재료가 recurringEventId 다.
+        assertThat(result).hasSize(2);
+        ProviderEvent occurrence = result.getFirst();
+        ProviderEvent single = result.get(1);
+
+        assertThat(occurrence.recurring()).as("recurringEventId 가 있으면 반복 회차").isTrue();
+        assertThat(single.recurring()).as("없으면 단일 일정").isFalse();
+
+        // 🟢 ETag 도 함께 실린다 — 나중에 If-Match 로 남의 변경을 덮지 않기 위한 재료다.
+        assertThat(occurrence.etag()).isEqualTo("\"g-etag-1\"");
+        assertThat(single.etag()).isEqualTo("\"g-etag-2\"");
+    }
+
+    @Test
     @DisplayName("종일 일정(start.date)은 후보에서 뺀다 — 하루를 통째로 막으면 의도하지 않은 차단이 된다")
     void 종일은_거른다() {
         String body = """
@@ -227,6 +251,20 @@ class GoogleCalendarProviderTest {
     }
 
     /** 구글이 실제로 주는 모양 — 시각은 오프셋 표기다(애플의 TZID 방식과 다르다). */
+    /** 🔴 반복 일정의 한 회차 — 구글은 그것을 recurringEventId 로 알려 준다. 단일 일정에는 없다. */
+    private static String recurringOccurrenceEvents() {
+        return """
+                {"items":[
+                  {"id":"evt-r1_20260820T010000Z","summary":"주간 회의",
+                   "recurringEventId":"evt-r1","etag":"\\"g-etag-1\\"",
+                   "start":{"dateTime":"2026-08-20T10:00:00+09:00","timeZone":"Asia/Seoul"},
+                   "end":{"dateTime":"2026-08-20T11:00:00+09:00","timeZone":"Asia/Seoul"}},
+                  {"id":"evt-2","summary":"단일 점검","etag":"\\"g-etag-2\\"",
+                   "start":{"dateTime":"2026-08-21T10:00:00+09:00","timeZone":"Asia/Seoul"},
+                   "end":{"dateTime":"2026-08-21T11:00:00+09:00","timeZone":"Asia/Seoul"}}
+                ]}""";
+    }
+
     private static String events() {
         return """
                 {"items":[
