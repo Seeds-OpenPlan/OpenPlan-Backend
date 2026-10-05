@@ -20,6 +20,7 @@ import com.openplan.backend.externalcalendar.dto.ExternalEventResponse;
 import com.openplan.backend.externalcalendar.dto.ProviderCalendarResponse;
 import com.openplan.backend.externalcalendar.dto.SaveSelectionsRequest;
 import com.openplan.backend.externalcalendar.dto.UpdateConnectionRequest;
+import com.openplan.backend.externalcalendar.dto.WriteCalendarRequest;
 import com.openplan.backend.externalcalendar.provider.CalendarProviderRegistry;
 import com.openplan.backend.externalcalendar.outbound.OpenPlanEventUid;
 import com.openplan.backend.externalcalendar.outbound.FixedOccurrenceReconciler;
@@ -307,6 +308,52 @@ public class ExternalCalendarService {
 
         return ExternalConnectionResponse.of(connection,
                 selectionRepository.findByConnectionIdOrderByCalendarNameAsc(connectionId));
+    }
+
+    /**
+     * 내보낼 대상 캘린더 지정 (이슈 #69) — <b>이 값이 없으면 아웃바운드는 조용히 0건이다.</b>
+     *
+     * <p>계획 0단계가 「대상 캘린더 설정 + 설정 화면」을 요구했는데 컬럼만 만들고 이 경로를 빼 두어,
+     * 내보내기 구현 전부가 실제로는 한 건도 내보내지 못하는 상태였다. 그 구멍을 메우는 메서드다.
+     *
+     * <p><b>받은 식별자가 실재하는지 제공자 목록과 대조한다.</b> 여기서 대조하지 않으면 틀린 값이
+     * 그대로 저장되고, 실패는 한참 뒤 {@code OutboundCalendarPusher} 가 제공자에게 404 를 받는
+     * 자리에서야 드러난다 — 사용자는 «저장은 됐는데 안 나간다» 만 본다. 저장 시점에 422 로 막는 쪽이
+     * 원인을 가리키고, 값을 고칠 사람도 그 화면 앞에 서 있다.
+     *
+     * <p><b>해제({@code null}·빈 문자열)는 제공자를 부르지 않는다.</b> 내보내기를 멈추려는 사용자가
+     * 제공자 장애 때문에 멈출 수 없게 되면 안 된다. 빈 문자열도 {@code null} 로 접어 저장하는 이유는
+     * {@code OutboundCalendarQueue} 가 blank 를 «안 고름» 으로 취급하므로, DB 에 {@code ""} 를 남기면
+     * 화면·질의·로그에서 «고른 것처럼 보이지만 안 나가는» 세 번째 상태가 생긴다.
+     */
+    @Transactional
+    public ExternalConnectionResponse setWriteCalendar(UUID userId, UUID connectionId,
+                                                      WriteCalendarRequest request) {
+        ExternalCalendarConnection connection = requireConnection(userId, connectionId);
+
+        String requested = request == null ? null : request.externalCalendarId();
+        String normalized = (requested == null || requested.isBlank()) ? null : requested.trim();
+
+        if (normalized != null) {
+            requireProviderHasCalendar(connection, normalized);
+        }
+
+        connection.chooseWriteCalendar(normalized);
+        log.info("내보낼 대상 캘린더를 {}: connectionId={} calendarId={}",
+                normalized == null ? "해제했다" : "지정했다", connectionId, normalized);
+
+        return ExternalConnectionResponse.of(connection,
+                selectionRepository.findByConnectionIdOrderByCalendarNameAsc(connectionId));
+    }
+
+    /** 제공자가 실제로 갖고 있는 캘린더인지 — 없으면 422 E-COM-009(허용되지 않는 값). */
+    private void requireProviderHasCalendar(ExternalCalendarConnection connection, String externalCalendarId) {
+        boolean exists = providerRegistry.get(connection.getProvider())
+                .listCalendars(tokens.usableCredential(connection)).stream()
+                .anyMatch(calendar -> externalCalendarId.equals(calendar.externalCalendarId()));
+        if (!exists) {
+            throw new OpenPlanException(ErrorCode.E_COM_009, Map.of("externalCalendarId", externalCalendarId));
+        }
     }
 
     /**

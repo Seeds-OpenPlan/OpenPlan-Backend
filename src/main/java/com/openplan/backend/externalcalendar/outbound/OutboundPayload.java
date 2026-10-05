@@ -19,6 +19,21 @@ public record OutboundPayload(String uid, String title, Instant startAt, Instant
                               String writeCalendarId,
                               String externalEventId, String resourceHref, String etag) {
 
+    /**
+     * 어느 캘린더로 보낼지 (이슈 #69 · #85 리뷰 Blocking).
+     *
+     * <p><b>이미 내보낸 것은 그것이 실재하는 캘린더로, 아직 안 내보낸 것은 지금 설정된 대상으로.</b>
+     * 사용자가 대상을 A→B 로 바꿔도 A 에 있는 이벤트의 수정·삭제는 A 로 나가야 한다 — B 로 보내면
+     * 없는 것을 고치려 드는 404 가 영구히 반복된다. 반대로 아직 안 나간 것을 옛 설정으로 보내면
+     * 사용자가 이미 버린 캘린더에 새 일정이 생긴다.
+     *
+     * @param sentCalendarId 매핑이 기억하는 «있는 곳». null 이면 모름(이 컬럼 이전 데이터).
+     * @param currentTarget  지금 설정된 대상
+     */
+    public static String targetCalendar(String sentCalendarId, String currentTarget) {
+        return (sentCalendarId != null && !sentCalendarId.isBlank()) ? sentCalendarId : currentTarget;
+    }
+
     /** 생성·수정용 — 보낼 내용. */
     public OutboundEvent toEvent() {
         return new OutboundEvent(uid, title, startAt, endAt);

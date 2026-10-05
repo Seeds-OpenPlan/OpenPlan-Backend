@@ -152,7 +152,8 @@ public class PlanBlockOutboundReconciler {
                          String title, PlanBlock block, String calendarId,
                          OutboundOperation operation, Instant now) {
         OutboundPayload payload = new OutboundPayload(ref.getExternalUid(), title,
-                block.getStartAt(), block.getEndAt(), calendarId,
+                block.getStartAt(), block.getEndAt(),
+                OutboundPayload.targetCalendar(ref.getSentCalendarId(), calendarId),
                 ref.getExternalEventId(), ref.getResourceHref(), ref.getEtag());
         opRepository.save(OutboundCalendarOp.queue(userId, connection.getId(),
                 OutboundTargetType.PLAN_BLOCK, ref.getId(), operation, payload, now));
@@ -160,7 +161,8 @@ public class PlanBlockOutboundReconciler {
 
     private void enqueueDelete(UUID userId, ExternalCalendarConnection connection, PlanBlockExternalRef ref,
                                String calendarId, Instant now) {
-        OutboundPayload payload = new OutboundPayload(ref.getExternalUid(), null, null, null, calendarId,
+        OutboundPayload payload = new OutboundPayload(ref.getExternalUid(), null, null, null,
+                OutboundPayload.targetCalendar(ref.getSentCalendarId(), calendarId),
                 ref.getExternalEventId(), ref.getResourceHref(), ref.getEtag());
         opRepository.save(OutboundCalendarOp.queue(userId, connection.getId(),
                 OutboundTargetType.PLAN_BLOCK, ref.getId(), OutboundOperation.DELETE, payload, now));

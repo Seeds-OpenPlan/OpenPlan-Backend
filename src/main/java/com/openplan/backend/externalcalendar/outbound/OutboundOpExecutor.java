@@ -87,13 +87,28 @@ public class OutboundOpExecutor {
             ExternalCalendarConnection connection = found.get();
             CalendarProvider provider = registry.get(connection.getProvider());
             ProviderCredential credential = tokens.usableCredential(connection);
-            String calendarId = op.getPayload().writeCalendarId();
+            // 🔴 CREATE 만 «지금 설정» 을 다시 읽는다. 제공자 장애로 CREATE 가 FAILED 로 남아 있는
+            //    동안 사용자가 대상을 바꾸면(setWriteCalendar), 적재 때 박아 둔 값으로 보내면 이미 버린
+            //    캘린더에 새 일정이 생긴다.
+            //    UPDATE·DELETE 는 payload 를 믿는다 — 적재 쪽이 OutboundPayload.targetCalendar 로
+            //    «그 이벤트가 실재하는 캘린더» 를 이미 골라 실어 뒀다(매핑의 sentCalendarId). 여기서
+            //    지금 설정을 따르면 없는 곳에서 고치려 드는 404 가 영구히 반복된다.
+            String calendarId = op.getOperation() == OutboundOperation.CREATE
+                    ? connection.getWriteCalendarId()
+                    : op.getPayload().writeCalendarId();
+
+            if (calendarId == null || calendarId.isBlank()) {
+                // 사용자가 내보내기를 껐다(또는 아직 안 골랐다). FAILED 는 다시 집히므로,
+                // 대상을 다시 고르면 이 op 이 그때 나간다 — 버리지 않는다.
+                op.fail("대상 캘린더가 없다 — 내보내기가 해제된 상태다", now);
+                return;
+            }
 
             switch (op.getOperation()) {
                 case CREATE -> recordSent(op, provider.createEvent(credential, calendarId,
-                        op.getPayload().toEvent()), now);
+                        op.getPayload().toEvent()), calendarId, now);
                 case UPDATE -> recordSent(op, provider.updateEvent(credential, calendarId,
-                        op.getPayload().toRef(), op.getPayload().toEvent()), now);
+                        op.getPayload().toRef(), op.getPayload().toEvent()), calendarId, now);
                 case DELETE -> provider.deleteEvent(credential, calendarId, op.getPayload().toRef());
             }
             op.succeed(now);
@@ -107,18 +122,29 @@ public class OutboundOpExecutor {
         }
     }
 
-    /** 보낸 결과를 매핑에 적는다 — 다음 수정의 If-Match 재료이자 되받기의 비교 기준이다. */
-    private void recordSent(OutboundCalendarOp op, ProviderWriteResult result, Instant now) {
+    /**
+     * 보낸 결과를 매핑에 적는다 — 다음 수정의 If-Match 재료이자 되받기의 비교 기준이다.
+     *
+     * <p><b>어느 캘린더로 보냈는지도 함께 적는다</b>(이슈 #69). 이 값이 없으면 대상 설정이 바뀐 뒤
+     * 그 이벤트를 어디서 고쳐야 하는지 아는 곳이 시스템에 하나도 남지 않는다.
+     */
+    private void recordSent(OutboundCalendarOp op, ProviderWriteResult result, String calendarId, Instant now) {
         switch (op.getTargetType()) {
-            case SCHEDULE -> refRepository.findById(op.getTargetId()).ifPresent(ref -> ref.recordSent(
-                    result.externalEventId(), result.resourceHref(), result.etag(),
-                    op.getPayload().title(), op.getPayload().startAt(), op.getPayload().endAt(), now));
-            case FIXED_OCCURRENCE -> occurrenceRepository.findById(op.getTargetId()).ifPresent(o -> o.recordSent(
-                    result.externalEventId(), result.resourceHref(), result.etag(),
-                    op.getPayload().title(), op.getPayload().startAt(), op.getPayload().endAt(), now));
-            case PLAN_BLOCK -> blockRefRepository.findById(op.getTargetId()).ifPresent(r -> r.recordSent(
-                    result.externalEventId(), result.resourceHref(), result.etag(),
-                    op.getPayload().title(), op.getPayload().startAt(), op.getPayload().endAt(), now));
+            case SCHEDULE -> refRepository.findById(op.getTargetId()).ifPresent(ref -> {
+                ref.recordSent(result.externalEventId(), result.resourceHref(), result.etag(),
+                        op.getPayload().title(), op.getPayload().startAt(), op.getPayload().endAt(), now);
+                ref.locateInCalendar(calendarId);
+            });
+            case FIXED_OCCURRENCE -> occurrenceRepository.findById(op.getTargetId()).ifPresent(o -> {
+                o.recordSent(result.externalEventId(), result.resourceHref(), result.etag(),
+                        op.getPayload().title(), op.getPayload().startAt(), op.getPayload().endAt(), now);
+                o.locateInCalendar(calendarId);
+            });
+            case PLAN_BLOCK -> blockRefRepository.findById(op.getTargetId()).ifPresent(r -> {
+                r.recordSent(result.externalEventId(), result.resourceHref(), result.etag(),
+                        op.getPayload().title(), op.getPayload().startAt(), op.getPayload().endAt(), now);
+                r.locateInCalendar(calendarId);
+            });
         }
     }
 }

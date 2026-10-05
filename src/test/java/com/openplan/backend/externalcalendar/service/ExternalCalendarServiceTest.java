@@ -4,6 +4,8 @@ import com.openplan.backend.auth.oauth.OAuthClient;
 import com.openplan.backend.auth.oauth.OAuthProperties;
 import com.openplan.backend.externalcalendar.domain.ApplyMode;
 import com.openplan.backend.externalcalendar.dto.ApplyEventRequest;
+import com.openplan.backend.externalcalendar.dto.ExternalConnectionResponse;
+import com.openplan.backend.externalcalendar.dto.WriteCalendarRequest;
 import com.openplan.backend.externalcalendar.domain.ExternalCalendarConnection;
 import com.openplan.backend.externalcalendar.domain.ExternalCalendarEvent;
 import com.openplan.backend.common.Weekday;
@@ -12,6 +14,7 @@ import com.openplan.backend.externalcalendar.domain.ExternalCalendarProvider;
 import com.openplan.backend.externalcalendar.domain.ExternalCalendarSelection;
 import com.openplan.backend.externalcalendar.provider.CalendarProvider;
 import com.openplan.backend.externalcalendar.provider.CalendarProviderRegistry;
+import com.openplan.backend.externalcalendar.provider.ProviderCalendar;
 import com.openplan.backend.externalcalendar.provider.ProviderCredential;
 import com.openplan.backend.externalcalendar.outbound.OpenPlanEventUid;
 import com.openplan.backend.externalcalendar.outbound.FixedOccurrenceReconciler;
@@ -512,5 +515,108 @@ class ExternalCalendarServiceTest {
         when(eventRepository.findByConnectionId(connection.getId())).thenReturn(List.of());
         when(eventRepository.findByConnectionIdOrderByStartAtAsc(connection.getId())).thenReturn(List.of());
         return connection;
+    }
+
+    // ── 이슈 #69 · 내보낼 대상 캘린더 지정 (D-169) ────────────────────────────────
+    //
+    // 이 메서드가 없던 동안 아웃바운드 구현 전부가 «조용히 0건» 이었다 — write_calendar_id 컬럼은
+    // 있고 그 값을 정할 경로만 없어서, OutboundCalendarQueue 가 매번 빈 결과를 돌려주고 끝났다.
+    // 아래 테스트들은 그 경로가 실제로 값을 넣는지, 그리고 틀린 값을 저장 시점에 막는지를 본다.
+
+    /** 쓰기 스코프까지 받은 활성 구글 연동 하나. */
+    private ExternalCalendarConnection writableGoogleConnection() {
+        return ExternalCalendarConnection.connect(USER, ExternalCalendarProvider.GOOGLE, "me@example.com",
+                "enc", "renc", NOW, "https://www.googleapis.com/auth/calendar.events", NOW);
+    }
+
+    private void providerHasCalendars(ProviderCalendar... calendars) {
+        when(providerRegistry.get(ExternalCalendarProvider.GOOGLE)).thenReturn(calendarProvider);
+        when(calendarProvider.listCalendars(any())).thenReturn(List.of(calendars));
+    }
+
+    @Test
+    @DisplayName("제공자 목록에 있는 캘린더를 고르면 저장되고, 응답이 그 값과 쓰기 가능 여부를 함께 싣는다")
+    void setWriteCalendar_목록에_있는_캘린더는_저장된다() {
+        ExternalCalendarConnection connection = writableGoogleConnection();
+        when(connectionRepository.findByIdAndUserId(connection.getId(), USER))
+                .thenReturn(Optional.of(connection));
+        when(selectionRepository.findByConnectionIdOrderByCalendarNameAsc(connection.getId()))
+                .thenReturn(List.of());
+        providerHasCalendars(new ProviderCalendar("cal-a", "내 캘린더"),
+                new ProviderCalendar("cal-b", "가족"));
+
+        ExternalConnectionResponse response = service.setWriteCalendar(USER, connection.getId(),
+                new WriteCalendarRequest("cal-b"));
+
+        // 저장이 핵심이다 — 이 값이 null 인 동안 아웃바운드는 한 건도 나가지 않았다.
+        assertThat(connection.getWriteCalendarId()).isEqualTo("cal-b");
+        // 화면이 «왜 안 나가는가» 를 말할 수 있도록 응답이 둘 다 실어야 한다.
+        assertThat(response.writeCalendarId()).isEqualTo("cal-b");
+        assertThat(response.canWrite()).isTrue();
+    }
+
+    @Test
+    @DisplayName("🔴 제공자에게 없는 식별자는 422 로 막는다 — 저장하면 실패가 한참 뒤 푸셔의 404 로만 드러난다")
+    void setWriteCalendar_목록에_없는_값은_422() {
+        ExternalCalendarConnection connection = writableGoogleConnection();
+        when(connectionRepository.findByIdAndUserId(connection.getId(), USER))
+                .thenReturn(Optional.of(connection));
+        providerHasCalendars(new ProviderCalendar("cal-a", "내 캘린더"));
+
+        assertThatThrownBy(() -> service.setWriteCalendar(USER, connection.getId(),
+                new WriteCalendarRequest("cal-지어낸것")))
+                .isInstanceOf(OpenPlanException.class)
+                .extracting("errorCode").isEqualTo(ErrorCode.E_COM_009);
+
+        // 막았으면 저장도 없어야 한다 — 막고 나서 저장하면 검사가 장식이 된다.
+        assertThat(connection.getWriteCalendarId()).isNull();
+    }
+
+    @Test
+    @DisplayName("해제(null)는 제공자를 부르지 않는다 — 제공자 장애 때문에 내보내기를 멈출 수 없으면 안 된다")
+    void setWriteCalendar_해제는_제공자를_부르지_않는다() {
+        ExternalCalendarConnection connection = writableGoogleConnection();
+        connection.chooseWriteCalendar("cal-b");   // 이미 고른 상태에서 되돌린다
+        when(connectionRepository.findByIdAndUserId(connection.getId(), USER))
+                .thenReturn(Optional.of(connection));
+        when(selectionRepository.findByConnectionIdOrderByCalendarNameAsc(connection.getId()))
+                .thenReturn(List.of());
+
+        ExternalConnectionResponse response = service.setWriteCalendar(USER, connection.getId(),
+                new WriteCalendarRequest(null));
+
+        assertThat(connection.getWriteCalendarId()).isNull();
+        assertThat(response.writeCalendarId()).isNull();
+        verifyNoInteractions(providerRegistry, tokens);
+    }
+
+    @Test
+    @DisplayName("빈 문자열도 해제로 접는다 — DB 에 \"\" 를 남기면 «골랐는데 안 나가는» 세 번째 상태가 생긴다")
+    void setWriteCalendar_빈_문자열은_해제로_접힌다() {
+        ExternalCalendarConnection connection = writableGoogleConnection();
+        connection.chooseWriteCalendar("cal-b");
+        when(connectionRepository.findByIdAndUserId(connection.getId(), USER))
+                .thenReturn(Optional.of(connection));
+        when(selectionRepository.findByConnectionIdOrderByCalendarNameAsc(connection.getId()))
+                .thenReturn(List.of());
+
+        service.setWriteCalendar(USER, connection.getId(), new WriteCalendarRequest("   "));
+
+        assertThat(connection.getWriteCalendarId()).isNull();
+        verifyNoInteractions(providerRegistry, tokens);
+    }
+
+    @Test
+    @DisplayName("남의 연동은 404 — 부재와 타인 소유를 구별해 알려주지 않는다(NFR-030)")
+    void setWriteCalendar_남의_연동이면_404() {
+        UUID otherConnection = UUID.randomUUID();
+        when(connectionRepository.findByIdAndUserId(otherConnection, USER)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.setWriteCalendar(USER, otherConnection,
+                new WriteCalendarRequest("cal-a")))
+                .isInstanceOf(OpenPlanException.class)
+                .extracting("errorCode").isEqualTo(ErrorCode.E_COM_004);
+
+        verifyNoInteractions(providerRegistry, tokens);
     }
 }

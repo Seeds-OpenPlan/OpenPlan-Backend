@@ -146,4 +146,59 @@ class OutboundCalendarQueueTest {
 
         verify(opRepository, never()).save(any());
     }
+
+    // ── #85 리뷰 Blocking · 대상 캘린더를 바꾼 뒤 ───────────────────────────────
+
+    @Test
+    @DisplayName("🔴 이미 내보낸 일정의 UPDATE 는 대상을 바꿔도 «있는 곳» 으로 나간다")
+    void 이미_내보낸_일정은_있는_곳으로_나간다() {
+        // 캘린더 A 로 내보낸 뒤 사용자가 대상을 B 로 바꾼 상태
+        ScheduleExternalRef sent = ScheduleExternalRef.reserve(schedule.getId(), UUID.randomUUID(), "uid-1", NOW);
+        sent.recordSent("evt-1", "/dav/evt-1.ics", "etag-1", "스터디",
+                schedule.getStartAt(), schedule.getEndAt(), NOW);
+        sent.locateInCalendar("cal-A");
+        given(refRepository.findById(schedule.getId())).willReturn(Optional.of(sent));
+        given(connectionRepository.findByUserIdOrderByConnectedAtAsc(USER))
+                .willReturn(List.of(connection(WRITE_SCOPE, "cal-B", ConnectionStatus.ACTIVE)));
+
+        queue.enqueueScheduleUpsert(USER, schedule);
+
+        ArgumentCaptor<OutboundCalendarOp> captor = ArgumentCaptor.forClass(OutboundCalendarOp.class);
+        verify(opRepository).save(captor.capture());
+        // B 로 보내면 이벤트가 없어 404 가 영구히 반복된다.
+        assertThat(captor.getValue().getPayload().writeCalendarId()).isEqualTo("cal-A");
+        assertThat(captor.getValue().getOperation()).isEqualTo(OutboundOperation.UPDATE);
+    }
+
+    @Test
+    @DisplayName("🔴 삭제도 «있는 곳» 으로 — 매핑 행은 곧 CASCADE 로 사라져 나중엔 알 길이 없다")
+    void 삭제도_있는_곳으로_나간다() {
+        ScheduleExternalRef sent = ScheduleExternalRef.reserve(schedule.getId(), UUID.randomUUID(), "uid-1", NOW);
+        sent.recordSent("evt-1", "/dav/evt-1.ics", "etag-1", "스터디",
+                schedule.getStartAt(), schedule.getEndAt(), NOW);
+        sent.locateInCalendar("cal-A");
+        given(refRepository.findById(schedule.getId())).willReturn(Optional.of(sent));
+        given(connectionRepository.findByUserIdOrderByConnectedAtAsc(USER))
+                .willReturn(List.of(connection(WRITE_SCOPE, "cal-B", ConnectionStatus.ACTIVE)));
+
+        queue.enqueueScheduleDelete(USER, schedule.getId());
+
+        ArgumentCaptor<OutboundCalendarOp> captor = ArgumentCaptor.forClass(OutboundCalendarOp.class);
+        verify(opRepository).save(captor.capture());
+        assertThat(captor.getValue().getPayload().writeCalendarId()).isEqualTo("cal-A");
+    }
+
+    @Test
+    @DisplayName("아직 안 내보낸 것(sentCalendarId=null)은 지금 설정된 대상으로 나간다")
+    void 아직_안_내보낸_것은_지금_대상으로_나간다() {
+        given(connectionRepository.findByUserIdOrderByConnectedAtAsc(USER))
+                .willReturn(List.of(connection(WRITE_SCOPE, "cal-B", ConnectionStatus.ACTIVE)));
+
+        queue.enqueueScheduleUpsert(USER, schedule);
+
+        ArgumentCaptor<OutboundCalendarOp> captor = ArgumentCaptor.forClass(OutboundCalendarOp.class);
+        verify(opRepository).save(captor.capture());
+        assertThat(captor.getValue().getPayload().writeCalendarId()).isEqualTo("cal-B");
+        assertThat(captor.getValue().getOperation()).isEqualTo(OutboundOperation.CREATE);
+    }
 }

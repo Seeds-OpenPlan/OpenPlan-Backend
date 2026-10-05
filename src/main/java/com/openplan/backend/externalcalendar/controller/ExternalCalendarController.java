@@ -9,6 +9,7 @@ import com.openplan.backend.externalcalendar.dto.ExternalEventResponse;
 import com.openplan.backend.externalcalendar.dto.ProviderCalendarResponse;
 import com.openplan.backend.externalcalendar.dto.SaveSelectionsRequest;
 import com.openplan.backend.externalcalendar.dto.UpdateConnectionRequest;
+import com.openplan.backend.externalcalendar.dto.WriteCalendarRequest;
 import com.openplan.backend.externalcalendar.service.ExternalCalendarService;
 import com.openplan.backend.global.response.ApiResponse;
 import com.openplan.backend.global.security.CurrentUser;
@@ -24,7 +25,6 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -117,6 +117,18 @@ public class ExternalCalendarController {
             @Valid @RequestBody SaveSelectionsRequest request) {
         externalCalendarService.saveSelections(userId, connectionId, request);
         return ApiResponse.ok(null);
+    }
+
+    @PutMapping("/external-calendar-connections/{connectionId}/write-calendar")
+    @Operation(summary = "내보낼 대상 캘린더 지정 (이슈 #69)",
+            description = "OpenPlan 의 변경을 어느 외부 캘린더에 쓸지 정한다. 이 값이 비어 있으면 아웃바운드는 "
+                    + "조용히 아무것도 내보내지 않는다. 목록에 없는 식별자는 422 E-COM-009, "
+                    + "null·생략·빈 문자열은 «내보내지 않음» 으로 해제(해제는 제공자를 부르지 않는다).")
+    public ApiResponse<ExternalConnectionResponse> setWriteCalendar(
+            @CurrentUser UUID userId,
+            @PathVariable UUID connectionId,
+            @RequestBody(required = false) WriteCalendarRequest request) {
+        return ApiResponse.ok(externalCalendarService.setWriteCalendar(userId, connectionId, request));
     }
 
     @GetMapping("/external-calendar-connections/{connectionId}/events")
