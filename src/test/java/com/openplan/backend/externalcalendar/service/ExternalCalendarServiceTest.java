@@ -15,6 +15,7 @@ import com.openplan.backend.externalcalendar.provider.CalendarProviderRegistry;
 import com.openplan.backend.externalcalendar.provider.ProviderCredential;
 import com.openplan.backend.externalcalendar.outbound.OpenPlanEventUid;
 import com.openplan.backend.externalcalendar.outbound.OutboundCalendarPusher;
+import com.openplan.backend.externalcalendar.outbound.ScheduleInboundReconciler;
 import com.openplan.backend.externalcalendar.provider.ProviderEvent;
 import com.openplan.backend.externalcalendar.repository.ExternalCalendarConnectionRepository;
 import com.openplan.backend.externalcalendar.repository.ExternalCalendarEventRepository;
@@ -94,6 +95,9 @@ class ExternalCalendarServiceTest {
 
     @Mock
     private OutboundCalendarPusher outboundPusher;
+
+    @Mock
+    private ScheduleInboundReconciler inboundReconciler;
 
     @InjectMocks
     private ExternalCalendarService service;
