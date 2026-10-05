@@ -78,11 +78,15 @@ class ExternalCalendarAuthorizationTest {
     }
 
     @Test
-    @DisplayName("로그인 scope 가 아니라 캘린더 읽기 scope 를 요구한다")
+    @DisplayName("로그인 scope 가 아니라 캘린더 **쓰기** scope 를 요구한다 (#69 양방향)")
     void requestsCalendarScope() {
         String url = authorization.authorizationUrl(ExternalCalendarProvider.GOOGLE, FRONTEND + "/settings/calendar");
 
-        assertThat(url).contains("calendar.readonly");
+        // 🔴 calendar.events 는 읽기를 포함한 쓰기 권한이다. readonly 로 되돌리면 밖으로 내보내기가
+        //    통째로 막히고, 이미 연동한 사용자는 granted_scope 가 쓰기를 포함하지 않아
+        //    canWrite() 가 false 가 된다 — 조용히 읽기 전용으로 돌아간다.
+        assertThat(url).contains("calendar.events");
+        assertThat(url).as("읽기 전용 scope 로 되돌아가지 않았다").doesNotContain("calendar.readonly");
     }
 
     @Test
