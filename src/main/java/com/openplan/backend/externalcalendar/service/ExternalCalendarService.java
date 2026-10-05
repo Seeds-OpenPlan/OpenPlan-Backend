@@ -21,6 +21,8 @@ import com.openplan.backend.externalcalendar.dto.ProviderCalendarResponse;
 import com.openplan.backend.externalcalendar.dto.SaveSelectionsRequest;
 import com.openplan.backend.externalcalendar.dto.UpdateConnectionRequest;
 import com.openplan.backend.externalcalendar.provider.CalendarProviderRegistry;
+import com.openplan.backend.externalcalendar.outbound.OpenPlanEventUid;
+import com.openplan.backend.externalcalendar.outbound.OutboundCalendarPusher;
 import com.openplan.backend.externalcalendar.provider.ProviderCredential;
 import com.openplan.backend.externalcalendar.provider.ProviderCalendar;
 import com.openplan.backend.externalcalendar.provider.ProviderEvent;
@@ -85,6 +87,7 @@ public class ExternalCalendarService {
     private final OAuthClient oauthClient;
     private final OAuthProperties oauthProperties;
     private final UserClock userClock;
+    private final OutboundCalendarPusher outboundPusher;
 
     public ExternalCalendarService(ExternalCalendarConnectionRepository connectionRepository,
                                    ExternalCalendarSelectionRepository selectionRepository,
@@ -97,7 +100,9 @@ public class ExternalCalendarService {
                                    ExternalCalendarAuthorization authorization,
                                    OAuthClient oauthClient,
                                    OAuthProperties oauthProperties,
+                                   OutboundCalendarPusher outboundPusher,
                                    UserClock userClock) {
+        this.outboundPusher = outboundPusher;
         this.connectionRepository = connectionRepository;
         this.selectionRepository = selectionRepository;
         this.eventRepository = eventRepository;
@@ -349,6 +354,11 @@ public class ExternalCalendarService {
     public List<ExternalEventResponse> listEvents(UUID userId, UUID connectionId, ApplyStatus applyStatus) {
         ExternalCalendarConnection connection = requireConnection(userId, connectionId);
         if (connection.isActive()) {
+            // 🔴 **내보내기가 먼저다.** 대기 중인 변경을 밀어낸 뒤에 읽어야, 방금 만든 일정이
+            //    같은 회차에 우리 UID 로 돌아와 에코 차단에 걸린다. 순서를 바꾸면 그 일정이
+            //    다음 회차까지 "외부에 없는 것" 으로 남아 삭제 전파가 오판할 여지가 생긴다.
+            //    pushPending 은 예외를 올리지 않는다 — 외부 쓰기 실패로 조회가 깨지면 안 된다.
+            outboundPusher.pushPending(userId);
             synchronize(userId, connection);
         }
         List<ExternalCalendarEvent> events = (applyStatus == null)
@@ -447,7 +457,20 @@ public class ExternalCalendarService {
                     .listEvents(credential, selection.getExternalCalendarId(), selection.getCalendarName(), from, to);
 
             for (ProviderEvent providerEvent : fetched) {
+                // 🔴 에코 차단 (#69). 우리가 밖에 만든 일정은 다음 조회에 그대로 읽혀 온다.
+                //    그것을 «외부에서 온 새 후보» 로 들이면 사용자 화면에 자기 일정이 한 번 더
+                //    뜨고, 그것을 또 내보내면 **무한히 늘어난다.** 이미 쌓인 뒤에는 되돌릴 수 없다.
+                //
+                //    🔴 seen 에는 **넣는다.** 빼면 "이번에 안 왔다" 가 되어 삭제 전파(#68)가
+                //    우리가 방금 만든 일정을 지워진 것으로 읽는다 — 후보를 안 만드는 것과
+                //    "없어졌다" 고 판정하는 것은 전혀 다른 이야기다.
                 seen.add(providerEvent.externalEventId());
+                // 🔴 externalEventId 가 아니라 uid 로 묻는다. 구글의 externalEventId 는 이벤트
+                //    id 라 우리 것을 절대 못 알아보고, 애플은 #시작시각 접미사가 붙어 매핑
+                //    조회가 어긋난다 — 그러면 방금 만든 일정이 삭제 대상이 된다(#80 리뷰).
+                if (OpenPlanEventUid.isOurs(providerEvent.uid())) {
+                    continue;
+                }
                 ExternalCalendarEvent stored = existing.get(providerEvent.externalEventId());
                 if (stored != null) {
                     // resync 는 값을 덮어쓰므로 **덮어쓰기 전에** 비교해야 한다.

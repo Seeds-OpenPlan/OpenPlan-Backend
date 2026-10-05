@@ -2,6 +2,7 @@ package com.openplan.backend.schedule.service;
 
 import com.openplan.backend.global.error.ErrorCode;
 import com.openplan.backend.global.error.OpenPlanException;
+import com.openplan.backend.externalcalendar.outbound.OutboundCalendarQueue;
 import com.openplan.backend.schedule.domain.Schedule;
 import com.openplan.backend.schedule.dto.ScheduleResponse;
 import com.openplan.backend.schedule.dto.ScheduleUpdateRequest;
@@ -22,10 +23,13 @@ public class ScheduleService {
 
     private final ScheduleRepository repository;
     private final ScheduleValidator validator;
+    private final OutboundCalendarQueue outboundQueue;
 
-    public ScheduleService(ScheduleRepository repository, ScheduleValidator validator) {
+    public ScheduleService(ScheduleRepository repository, ScheduleValidator validator,
+                           OutboundCalendarQueue outboundQueue) {
         this.repository = repository;
         this.validator = validator;
+        this.outboundQueue = outboundQueue;
     }
 
     /**
@@ -61,6 +65,9 @@ public class ScheduleService {
 
         schedule.edit(title, estimatedMinutes, priority, memo);
         repository.flush(); // @Version 증가를 응답에 반영. 잔여 경합 → OptimisticLockException → 409
+        // 밖으로 내보낼 것을 적기만 한다 — 외부 호출은 다음 동기화가 한다(#69 D5).
+        // flush 뒤에 부르는 이유: 아웃박스 payload 가 **저장된 값**을 담아야 한다.
+        outboundQueue.enqueueScheduleUpsert(userId, schedule);
         return ScheduleResponse.from(schedule);
     }
 }
