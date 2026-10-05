@@ -16,6 +16,7 @@ import com.openplan.backend.externalcalendar.provider.ProviderCredential;
 import com.openplan.backend.externalcalendar.outbound.OpenPlanEventUid;
 import com.openplan.backend.externalcalendar.outbound.FixedOccurrenceReconciler;
 import com.openplan.backend.externalcalendar.outbound.OutboundCalendarPusher;
+import com.openplan.backend.externalcalendar.outbound.PlanBlockInboundReconciler;
 import com.openplan.backend.externalcalendar.outbound.ScheduleInboundReconciler;
 import com.openplan.backend.externalcalendar.provider.ProviderEvent;
 import com.openplan.backend.externalcalendar.repository.ExternalCalendarConnectionRepository;
@@ -102,6 +103,9 @@ class ExternalCalendarServiceTest {
 
     @Mock
     private FixedOccurrenceReconciler fixedOccurrenceReconciler;
+
+    @Mock
+    private PlanBlockInboundReconciler blockInboundReconciler;
 
     @InjectMocks
     private ExternalCalendarService service;

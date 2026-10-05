@@ -24,6 +24,7 @@ import com.openplan.backend.externalcalendar.provider.CalendarProviderRegistry;
 import com.openplan.backend.externalcalendar.outbound.OpenPlanEventUid;
 import com.openplan.backend.externalcalendar.outbound.FixedOccurrenceReconciler;
 import com.openplan.backend.externalcalendar.outbound.OutboundCalendarPusher;
+import com.openplan.backend.externalcalendar.outbound.PlanBlockInboundReconciler;
 import com.openplan.backend.externalcalendar.outbound.ScheduleInboundReconciler;
 import com.openplan.backend.externalcalendar.provider.ProviderCredential;
 import com.openplan.backend.externalcalendar.provider.ProviderCalendar;
@@ -92,6 +93,7 @@ public class ExternalCalendarService {
     private final OutboundCalendarPusher outboundPusher;
     private final ScheduleInboundReconciler inboundReconciler;
     private final FixedOccurrenceReconciler fixedOccurrenceReconciler;
+    private final PlanBlockInboundReconciler blockInboundReconciler;
 
     public ExternalCalendarService(ExternalCalendarConnectionRepository connectionRepository,
                                    ExternalCalendarSelectionRepository selectionRepository,
@@ -107,10 +109,12 @@ public class ExternalCalendarService {
                                    OutboundCalendarPusher outboundPusher,
                                    ScheduleInboundReconciler inboundReconciler,
                                    FixedOccurrenceReconciler fixedOccurrenceReconciler,
+                                   PlanBlockInboundReconciler blockInboundReconciler,
                                    UserClock userClock) {
         this.outboundPusher = outboundPusher;
         this.inboundReconciler = inboundReconciler;
         this.fixedOccurrenceReconciler = fixedOccurrenceReconciler;
+        this.blockInboundReconciler = blockInboundReconciler;
         this.connectionRepository = connectionRepository;
         this.selectionRepository = selectionRepository;
         this.eventRepository = eventRepository;
@@ -489,6 +493,9 @@ public class ExternalCalendarService {
                     //    ETag 도 여기서 갱신한다 — 안 하면 다음 수정이 «남이 고쳤다» 로 튕긴다.
                     //    매핑 조회도 uid 로 한다 — 접미사 붙은 값으로 찾으면 절대 일치하지 않는다.
                     ourUids.add(providerEvent.uid());
+                    blockInboundReconciler.reconcileOne(providerEvent.uid(),
+                            providerEvent.title(), providerEvent.startAt(), providerEvent.endAt(),
+                            providerEvent.externalEventId(), providerEvent.resourceHref(), providerEvent.etag());
                     inboundReconciler.reconcileOne(userId, providerEvent.uid(),
                             providerEvent.title(), providerEvent.startAt(), providerEvent.endAt(),
                             providerEvent.externalEventId(), providerEvent.resourceHref(), providerEvent.etag());
@@ -527,6 +534,7 @@ public class ExternalCalendarService {
         propagateRemoteDeletions(connection, existing, seen, selections, from, to);
         // 우리 일정이 외부에서 지워졌는가. 같은 «창 안에 있어야 하는데 없다» 원칙을 쓴다.
         inboundReconciler.propagateDeletions(connection.getId(), ourUids, from, to);
+        blockInboundReconciler.propagateDeletions(userId, ourUids, from, to);
 
         if (created.isEmpty()) {
             return;
