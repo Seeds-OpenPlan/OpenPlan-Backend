@@ -48,13 +48,16 @@ public class FixedOccurrenceReconciler {
     private final FixedOccurrenceRepository occurrenceRepository;
     private final OutboundCalendarOpRepository opRepository;
     private final UserClock clock;
+    private final FixedOccurrenceWriter occurrenceWriter;
 
     public FixedOccurrenceReconciler(JdbcTemplate jdbc, FixedOccurrenceRepository occurrenceRepository,
-                                     OutboundCalendarOpRepository opRepository, UserClock clock) {
+                                     OutboundCalendarOpRepository opRepository, UserClock clock,
+                                     FixedOccurrenceWriter occurrenceWriter) {
         this.jdbc = jdbc;
         this.occurrenceRepository = occurrenceRepository;
         this.opRepository = opRepository;
         this.clock = clock;
+        this.occurrenceWriter = occurrenceWriter;
     }
 
     /** 이 연동으로 내보낼 회차를 맞춘다. 쓰기 대상 캘린더가 없으면 아무것도 하지 않는다. */
@@ -88,6 +91,11 @@ public class FixedOccurrenceReconciler {
         List<FixedOccurrence> gone = new ArrayList<>();
         for (FixedOccurrence o : stored) {
             storedUids.add(o.getExternalUid());
+            // 🔴 다른 연동으로 나간 회차는 그 연동이 다룬다. 여기서 고치거나 지우면 이 연동의
+            //    자격증명·캘린더로 남의 이벤트를 지목하게 된다(#79 리뷰와 같은 뿌리).
+            if (!connection.getId().equals(o.getConnectionId())) {
+                continue;
+            }
             var want = wanted.get(o.getExternalUid());
             if (want == null) {
                 gone.add(o);
@@ -114,9 +122,11 @@ public class FixedOccurrenceReconciler {
             //    두 트랜잭션이 같은 (고정일정, 날짜)를 "아직 없음" 으로 보고 각자 INSERT 한다.
             //    ux_fixed_occurrence 가 바로 그것을 막으려고 있는 제약이고, 여기서 그 제약을
             //    **최종 판정자**로 쓴다 — 같은 클래스의 동기화 경합 처리와 같은 방식이다.
+            //    🔴 그리고 **별도 트랜잭션에서** 받는다. 같은 트랜잭션에서 위반을 잡아도 PostgreSQL 은
+            //    그 트랜잭션을 abort 로 두어 뒤따르는 SQL 이 전부 실패한다(#81 리뷰 Blocking 2차).
             FixedOccurrence created;
             try {
-                created = occurrenceRepository.saveAndFlush(FixedOccurrence.reserve(
+                created = occurrenceWriter.reserve(FixedOccurrence.reserve(
                         wantedSchedule.get(entry.getKey()), userId, connection.getId(),
                         entry.getValue().date(), now));
             } catch (DataIntegrityViolationException e) {
@@ -141,6 +151,10 @@ public class FixedOccurrenceReconciler {
         }
     }
 
+    /**
+     * 대상마다 안 나간 작업은 하나만 둔다 — 있으면 새로 쌓지 않고 내용을 고친다. 안 그러면 CREATE 가
+     * 나가기 전의 동기화마다 CREATE 가 또 쌓이고, 빈 참조를 든 UPDATE 가 영원히 실패한다(#80 리뷰).
+     */
     private void enqueue(UUID userId, ExternalCalendarConnection connection, FixedOccurrence occurrence,
                          String title, FixedOccurrencePlanner.Occurrence want, String calendarId,
                          OutboundOperation operation, java.time.Instant now) {
@@ -148,12 +162,28 @@ public class FixedOccurrenceReconciler {
                 want.startAt(), want.endAt(),
                 OutboundPayload.targetCalendar(occurrence.getSentCalendarId(), calendarId),
                 occurrence.getExternalEventId(), occurrence.getResourceHref(), occurrence.getEtag());
+        List<OutboundCalendarOp> unsent =
+                opRepository.findUnsentByTarget(OutboundTargetType.FIXED_OCCURRENCE, occurrence.getId());
+        if (!unsent.isEmpty()) {
+            unsent.get(unsent.size() - 1).replacePayload(payload, now);
+            return;
+        }
         opRepository.save(OutboundCalendarOp.queue(userId, connection.getId(),
                 OutboundTargetType.FIXED_OCCURRENCE, occurrence.getId(), operation, payload, now));
     }
 
+    /**
+     * 🔴 밖에 나간 적 없는 회차는 DELETE 를 쌓지 않고 대기 CREATE 를 거둔다. 그대로 두면 CREATE 가
+     * 뒤늦게 나가 지운 회차가 외부에 유령으로 남고, 참조 없는 DELETE 는 영원히 실패한다(#80 리뷰).
+     */
     private void enqueueDelete(UUID userId, ExternalCalendarConnection connection, FixedOccurrence occurrence,
                                String calendarId, java.time.Instant now) {
+        List<OutboundCalendarOp> unsent =
+                opRepository.findUnsentByTarget(OutboundTargetType.FIXED_OCCURRENCE, occurrence.getId());
+        opRepository.deleteAll(unsent);
+        if (occurrence.neverSent()) {
+            return;
+        }
         OutboundPayload payload = new OutboundPayload(occurrence.getExternalUid(), null, null, null,
                 OutboundPayload.targetCalendar(occurrence.getSentCalendarId(), calendarId),
                 occurrence.getExternalEventId(), occurrence.getResourceHref(), occurrence.getEtag());

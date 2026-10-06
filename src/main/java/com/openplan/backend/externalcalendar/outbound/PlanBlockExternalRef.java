@@ -119,8 +119,32 @@ public class PlanBlockExternalRef {
         return sentCalendarId;
     }
 
+    /**
+     * 다른 주의 자리로 옮긴다 — 주차 이동으로 원래 주에서 자리를 잃은 매핑을 새 주가 데려갈 때.
+     * UID 는 그대로라 외부에는 새로 만들지 않고 <b>수정 한 번</b>이 나간다(#82 리뷰 Blocking).
+     */
+    public void relocate(UUID weeklyPlanId, int sequence, Instant now) {
+        this.weeklyPlanId = weeklyPlanId;
+        this.sequence = sequence;
+        this.updatedAt = now;
+    }
+
     public void recordSent(String externalEventId, String resourceHref, String etag,
                            String title, Instant startAt, Instant endAt, Instant now) {
+        recordSeen(externalEventId, resourceHref, etag, now);
+        this.sentTitle = title;
+        this.sentStartAt = startAt;
+        this.sentEndAt = endAt;
+        this.updatedAt = now;
+    }
+
+    /**
+     * 외부 쪽 식별값(이벤트 id·href·ETag)만 갱신한다 — <b>보낸 제목·시각은 그대로 둔다.</b>
+     * 되받은 이동을 실제 블록에 반영하지 못했을 때 쓴다. 보낸 시각까지 바꾸면 매핑이 실제 블록과
+     * 어긋나 다음 되받기·삭제 판정이 블록을 못 찾고 매핑만 지운다. ETag 는 갱신해야 다음 내보내기가
+     * 412 로 막히지 않는다.
+     */
+    public void recordSeen(String externalEventId, String resourceHref, String etag, Instant now) {
         if (externalEventId != null) {
             this.externalEventId = externalEventId;
         }
@@ -130,9 +154,6 @@ public class PlanBlockExternalRef {
         if (etag != null) {
             this.etag = etag;
         }
-        this.sentTitle = title;
-        this.sentStartAt = startAt;
-        this.sentEndAt = endAt;
         this.updatedAt = now;
     }
 
@@ -144,6 +165,19 @@ public class PlanBlockExternalRef {
         return !Objects.equals(sentTitle, title)
                 || !Objects.equals(sentStartAt, startAt)
                 || !Objects.equals(sentEndAt, endAt);
+    }
+
+    /**
+     * 보낸 <b>시각</b>과 다른가 — 되받기 판정용. 제목은 되받지 않으므로 제목만 바뀐 것은 «옮겼다» 가
+     * 아니다. 제목까지 보면 캘린더에서 이름만 고쳐도 확정이 풀린다(#83 리뷰 Blocking).
+     */
+    public boolean timeDiffersFrom(Instant startAt, Instant endAt) {
+        return !Objects.equals(sentStartAt, startAt) || !Objects.equals(sentEndAt, endAt);
+    }
+
+    /** 마지막으로 보낸 시각에 놓인 블록인가 — 순번 대신 이것으로 대상을 찾는다(#83 리뷰 Blocking). */
+    public boolean wasSentAt(Instant startAt, Instant endAt) {
+        return sentStartAt != null && sentStartAt.equals(startAt) && Objects.equals(sentEndAt, endAt);
     }
 
     /** 내보낸 시각이 이 창 안이었나 — 외부 삭제 판정의 전제(#69 D4). */

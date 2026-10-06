@@ -45,6 +45,7 @@ import java.time.LocalTime;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -498,6 +499,63 @@ class ExternalCalendarServiceTest {
         ArgumentCaptor<List<ExternalCalendarEvent>> captor = ArgumentCaptor.forClass(List.class);
         verify(eventWriter).insertAll(captor.capture());
         assertThat(captor.getValue().get(0).isWritable()).isFalse();
+    }
+
+    // ---------- #80 리뷰 Blocking — 내보낸 곳이 가져오기 선택 밖일 때 ----------
+
+    private ProviderEvent ourEvent(String ourUid) {
+        return new ProviderEvent("g-" + ourUid, "스터디",
+                Instant.parse("2026-08-20T01:00:00Z"), Instant.parse("2026-08-20T02:00:00Z"),
+                "내보내기", null, null, null, false, ourUid);
+    }
+
+    @Test
+    @DisplayName("🔴 내보낸 곳이 가져오기 선택 밖이어도 읽는다 — 안 읽으면 방금 내보낸 일정을 지워진 것으로 본다")
+    void 선택_밖의_쓰기_대상도_읽어_우리_일정을_판정한다() {
+        ExternalCalendarConnection connection = stubSync();
+        connection.chooseWriteCalendar("cal-w");
+        String ourUid = OpenPlanEventUid.forSchedule(UUID.randomUUID());
+        when(calendarProvider.listEvents(any(), eq("cal-a"), any(), any(), any())).thenReturn(List.of());
+        when(calendarProvider.listEvents(any(), eq("cal-b"), any(), any(), any())).thenReturn(List.of());
+        when(calendarProvider.listEvents(any(), eq("cal-w"), any(), any(), any())).thenReturn(List.of(
+                ourEvent(ourUid),
+                new ProviderEvent("foreign", "남의 회의", Instant.parse("2026-08-20T03:00:00Z"),
+                        Instant.parse("2026-08-20T04:00:00Z"), "내보내기")));
+
+        service.listEvents(USER, connection.getId(), null);
+
+        verify(inboundReconciler).propagateDeletions(eq(connection.getId()), eq(Set.of(ourUid)),
+                eq(Set.of("cal-a", "cal-b", "cal-w")), eq("cal-w"), any(), any());
+        // 선택하지 않은 캘린더다 — 남의 일정은 후보로 들이지 않는다.
+        verify(eventWriter, never()).insertAll(any());
+    }
+
+    @Test
+    @DisplayName("🔴 내보낸 곳을 모르면 읽은 캘린더만 넘긴다 — 대상이 없으니 어디 있는지 모르는 것은 판정 밖이다")
+    void 쓰기_대상이_없으면_읽은_캘린더만_넘긴다() {
+        ExternalCalendarConnection connection = stubSync();
+        when(calendarProvider.listEvents(any(), any(), any(), any(), any())).thenReturn(List.of());
+
+        service.listEvents(USER, connection.getId(), null);
+
+        verify(inboundReconciler).propagateDeletions(eq(connection.getId()), eq(Set.of()),
+                eq(Set.of("cal-a", "cal-b")), eq(null), any(), any());
+    }
+
+    @Test
+    @DisplayName("쓰기 대상이 가져오기 선택 안에 있으면 한 번만 읽고 그 결과로 판정한다")
+    void 선택_안의_쓰기_대상은_한_번만_읽는다() {
+        ExternalCalendarConnection connection = stubSync();
+        connection.chooseWriteCalendar("cal-a");
+        String ourUid = OpenPlanEventUid.forSchedule(UUID.randomUUID());
+        when(calendarProvider.listEvents(any(), eq("cal-a"), any(), any(), any())).thenReturn(List.of(ourEvent(ourUid)));
+        when(calendarProvider.listEvents(any(), eq("cal-b"), any(), any(), any())).thenReturn(List.of());
+
+        service.listEvents(USER, connection.getId(), null);
+
+        verify(calendarProvider).listEvents(any(), eq("cal-a"), any(), any(), any());
+        verify(inboundReconciler).propagateDeletions(eq(connection.getId()), eq(Set.of(ourUid)),
+                eq(Set.of("cal-a", "cal-b")), eq("cal-a"), any(), any());
     }
 
     private ExternalCalendarConnection stubSync() {

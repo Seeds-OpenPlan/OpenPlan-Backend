@@ -89,6 +89,12 @@ public class OutboundCalendarOp {
         return op;
     }
 
+    /** 아직 안 나간 작업의 내용을 최신으로 바꾼다. 작업 종류(CREATE·UPDATE)는 그대로다. */
+    public void replacePayload(OutboundPayload payload, Instant now) {
+        this.payload = payload;
+        this.updatedAt = now;
+    }
+
     /** 나갔다. */
     public void succeed(Instant now) {
         this.status = OutboundStatus.DONE;

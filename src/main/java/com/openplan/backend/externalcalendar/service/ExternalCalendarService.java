@@ -495,8 +495,10 @@ public class ExternalCalendarService {
     private void synchronize(UUID userId, ExternalCalendarConnection connection) {
         List<ExternalCalendarSelection> selections =
                 selectionRepository.findByConnectionIdOrderByCalendarNameAsc(connection.getId());
-        if (selections.isEmpty()) {
-            return;   // 가져올 캘린더를 아직 고르지 않았다 — 제공자를 부를 이유가 없다.
+        String writeCalendarId = connection.getWriteCalendarId();
+        boolean hasWriteCalendar = writeCalendarId != null && !writeCalendarId.isBlank();
+        if (selections.isEmpty() && !hasWriteCalendar) {
+            return;   // 가져올 캘린더도, 내보낸 곳도 없다 — 제공자를 부를 이유가 없다.
         }
         ProviderCredential credential = tokens.usableCredential(connection);
         ZoneId zone = userClock.zoneOf(userId);
@@ -535,17 +537,7 @@ public class ExternalCalendarService {
                 //    id 라 우리 것을 절대 못 알아보고, 애플은 #시작시각 접미사가 붙어 매핑
                 //    조회가 어긋난다 — 그러면 방금 만든 일정이 삭제 대상이 된다(#80 리뷰).
                 if (OpenPlanEventUid.isOurs(providerEvent.uid())) {
-                    // 🔴 «새 후보로 만들지 않는다» 와 «변경을 무시한다» 는 다르다(#69 D4).
-                    //    여기서 내보낼 때의 스냅샷과 비교해 사용자가 폰에서 고친 것을 되받는다.
-                    //    ETag 도 여기서 갱신한다 — 안 하면 다음 수정이 «남이 고쳤다» 로 튕긴다.
-                    //    매핑 조회도 uid 로 한다 — 접미사 붙은 값으로 찾으면 절대 일치하지 않는다.
-                    ourUids.add(providerEvent.uid());
-                    blockInboundReconciler.reconcileOne(providerEvent.uid(),
-                            providerEvent.title(), providerEvent.startAt(), providerEvent.endAt(),
-                            providerEvent.externalEventId(), providerEvent.resourceHref(), providerEvent.etag());
-                    inboundReconciler.reconcileOne(userId, providerEvent.uid(),
-                            providerEvent.title(), providerEvent.startAt(), providerEvent.endAt(),
-                            providerEvent.externalEventId(), providerEvent.resourceHref(), providerEvent.etag());
+                    receiveOurs(userId, providerEvent, ourUids);
                     continue;
                 }
                 ExternalCalendarEvent stored = existing.get(providerEvent.externalEventId());
@@ -577,11 +569,35 @@ public class ExternalCalendarService {
                 }
             }
         }
+        // 🔴 내보낸 곳도 읽는다 — 가져오기 선택과 내보내기 대상은 따로 고른다. 이것을 안 읽으면
+        //    우리 일정이 «창 안인데 안 왔다» 가 되어 아래 삭제 판정이 방금 내보낸 정상 일정을
+        //    지운다(#80 리뷰 Blocking). 선택하지 않은 캘린더이니 남의 일정은 후보로 들이지 않는다.
+        boolean writeCalendarRead = hasWriteCalendar && selections.stream()
+                .anyMatch(selection -> writeCalendarId.equals(selection.getExternalCalendarId()));
+        if (hasWriteCalendar && !writeCalendarRead) {
+            for (ProviderEvent providerEvent : providerRegistry.get(connection.getProvider())
+                    .listEvents(credential, writeCalendarId, writeCalendarId, from, to)) {
+                if (OpenPlanEventUid.isOurs(providerEvent.uid())) {
+                    receiveOurs(userId, providerEvent, ourUids);
+                }
+            }
+            writeCalendarRead = true;
+        }
+
         propagateRemoteUpdates(userId, remoteChanged);
         propagateRemoteDeletions(connection, existing, seen, selections, from, to);
         // 우리 일정이 외부에서 지워졌는가. 같은 «창 안에 있어야 하는데 없다» 원칙을 쓴다.
-        inboundReconciler.propagateDeletions(connection.getId(), ourUids, from, to);
-        blockInboundReconciler.propagateDeletions(userId, ourUids, from, to);
+        // 🔴 판정은 **이번에 읽은 캘린더에 있는 것**만 한다. 대상을 바꾼 뒤 옛 캘린더에 남은 일정,
+        //    대상을 비워 어디 있는지 모르는 일정은 건너뛴다 — 모르면 지우지 않는다.
+        //    이 연동으로 나간 것만 본다 — 다른 연동은 이번에 읽지 않았다(#83 리뷰).
+        Set<String> readCalendarIds = new HashSet<>();
+        selections.forEach(selection -> readCalendarIds.add(selection.getExternalCalendarId()));
+        if (writeCalendarRead) {
+            readCalendarIds.add(writeCalendarId);
+        }
+        String currentTarget = hasWriteCalendar ? writeCalendarId : null;
+        inboundReconciler.propagateDeletions(connection.getId(), ourUids, readCalendarIds, currentTarget, from, to);
+        blockInboundReconciler.propagateDeletions(connection.getId(), ourUids, readCalendarIds, currentTarget, from, to);
 
         if (created.isEmpty()) {
             return;
@@ -609,6 +625,23 @@ public class ExternalCalendarService {
             log.info("외부 캘린더 동기화 경합 — 이미 저장된 일정 {}건을 건너뛴다. connectionId={}",
                     skipped, connection.getId());
         }
+    }
+
+    /**
+     * 우리가 내보낸 일정이 돌아왔다.
+     *
+     * <p>🔴 «새 후보로 만들지 않는다» 와 «변경을 무시한다» 는 다르다(#69 D4). 내보낼 때의 스냅샷과
+     * 비교해 사용자가 폰에서 고친 것을 되받는다. ETag 도 여기서 갱신한다 — 안 하면 다음 수정이
+     * «남이 고쳤다» 로 튕긴다. 매핑 조회도 uid 로 한다 — 접미사 붙은 값으로 찾으면 절대 일치하지 않는다.
+     */
+    private void receiveOurs(UUID userId, ProviderEvent providerEvent, Set<String> ourUids) {
+        ourUids.add(providerEvent.uid());
+        blockInboundReconciler.reconcileOne(providerEvent.uid(),
+                providerEvent.title(), providerEvent.startAt(), providerEvent.endAt(),
+                providerEvent.externalEventId(), providerEvent.resourceHref(), providerEvent.etag());
+        inboundReconciler.reconcileOne(userId, providerEvent.uid(),
+                providerEvent.title(), providerEvent.startAt(), providerEvent.endAt(),
+                providerEvent.externalEventId(), providerEvent.resourceHref(), providerEvent.etag());
     }
 
     /**

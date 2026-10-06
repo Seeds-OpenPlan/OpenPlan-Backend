@@ -115,7 +115,7 @@ class ScheduleInboundReconcilerTest {
     void 창_안에서_사라지면_지운다() {
         given(refRepository.findByConnectionId(CONNECTION)).willReturn(List.of(ref));
 
-        reconciler.propagateDeletions(CONNECTION, Set.of(), FROM, TO);
+        reconciler.propagateDeletions(CONNECTION, Set.of(), Set.of("cal-w"), "cal-w", FROM, TO);
 
         verify(scheduleRepository).delete(schedule);
     }
@@ -126,7 +126,7 @@ class ScheduleInboundReconcilerTest {
         given(refRepository.findByConnectionId(CONNECTION)).willReturn(List.of(ref));
 
         // 동기화 창을 일정보다 뒤로 옮긴다 — 그 일정은 원래 이번 조회에 오지 않는다.
-        reconciler.propagateDeletions(CONNECTION, Set.of(),
+        reconciler.propagateDeletions(CONNECTION, Set.of(), Set.of("cal-w"), "cal-w",
                 Instant.parse("2026-10-01T00:00:00Z"), Instant.parse("2026-11-01T00:00:00Z"));
 
         verify(scheduleRepository, never()).delete(any());
@@ -137,7 +137,7 @@ class ScheduleInboundReconcilerTest {
     void 온_것은_지우지_않는다() {
         given(refRepository.findByConnectionId(CONNECTION)).willReturn(List.of(ref));
 
-        reconciler.propagateDeletions(CONNECTION, Set.of(ref.getExternalUid()), FROM, TO);
+        reconciler.propagateDeletions(CONNECTION, Set.of(ref.getExternalUid()), Set.of("cal-w"), "cal-w", FROM, TO);
 
         verify(scheduleRepository, never()).delete(any());
     }
@@ -149,7 +149,28 @@ class ScheduleInboundReconcilerTest {
                 "openplan-schedule-y@openplan.services", NOW);
         given(refRepository.findByConnectionId(CONNECTION)).willReturn(List.of(notSent));
 
-        reconciler.propagateDeletions(CONNECTION, Set.of(), FROM, TO);
+        reconciler.propagateDeletions(CONNECTION, Set.of(), Set.of("cal-w"), "cal-w", FROM, TO);
+
+        verify(scheduleRepository, never()).delete(any());
+    }
+
+    @Test
+    @DisplayName("🔴 대상을 A→B 로 바꾼 뒤 A 에 남은 일정은, A 를 안 읽었으면 지우지 않는다")
+    void 안_읽은_캘린더에_있는_일정은_지우지_않는다() {
+        ref.locateInCalendar("cal-A");
+        given(refRepository.findByConnectionId(CONNECTION)).willReturn(List.of(ref));
+
+        reconciler.propagateDeletions(CONNECTION, Set.of(), Set.of("cal-B"), "cal-B", FROM, TO);
+
+        verify(scheduleRepository, never()).delete(any());
+    }
+
+    @Test
+    @DisplayName("🔴 대상을 비워 어디 있는지 모르는 일정은 지우지 않는다")
+    void 어디_있는지_모르면_지우지_않는다() {
+        given(refRepository.findByConnectionId(CONNECTION)).willReturn(List.of(ref));
+
+        reconciler.propagateDeletions(CONNECTION, Set.of(), Set.of("cal-a"), null, FROM, TO);
 
         verify(scheduleRepository, never()).delete(any());
     }

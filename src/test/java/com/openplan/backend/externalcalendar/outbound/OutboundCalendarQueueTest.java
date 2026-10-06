@@ -153,13 +153,15 @@ class OutboundCalendarQueueTest {
     @DisplayName("🔴 이미 내보낸 일정의 UPDATE 는 대상을 바꿔도 «있는 곳» 으로 나간다")
     void 이미_내보낸_일정은_있는_곳으로_나간다() {
         // 캘린더 A 로 내보낸 뒤 사용자가 대상을 B 로 바꾼 상태
-        ScheduleExternalRef sent = ScheduleExternalRef.reserve(schedule.getId(), UUID.randomUUID(), "uid-1", NOW);
+        // 같은 연동에서 대상만 A→B 로 바꿨다 — 매핑은 그 연동을 가리킨다.
+        ExternalCalendarConnection home = connection(WRITE_SCOPE, "cal-B", ConnectionStatus.ACTIVE);
+        ScheduleExternalRef sent = ScheduleExternalRef.reserve(schedule.getId(), home.getId(), "uid-1", NOW);
         sent.recordSent("evt-1", "/dav/evt-1.ics", "etag-1", "스터디",
                 schedule.getStartAt(), schedule.getEndAt(), NOW);
         sent.locateInCalendar("cal-A");
         given(refRepository.findById(schedule.getId())).willReturn(Optional.of(sent));
-        given(connectionRepository.findByUserIdOrderByConnectedAtAsc(USER))
-                .willReturn(List.of(connection(WRITE_SCOPE, "cal-B", ConnectionStatus.ACTIVE)));
+        given(connectionRepository.findById(home.getId())).willReturn(Optional.of(home));
+        given(connectionRepository.findByUserIdOrderByConnectedAtAsc(USER)).willReturn(List.of(home));
 
         queue.enqueueScheduleUpsert(USER, schedule);
 
@@ -173,13 +175,15 @@ class OutboundCalendarQueueTest {
     @Test
     @DisplayName("🔴 삭제도 «있는 곳» 으로 — 매핑 행은 곧 CASCADE 로 사라져 나중엔 알 길이 없다")
     void 삭제도_있는_곳으로_나간다() {
-        ScheduleExternalRef sent = ScheduleExternalRef.reserve(schedule.getId(), UUID.randomUUID(), "uid-1", NOW);
+        // 같은 연동에서 대상만 A→B 로 바꿨다 — 매핑은 그 연동을 가리킨다.
+        ExternalCalendarConnection home = connection(WRITE_SCOPE, "cal-B", ConnectionStatus.ACTIVE);
+        ScheduleExternalRef sent = ScheduleExternalRef.reserve(schedule.getId(), home.getId(), "uid-1", NOW);
         sent.recordSent("evt-1", "/dav/evt-1.ics", "etag-1", "스터디",
                 schedule.getStartAt(), schedule.getEndAt(), NOW);
         sent.locateInCalendar("cal-A");
         given(refRepository.findById(schedule.getId())).willReturn(Optional.of(sent));
-        given(connectionRepository.findByUserIdOrderByConnectedAtAsc(USER))
-                .willReturn(List.of(connection(WRITE_SCOPE, "cal-B", ConnectionStatus.ACTIVE)));
+        given(connectionRepository.findById(home.getId())).willReturn(Optional.of(home));
+        given(connectionRepository.findByUserIdOrderByConnectedAtAsc(USER)).willReturn(List.of(home));
 
         queue.enqueueScheduleDelete(USER, schedule.getId());
 
@@ -200,5 +204,122 @@ class OutboundCalendarQueueTest {
         verify(opRepository).save(captor.capture());
         assertThat(captor.getValue().getPayload().writeCalendarId()).isEqualTo("cal-B");
         assertThat(captor.getValue().getOperation()).isEqualTo(OutboundOperation.CREATE);
+    }
+
+    // ---------- #79·#80 리뷰 Blocking — 이미 매핑이 있는 일정 ----------
+
+    private ScheduleExternalRef mappedTo(ExternalCalendarConnection home, boolean sent) {
+        ScheduleExternalRef ref = ScheduleExternalRef.reserve(schedule.getId(), home.getId(),
+                OpenPlanEventUid.forSchedule(schedule.getId()), NOW);
+        if (sent) {
+            ref.recordSent("evt-1", null, "etag-1", "스터디", schedule.getStartAt(), schedule.getEndAt(), NOW);
+        }
+        given(refRepository.findById(schedule.getId())).willReturn(Optional.of(ref));
+        given(connectionRepository.findById(home.getId())).willReturn(Optional.of(home));
+        return ref;
+    }
+
+    private OutboundCalendarOp savedOp() {
+        ArgumentCaptor<OutboundCalendarOp> captor = ArgumentCaptor.forClass(OutboundCalendarOp.class);
+        verify(opRepository).save(captor.capture());
+        return captor.getValue();
+    }
+
+    @Test
+    @DisplayName("🔴 이미 내보낸 일정은 원래 연동·캘린더로 고친다 — 지금 뽑히는 연동이 바뀌어도 갈아타지 않는다")
+    void 이미_내보낸_일정은_원래_연동으로_보낸다() {
+        ExternalCalendarConnection home = connection(WRITE_SCOPE, "home-cal", ConnectionStatus.ACTIVE);
+        ExternalCalendarConnection other = connection(WRITE_SCOPE, "other-cal", ConnectionStatus.ACTIVE);
+        given(connectionRepository.findByUserIdOrderByConnectedAtAsc(USER)).willReturn(List.of(other, home));
+        mappedTo(home, true);
+
+        queue.enqueueScheduleUpsert(USER, schedule);
+
+        OutboundCalendarOp op = savedOp();
+        assertThat(op.getOperation()).isEqualTo(OutboundOperation.UPDATE);
+        assertThat(op.getConnectionId()).isEqualTo(home.getId());
+        assertThat(op.getPayload().writeCalendarId()).isEqualTo("home-cal");
+    }
+
+    @Test
+    @DisplayName("🔴 원래 연동의 쓰기 권한이 사라졌으면 다른 연동으로 보내지 않는다")
+    void 원래_연동을_쓸_수_없으면_적지_않는다() {
+        ExternalCalendarConnection home = connection(null, "home-cal", ConnectionStatus.ACTIVE);
+        ExternalCalendarConnection other = connection(WRITE_SCOPE, "other-cal", ConnectionStatus.ACTIVE);
+        given(connectionRepository.findByUserIdOrderByConnectedAtAsc(USER)).willReturn(List.of(other));
+        mappedTo(home, true);
+
+        queue.enqueueScheduleUpsert(USER, schedule);
+        queue.enqueueScheduleDelete(USER, schedule.getId());
+
+        verify(opRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("🔴 CREATE 가 대기 중이면 UPDATE 를 따로 쌓지 않고 그 CREATE 의 내용을 고친다")
+    void 대기_중인_CREATE에_합친다() {
+        ExternalCalendarConnection home = connection(WRITE_SCOPE, "home-cal", ConnectionStatus.ACTIVE);
+        mappedTo(home, false);
+        OutboundCalendarOp pendingCreate = OutboundCalendarOp.queue(USER, home.getId(), OutboundTargetType.SCHEDULE,
+                schedule.getId(), OutboundOperation.CREATE,
+                new OutboundPayload("uid", "옛 제목", null, null, "home-cal", null, null, null), NOW);
+        given(opRepository.findUnsentByTarget(OutboundTargetType.SCHEDULE, schedule.getId()))
+                .willReturn(List.of(pendingCreate));
+
+        queue.enqueueScheduleUpsert(USER, schedule);
+
+        verify(opRepository, never()).save(any());
+        assertThat(pendingCreate.getOperation()).isEqualTo(OutboundOperation.CREATE);
+        assertThat(pendingCreate.getPayload().title()).isEqualTo("스터디");
+    }
+
+    @Test
+    @DisplayName("🔴 밖에 나간 적 없는 일정을 지우면 대기 중인 CREATE 를 거두고 DELETE 는 쌓지 않는다")
+    void 나간_적_없으면_CREATE를_거둔다() {
+        ExternalCalendarConnection home = connection(WRITE_SCOPE, "home-cal", ConnectionStatus.ACTIVE);
+        mappedTo(home, false);
+        List<OutboundCalendarOp> unsent = List.of(OutboundCalendarOp.queue(USER, home.getId(),
+                OutboundTargetType.SCHEDULE, schedule.getId(), OutboundOperation.CREATE,
+                new OutboundPayload("uid", "스터디", null, null, "home-cal", null, null, null), NOW));
+        given(opRepository.findUnsentByTarget(OutboundTargetType.SCHEDULE, schedule.getId())).willReturn(unsent);
+
+        queue.enqueueScheduleDelete(USER, schedule.getId());
+
+        verify(opRepository).deleteAll(unsent);
+        verify(opRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("밖에 나간 일정을 지우면 대기 UPDATE 를 거두고 원래 연동으로 DELETE 를 적는다")
+    void 나간_일정의_삭제는_원래_연동으로() {
+        ExternalCalendarConnection home = connection(WRITE_SCOPE, "home-cal", ConnectionStatus.ACTIVE);
+        mappedTo(home, true);
+        List<OutboundCalendarOp> unsent = List.of(OutboundCalendarOp.queue(USER, home.getId(),
+                OutboundTargetType.SCHEDULE, schedule.getId(), OutboundOperation.UPDATE,
+                new OutboundPayload("uid", "스터디", null, null, "home-cal", "evt-1", null, "etag-1"), NOW));
+        given(opRepository.findUnsentByTarget(OutboundTargetType.SCHEDULE, schedule.getId())).willReturn(unsent);
+
+        queue.enqueueScheduleDelete(USER, schedule.getId());
+
+        verify(opRepository).deleteAll(unsent);
+        OutboundCalendarOp op = savedOp();
+        assertThat(op.getOperation()).isEqualTo(OutboundOperation.DELETE);
+        assertThat(op.getConnectionId()).isEqualTo(home.getId());
+        assertThat(op.getPayload().writeCalendarId()).isEqualTo("home-cal");
+        assertThat(op.getPayload().externalEventId()).isEqualTo("evt-1");
+    }
+
+    @Test
+    @DisplayName("🔴 내보내기 대상을 비워도 이미 나간 일정은 «있는 곳» 에서 고친다")
+    void 대상을_비워도_나간_일정은_있는_곳에서_고친다() {
+        ExternalCalendarConnection home = connection(WRITE_SCOPE, null, ConnectionStatus.ACTIVE);
+        ScheduleExternalRef ref = mappedTo(home, true);
+        ref.locateInCalendar("cal-A");
+
+        queue.enqueueScheduleUpsert(USER, schedule);
+
+        OutboundCalendarOp op = savedOp();
+        assertThat(op.getOperation()).isEqualTo(OutboundOperation.UPDATE);
+        assertThat(op.getPayload().writeCalendarId()).isEqualTo("cal-A");
     }
 }

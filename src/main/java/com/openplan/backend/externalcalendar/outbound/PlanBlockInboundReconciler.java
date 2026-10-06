@@ -14,7 +14,6 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.Comparator;
-import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -64,17 +63,24 @@ public class PlanBlockInboundReconciler {
         PlanBlockExternalRef ref = found.get();
         Instant now = clock.now();
 
-        if (ref.neverSent() || !ref.differsFrom(title, startAt, endAt)) {
+        if (ref.neverSent() || !ref.timeDiffersFrom(startAt, endAt)) {
+            // 우리가 보낸 그대로거나 제목만 바뀌었다. 제목은 되받지 않는다(아래 주석) — 받은 제목을
+            // 스냅샷에 적어 두면 다음 확정이 OpenPlan 의 제목으로 되돌린다. 확정은 건드리지 않는다.
             ref.recordSent(externalEventId, resourceHref, etag, title, startAt, endAt, now);
-            return;   // 우리가 보낸 그대로다 — 우리 쓰기가 돌아온 것이다.
+            return;
         }
 
         // 🔴 제목은 되받지 않는다. 태스크 제목은 OpenPlan 안에서 태스크의 이름이고, 그 태스크가
         //    여러 주에 여러 블록으로 배치돼 있을 수 있다. 캘린더에서 한 회차의 제목을 고친 것을
         //    태스크 전체의 이름 변경으로 읽으면 사용자가 의도하지 않은 곳까지 바뀐다.
         //    시각만 되받는다 — 그것이 «일정을 옮겼다» 의 뜻이다.
-        moveBlock(ref, startAt, endAt, now);
-        ref.recordSent(externalEventId, resourceHref, etag, ref.neverSent() ? title : title, startAt, endAt, now);
+        if (moveBlock(ref, startAt, endAt, now)) {
+            ref.recordSent(externalEventId, resourceHref, etag, title, startAt, endAt, now);
+        } else {
+            // 🔴 옮기지 못했으면 보낸 시각을 덮어쓰지 않는다 — 덮어쓰면 매핑이 실제 블록과 어긋나
+            //    다음 삭제 판정이 블록은 못 찾고 매핑만 지우고, 다음 확정이 외부에 한 벌 더 만든다.
+            ref.recordSeen(externalEventId, resourceHref, etag, now);
+        }
     }
 
     /**
@@ -83,37 +89,47 @@ public class PlanBlockInboundReconciler {
      * <p>🔴 <b>주를 넘는 이동은 블록을 떼어낸다</b>(미배치). 다른 주 계획이 없으면 만들어야 하고,
      * 옮긴 자리가 겹침·가용시간 밖일 수 있다 — 그 판정은 규칙 엔진의 몫이지 동기화가 조용히 할
      * 일이 아니다. 매핑도 함께 정리해 다음 확정이 새 자리에서 다시 잡게 한다.
+     *
+     * @return 같은 주 안에서 블록을 실제로 옮겼으면 true — 그때만 보낸 시각이 새 자리를 따라간다
      */
-    private void moveBlock(PlanBlockExternalRef ref, Instant startAt, Instant endAt, Instant now) {
+    private boolean moveBlock(PlanBlockExternalRef ref, Instant startAt, Instant endAt, Instant now) {
         Optional<WeeklyPlan> plan = weeklyPlanRepository.findById(ref.getWeeklyPlanId());
         if (plan.isEmpty()) {
-            return;
+            return false;
         }
         WeeklyPlan weeklyPlan = plan.get();
         Optional<PlanBlock> block = blockOf(ref);
         if (block.isEmpty()) {
-            return;   // 그 사이 블록이 사라졌다 — 다음 확정이 매핑을 정리한다.
+            return false;   // 그 사이 블록이 사라졌다 — 다음 확정이 매핑을 정리한다.
         }
         weeklyPlan.reopenToDraftIfConfirmed();   // 편집이 일어났다 — 기존 검증 루프에 태운다
 
         if (sameWeek(weeklyPlan, startAt)) {
             planBlockRepository.reschedule(block.get().getId(), startAt, endAt, weeklyPlan.getId());
             log.info("외부 이동을 되받았다: refId={} planId={}", ref.getId(), weeklyPlan.getId());
-        } else {
-            planBlockRepository.delete(block.get());
-            refRepository.delete(ref);
-            log.info("외부 이동이 주를 넘어 블록을 떼어냈다 — 사용자가 새 주에서 다시 배치한다: refId={}",
-                    ref.getId());
+            return true;
         }
+        planBlockRepository.delete(block.get());
+        refRepository.delete(ref);
+        log.info("외부 이동이 주를 넘어 블록을 떼어냈다 — 사용자가 새 주에서 다시 배치한다: refId={}",
+                ref.getId());
+        return false;
     }
 
-    /** 매핑의 (주간계획, 태스크, 순번)으로 실제 블록을 찾는다 — plan_block_id 는 불안정하다. */
+    /**
+     * 매핑이 가리키는 실제 블록 — <b>마지막으로 보낸 시각에 놓인 것</b>이다.
+     *
+     * <p>🔴 순번으로 찾으면 안 된다. 순번은 시작 시각 순이라, 외부 이동 하나가 형제 블록의 순서를
+     * 바꾸면 다음 되받기가 <b>다른 블록</b>을 옮긴다(#83 리뷰 Blocking). 보낸 시각은 그 블록이 밖에
+     * 나간 모습 그대로이고, 되받을 때마다 새 시각으로 갱신되므로 계속 같은 블록을 가리킨다.
+     * 그 사이 OpenPlan 에서 옮겨 아직 다시 안 보냈으면 찾지 못한다 — <b>모르면 건드리지 않는다.</b>
+     * plan_block_id 는 자동 배치가 다시 만들어 불안정하다.
+     */
     private Optional<PlanBlock> blockOf(PlanBlockExternalRef ref) {
-        List<PlanBlock> blocks = planBlockRepository.findByWeeklyPlanId(ref.getWeeklyPlanId()).stream()
+        return planBlockRepository.findByWeeklyPlanId(ref.getWeeklyPlanId()).stream()
                 .filter(b -> ref.getTaskId().equals(b.getTaskId()))
-                .sorted(Comparator.comparing(PlanBlock::getStartAt).thenComparing(PlanBlock::getId))
-                .toList();
-        return ref.getSequence() < blocks.size() ? Optional.of(blocks.get(ref.getSequence())) : Optional.empty();
+                .filter(b -> ref.wasSentAt(b.getStartAt(), b.getEndAt()))
+                .min(Comparator.comparing(PlanBlock::getId));
     }
 
     private boolean sameWeek(WeeklyPlan plan, Instant newStart) {
@@ -132,9 +148,17 @@ public class PlanBlockInboundReconciler {
      *
      * <p>«없음» 의 원인이 여럿이라 <b>창 안에 있어야 하는데 없을 때만</b> 지운다.
      */
-    public void propagateDeletions(UUID userId, Set<String> seenUids, Instant from, Instant to) {
-        for (PlanBlockExternalRef ref : refRepository.findByUserId(userId)) {
+    public void propagateDeletions(UUID connectionId, Set<String> seenUids, Set<String> readCalendarIds,
+                                   String currentTarget, Instant from, Instant to) {
+        // 🔴 이 연동으로 나간 것만 본다. seenUids 는 이번에 읽은 연동 하나에서만 모였다 — 사용자의
+        //    모든 매핑을 보면 다른 연동으로 나간 블록이 «안 왔다» 로 읽혀 지워진다(#83 리뷰 Blocking).
+        for (PlanBlockExternalRef ref : refRepository.findByConnectionId(connectionId)) {
             if (seenUids.contains(ref.getExternalUid()) || !ref.wasSentWithin(from, to)) {
+                continue;
+            }
+            // 이번에 읽은 캘린더에 있는 것만 판정한다 — 안 읽은 캘린더의 «안 왔다» 는 아무 뜻이 없다.
+            String calendar = OutboundPayload.targetCalendar(ref.getSentCalendarId(), currentTarget);
+            if (calendar == null || !readCalendarIds.contains(calendar)) {
                 continue;
             }
             weeklyPlanRepository.findById(ref.getWeeklyPlanId())
