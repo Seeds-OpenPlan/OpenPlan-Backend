@@ -118,6 +118,11 @@ class PlanBlockInboundReconcilerTest {
 
         verify(planBlockRepository, never()).reschedule(any(), any(), any(), any());
         assertThat(plan.getStatus()).isEqualTo(WeeklyPlanStatus.CONFIRMED);
+        // 🔴 옮기지 않았으니 보낸 시각도 그대로다 — 받은 시각으로 덮어쓰면 매핑이 실제 블록과 어긋난다.
+        assertThat(ref.wasSentAt(WED_14, WED_14.plusSeconds(3600))).isTrue();
+        assertThat(ref.wasSentAt(WED_16, WED_16.plusSeconds(3600))).isFalse();
+        // ETag 는 갱신한다 — 다음 내보내기가 412 로 막히지 않게.
+        assertThat(ref.getEtag()).isEqualTo("e");
     }
 
     @Test

@@ -131,6 +131,20 @@ public class PlanBlockExternalRef {
 
     public void recordSent(String externalEventId, String resourceHref, String etag,
                            String title, Instant startAt, Instant endAt, Instant now) {
+        recordSeen(externalEventId, resourceHref, etag, now);
+        this.sentTitle = title;
+        this.sentStartAt = startAt;
+        this.sentEndAt = endAt;
+        this.updatedAt = now;
+    }
+
+    /**
+     * 외부 쪽 식별값(이벤트 id·href·ETag)만 갱신한다 — <b>보낸 제목·시각은 그대로 둔다.</b>
+     * 되받은 이동을 실제 블록에 반영하지 못했을 때 쓴다. 보낸 시각까지 바꾸면 매핑이 실제 블록과
+     * 어긋나 다음 되받기·삭제 판정이 블록을 못 찾고 매핑만 지운다. ETag 는 갱신해야 다음 내보내기가
+     * 412 로 막히지 않는다.
+     */
+    public void recordSeen(String externalEventId, String resourceHref, String etag, Instant now) {
         if (externalEventId != null) {
             this.externalEventId = externalEventId;
         }
@@ -140,9 +154,6 @@ public class PlanBlockExternalRef {
         if (etag != null) {
             this.etag = etag;
         }
-        this.sentTitle = title;
-        this.sentStartAt = startAt;
-        this.sentEndAt = endAt;
         this.updatedAt = now;
     }
 

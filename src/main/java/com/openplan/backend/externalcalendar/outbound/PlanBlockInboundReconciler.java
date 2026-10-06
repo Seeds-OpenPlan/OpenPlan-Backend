@@ -74,8 +74,13 @@ public class PlanBlockInboundReconciler {
         //    여러 주에 여러 블록으로 배치돼 있을 수 있다. 캘린더에서 한 회차의 제목을 고친 것을
         //    태스크 전체의 이름 변경으로 읽으면 사용자가 의도하지 않은 곳까지 바뀐다.
         //    시각만 되받는다 — 그것이 «일정을 옮겼다» 의 뜻이다.
-        moveBlock(ref, startAt, endAt, now);
-        ref.recordSent(externalEventId, resourceHref, etag, title, startAt, endAt, now);
+        if (moveBlock(ref, startAt, endAt, now)) {
+            ref.recordSent(externalEventId, resourceHref, etag, title, startAt, endAt, now);
+        } else {
+            // 🔴 옮기지 못했으면 보낸 시각을 덮어쓰지 않는다 — 덮어쓰면 매핑이 실제 블록과 어긋나
+            //    다음 삭제 판정이 블록은 못 찾고 매핑만 지우고, 다음 확정이 외부에 한 벌 더 만든다.
+            ref.recordSeen(externalEventId, resourceHref, etag, now);
+        }
     }
 
     /**
@@ -84,28 +89,31 @@ public class PlanBlockInboundReconciler {
      * <p>🔴 <b>주를 넘는 이동은 블록을 떼어낸다</b>(미배치). 다른 주 계획이 없으면 만들어야 하고,
      * 옮긴 자리가 겹침·가용시간 밖일 수 있다 — 그 판정은 규칙 엔진의 몫이지 동기화가 조용히 할
      * 일이 아니다. 매핑도 함께 정리해 다음 확정이 새 자리에서 다시 잡게 한다.
+     *
+     * @return 같은 주 안에서 블록을 실제로 옮겼으면 true — 그때만 보낸 시각이 새 자리를 따라간다
      */
-    private void moveBlock(PlanBlockExternalRef ref, Instant startAt, Instant endAt, Instant now) {
+    private boolean moveBlock(PlanBlockExternalRef ref, Instant startAt, Instant endAt, Instant now) {
         Optional<WeeklyPlan> plan = weeklyPlanRepository.findById(ref.getWeeklyPlanId());
         if (plan.isEmpty()) {
-            return;
+            return false;
         }
         WeeklyPlan weeklyPlan = plan.get();
         Optional<PlanBlock> block = blockOf(ref);
         if (block.isEmpty()) {
-            return;   // 그 사이 블록이 사라졌다 — 다음 확정이 매핑을 정리한다.
+            return false;   // 그 사이 블록이 사라졌다 — 다음 확정이 매핑을 정리한다.
         }
         weeklyPlan.reopenToDraftIfConfirmed();   // 편집이 일어났다 — 기존 검증 루프에 태운다
 
         if (sameWeek(weeklyPlan, startAt)) {
             planBlockRepository.reschedule(block.get().getId(), startAt, endAt, weeklyPlan.getId());
             log.info("외부 이동을 되받았다: refId={} planId={}", ref.getId(), weeklyPlan.getId());
-        } else {
-            planBlockRepository.delete(block.get());
-            refRepository.delete(ref);
-            log.info("외부 이동이 주를 넘어 블록을 떼어냈다 — 사용자가 새 주에서 다시 배치한다: refId={}",
-                    ref.getId());
+            return true;
         }
+        planBlockRepository.delete(block.get());
+        refRepository.delete(ref);
+        log.info("외부 이동이 주를 넘어 블록을 떼어냈다 — 사용자가 새 주에서 다시 배치한다: refId={}",
+                ref.getId());
+        return false;
     }
 
     /**
