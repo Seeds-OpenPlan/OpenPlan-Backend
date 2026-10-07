@@ -16,6 +16,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -133,5 +134,19 @@ class OutboundOpExecutorTest {
         verifyNoInteractions(provider);
         assertThat(op.getStatus()).isEqualTo(OutboundStatus.FAILED);
         assertThat(op.getLastError()).contains("대상 캘린더가 없다");
+    }
+    @Test
+    @DisplayName("🔴 대상이 해제되면 해제 전에 쌓인 UPDATE·DELETE 도 보내지 않는다 — 해제 이후 변경은 더 나가지 않는다")
+    void 대상이_해제되면_update_delete_도_보내지_않는다() {
+        for (OutboundOperation operation : List.of(OutboundOperation.UPDATE, OutboundOperation.DELETE)) {
+            OutboundCalendarOp op = op(operation, "cal-A");
+            stubExecutable(op, connection(null), false);
+
+            executor.execute(op.getId());
+
+            assertThat(op.getStatus()).as(operation.name()).isEqualTo(OutboundStatus.FAILED);
+            assertThat(op.getLastError()).as(operation.name()).contains("내보내기가 해제된 상태다");
+        }
+        verifyNoInteractions(provider);
     }
 }

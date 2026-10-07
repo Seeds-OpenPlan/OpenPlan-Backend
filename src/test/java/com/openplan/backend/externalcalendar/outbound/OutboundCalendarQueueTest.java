@@ -310,16 +310,48 @@ class OutboundCalendarQueueTest {
     }
 
     @Test
-    @DisplayName("🔴 내보내기 대상을 비워도 이미 나간 일정은 «있는 곳» 에서 고친다")
-    void 대상을_비워도_나간_일정은_있는_곳에서_고친다() {
+    @DisplayName("🔴 내보내기 대상을 비우면 이미 나간 일정의 수정도 더 내보내지 않는다 — 해제는 «내보내지 않음» 이다")
+    void 대상을_비우면_나간_일정의_수정도_내보내지_않는다() {
         ExternalCalendarConnection home = connection(WRITE_SCOPE, null, ConnectionStatus.ACTIVE);
         ScheduleExternalRef ref = mappedTo(home, true);
         ref.locateInCalendar("cal-A");
 
         queue.enqueueScheduleUpsert(USER, schedule);
 
-        OutboundCalendarOp op = savedOp();
-        assertThat(op.getOperation()).isEqualTo(OutboundOperation.UPDATE);
-        assertThat(op.getPayload().writeCalendarId()).isEqualTo("cal-A");
+        verify(opRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("🔴 내보내기 대상을 비운 뒤 일정을 지우면 밖은 그대로 두고, 대기 작업만 거둔다")
+    void 대상을_비운_뒤_삭제는_대기_작업만_거둔다() {
+        ExternalCalendarConnection home = connection(WRITE_SCOPE, null, ConnectionStatus.ACTIVE);
+        ScheduleExternalRef ref = mappedTo(home, true);
+        ref.locateInCalendar("cal-A");
+        List<OutboundCalendarOp> unsent = List.of(OutboundCalendarOp.queue(USER, home.getId(),
+                OutboundTargetType.SCHEDULE, schedule.getId(), OutboundOperation.UPDATE,
+                new OutboundPayload("uid", "스터디", null, null, "cal-A", "evt-1", null, "etag-1"), NOW));
+        given(opRepository.findUnsentByTarget(OutboundTargetType.SCHEDULE, schedule.getId())).willReturn(unsent);
+
+        queue.enqueueScheduleDelete(USER, schedule.getId());
+
+        verify(opRepository).deleteAll(unsent);
+        verify(opRepository, never()).save(any());
+    }
+    @Test
+    @DisplayName("🔴 대상을 비운 동안에도 아직 안 나간 CREATE 는 내용을 최신으로 고친다 — 다시 고르면 옛 내용으로 나가지 않게")
+    void 대상을_비워도_대기_중인_CREATE는_최신으로_고친다() {
+        ExternalCalendarConnection home = connection(WRITE_SCOPE, null, ConnectionStatus.ACTIVE);
+        mappedTo(home, false);
+        OutboundCalendarOp pending = OutboundCalendarOp.queue(USER, home.getId(),
+                OutboundTargetType.SCHEDULE, schedule.getId(), OutboundOperation.CREATE,
+                new OutboundPayload("uid", "옛 제목", null, null, "cal-A", null, null, null), NOW);
+        given(opRepository.findUnsentByTarget(OutboundTargetType.SCHEDULE, schedule.getId()))
+                .willReturn(List.of(pending));
+
+        queue.enqueueScheduleUpsert(USER, schedule);
+
+        assertThat(pending.getPayload().title()).isEqualTo(schedule.getTitle());
+        assertThat(pending.getOperation()).isEqualTo(OutboundOperation.CREATE);
+        verify(opRepository, never()).save(any());
     }
 }
