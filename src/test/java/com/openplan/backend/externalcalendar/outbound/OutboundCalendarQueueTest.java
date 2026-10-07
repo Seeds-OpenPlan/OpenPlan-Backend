@@ -337,4 +337,21 @@ class OutboundCalendarQueueTest {
         verify(opRepository).deleteAll(unsent);
         verify(opRepository, never()).save(any());
     }
+    @Test
+    @DisplayName("🔴 대상을 비운 동안에도 아직 안 나간 CREATE 는 내용을 최신으로 고친다 — 다시 고르면 옛 내용으로 나가지 않게")
+    void 대상을_비워도_대기_중인_CREATE는_최신으로_고친다() {
+        ExternalCalendarConnection home = connection(WRITE_SCOPE, null, ConnectionStatus.ACTIVE);
+        mappedTo(home, false);
+        OutboundCalendarOp pending = OutboundCalendarOp.queue(USER, home.getId(),
+                OutboundTargetType.SCHEDULE, schedule.getId(), OutboundOperation.CREATE,
+                new OutboundPayload("uid", "옛 제목", null, null, "cal-A", null, null, null), NOW);
+        given(opRepository.findUnsentByTarget(OutboundTargetType.SCHEDULE, schedule.getId()))
+                .willReturn(List.of(pending));
+
+        queue.enqueueScheduleUpsert(USER, schedule);
+
+        assertThat(pending.getPayload().title()).isEqualTo(schedule.getTitle());
+        assertThat(pending.getOperation()).isEqualTo(OutboundOperation.CREATE);
+        verify(opRepository, never()).save(any());
+    }
 }

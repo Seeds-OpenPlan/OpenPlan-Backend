@@ -64,9 +64,14 @@ public class OutboundCalendarQueue {
      */
     public void enqueueScheduleUpsert(UUID userId, Schedule schedule) {
         Optional<ScheduleExternalRef> existing = refRepository.findById(schedule.getId());
-        Optional<ExternalCalendarConnection> target = existing.isPresent()
-                ? homeConnection(existing.get())
-                : writableConnection(userId);
+        // 🔴 아직 안 나간 매핑(대기 중인 CREATE)은 대상이 비어도 내용을 최신으로 유지한다 — 여기서
+        //    막으면 대상을 다시 골랐을 때 해제 전 내용으로 나간다(#89 리뷰 Blocking). 보낼지 말지는
+        //    실행기가 그 시점의 설정을 다시 읽어 정한다. 이미 나간 일정만 대상을 요구한다.
+        Optional<ExternalCalendarConnection> target = existing.isEmpty()
+                ? writableConnection(userId)
+                : existing.get().isSent()
+                        ? homeConnection(existing.get())
+                        : writableHome(existing.get());
         if (target.isEmpty()) {
             return;
         }
@@ -156,6 +161,12 @@ public class OutboundCalendarQueue {
         return connectionRepository.findById(ref.getConnectionId())
                 .filter(ExternalCalendarConnection::canWrite)
                 .filter(OutboundCalendarQueue::hasWriteTarget);
+    }
+
+    /** 아직 안 나간 매핑의 연동 — 쓰기 권한만 본다. 대상 캘린더는 실행 시점에 다시 읽는다. */
+    private Optional<ExternalCalendarConnection> writableHome(ScheduleExternalRef ref) {
+        return connectionRepository.findById(ref.getConnectionId())
+                .filter(ExternalCalendarConnection::canWrite);
     }
 
     private static boolean hasWriteTarget(ExternalCalendarConnection c) {
