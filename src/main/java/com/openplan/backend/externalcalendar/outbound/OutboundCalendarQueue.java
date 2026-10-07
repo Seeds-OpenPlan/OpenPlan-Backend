@@ -121,6 +121,9 @@ public class OutboundCalendarQueue {
         }
         Optional<ExternalCalendarConnection> home = homeConnection(ref);
         if (home.isEmpty()) {
+            // 내보내기가 해제됐다 — 밖의 이벤트는 그대로 둔다(계약). 다만 대기 작업은 거둔다: 일정이 곧
+            // 사라지므로, 남겨 두면 대상을 다시 골랐을 때 없는 일정의 수정이 뒤늦게 나간다.
+            opRepository.deleteAll(unsent);
             return;
         }
         String calendarId = OutboundPayload.targetCalendar(ref.getSentCalendarId(), home.get().getWriteCalendarId());
@@ -144,12 +147,19 @@ public class OutboundCalendarQueue {
      * 이미 매핑이 있는 일정의 연동 — <b>그 일정이 원래 나간 곳</b>이다. 쓸 수 없게 됐으면 비어
      * 있다(닿을 수 없는 곳에 보낼 수는 없다). 다른 연동으로 갈아타지 않는다.
      *
-     * <p>대상 캘린더는 요구하지 않는다 — 사용자가 내보내기 대상을 비워도 이미 나간 일정은
-     * 매핑이 기억하는 캘린더({@code sentCalendarId})에서 고치고 지울 수 있어야 한다.
+     * <p>🔴 <b>대상 캘린더가 비었으면 비어 있다.</b> 대상을 비우는 것은 «내보내지 않음» 이다 — 이미
+     * 내보낸 일정은 밖에 그대로 남고 <b>이후 변경은 더 나가지 않는다</b>(openapi {@code setWriteCalendar}).
+     * 고정 일정·태스크 블록 경로도 대상이 없으면 아무것도 내보내지 않는다 — 셋이 같은 규칙을 따른다.
+     * 대상을 <b>바꾼</b> 경우는 다르다: 그때는 이미 나간 일정을 {@code sentCalendarId} 에서 고친다.
      */
     private Optional<ExternalCalendarConnection> homeConnection(ScheduleExternalRef ref) {
         return connectionRepository.findById(ref.getConnectionId())
-                .filter(ExternalCalendarConnection::canWrite);
+                .filter(ExternalCalendarConnection::canWrite)
+                .filter(OutboundCalendarQueue::hasWriteTarget);
+    }
+
+    private static boolean hasWriteTarget(ExternalCalendarConnection c) {
+        return c.getWriteCalendarId() != null && !c.getWriteCalendarId().isBlank();
     }
 
     /** 내보낼 수 있는 연동 하나. 여럿이면 가장 먼저 연결한 것 — 대상 선택은 설정 화면의 몫이다. */
@@ -157,7 +167,7 @@ public class OutboundCalendarQueue {
         return connectionRepository.findByUserIdOrderByConnectedAtAsc(userId).stream()
                 .filter(ExternalCalendarConnection::canWrite)
                 .filter(c -> {
-                    if (c.getWriteCalendarId() == null || c.getWriteCalendarId().isBlank()) {
+                    if (!hasWriteTarget(c)) {
                         log.debug("쓰기 대상 캘린더를 고르지 않아 내보내지 않는다: connectionId={}", c.getId());
                         return false;
                     }

@@ -86,6 +86,13 @@ public class OutboundOpExecutor {
                 return;
             }
             ExternalCalendarConnection connection = found.get();
+            if (connection.getWriteCalendarId() == null || connection.getWriteCalendarId().isBlank()) {
+                // 🔴 사용자가 내보내기를 껐다(또는 아직 안 골랐다) — 작업 종류와 무관하게 아무것도 안 보낸다.
+                //    끄기 전에 쌓인 UPDATE·DELETE 도 마찬가지다(계약: 해제 이후 변경은 더 나가지 않는다).
+                //    FAILED 는 다시 집히므로, 대상을 다시 고르면 이 op 이 그때 나간다 — 버리지 않는다.
+                op.fail("대상 캘린더가 없다 — 내보내기가 해제된 상태다", now);
+                return;
+            }
             CalendarProvider provider = registry.get(connection.getProvider());
             ProviderCredential credential = tokens.usableCredential(connection);
             // 🔴 CREATE 만 «지금 설정» 을 다시 읽는다. 제공자 장애로 CREATE 가 FAILED 로 남아 있는
@@ -99,9 +106,8 @@ public class OutboundOpExecutor {
                     : op.getPayload().writeCalendarId();
 
             if (calendarId == null || calendarId.isBlank()) {
-                // 사용자가 내보내기를 껐다(또는 아직 안 골랐다). FAILED 는 다시 집히므로,
-                // 대상을 다시 고르면 이 op 이 그때 나간다 — 버리지 않는다.
-                op.fail("대상 캘린더가 없다 — 내보내기가 해제된 상태다", now);
+                // UPDATE·DELETE 인데 payload 에 «있는 곳» 이 없다 — 엉뚱한 곳을 고치지 않는다.
+                op.fail("대상 캘린더가 없다 — 이벤트가 있는 캘린더를 모른다", now);
                 return;
             }
 
