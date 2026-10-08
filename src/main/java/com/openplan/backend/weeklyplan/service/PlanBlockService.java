@@ -17,6 +17,7 @@ import com.openplan.backend.weeklyplan.domain.PlanBlock;
 import com.openplan.backend.weeklyplan.domain.PlanBlockType;
 import com.openplan.backend.weeklyplan.domain.WeeklyPlan;
 import com.openplan.backend.weeklyplan.dto.BlockBatchRequest;
+import com.openplan.backend.weeklyplan.dto.FixedScheduleWeekView;
 import com.openplan.backend.weeklyplan.dto.PlanBlockCreateRequest;
 import com.openplan.backend.weeklyplan.dto.PlanBlockMoveRequest;
 import com.openplan.backend.weeklyplan.dto.PlanBlockResponse;
@@ -54,6 +55,7 @@ public class PlanBlockService {
     private final ScheduleRepository scheduleRepository;
     private final ScheduleValidator scheduleValidator;
     private final WeeklyPlanTotalsRecalculator recalculator;
+    private final FixedScheduleWeekAssembler fixedScheduleAssembler;
     private final ErrorMessages errorMessages;
     private final UserClock clock;
     private final OutboundCalendarQueue outboundQueue;
@@ -62,6 +64,7 @@ public class PlanBlockService {
     public PlanBlockService(PlanBlockRepository planBlockRepository, WeeklyPlanRepository weeklyPlanRepository,
                             TaskRepository taskRepository, ScheduleRepository scheduleRepository,
                             ScheduleValidator scheduleValidator, WeeklyPlanTotalsRecalculator recalculator,
+                            FixedScheduleWeekAssembler fixedScheduleAssembler,
                             ErrorMessages errorMessages, UserClock clock,
                             OutboundCalendarQueue outboundQueue,
                             EntityManager entityManager) {
@@ -71,6 +74,7 @@ public class PlanBlockService {
         this.scheduleRepository = scheduleRepository;
         this.scheduleValidator = scheduleValidator;
         this.recalculator = recalculator;
+        this.fixedScheduleAssembler = fixedScheduleAssembler;
         this.errorMessages = errorMessages;
         this.clock = clock;
         this.outboundQueue = outboundQueue;
@@ -261,7 +265,8 @@ public class PlanBlockService {
     /**
      * 블록 일괄 적용 (RB-PLAN-01·PLAN-29). {@code operations}를 순서대로 <b>한 트랜잭션</b>에서 실행한다 —
      * 하나라도 실패하면 전체 롤백(원자적). 낱개 로직({@link #createBlock}·{@link #moveBlock}·{@link #deleteBlock})을
-     * 그대로 재사용한다(같은 빈 self-invocation이라 이 메서드의 tx에 합류). 적용 후 최신 {@link WeeklyPlanView} 반환.
+     * 그대로 재사용한다(같은 빈 self-invocation이라 이 메서드의 tx에 합류). 적용 후 최신
+     * {@link WeeklyPlanView}(fixedSchedules 포함, 이슈 #90) 반환.
      *
      * <p>CREATE는 경로의 {@code planId}에 배치한다. MOVE는 정본 {@code PlanBlockInput}이라 시각 조정만(주차 이동 없음).
      * 계획 부재·타인 → 404. op별 필수 필드 누락 → 422.
@@ -312,7 +317,9 @@ public class PlanBlockService {
         //   테스트는 통과했다). 우연에 기대지 않도록 여기서 명시적으로 새로 읽는다.
         List<PlanBlockResponse> blocks = planBlockRepository.findViewsByWeeklyPlanId(planId)
                 .stream().map(PlanBlockResponse::fromView).toList();
-        return WeeklyPlanView.of(WeeklyPlanResponse.from(latest, blocks.size()), blocks);
+        List<FixedScheduleWeekView> fixedSchedules =
+                fixedScheduleAssembler.assemble(userId, latest.getWeekStartDate());
+        return WeeklyPlanView.of(WeeklyPlanResponse.from(latest, blocks.size()), blocks, fixedSchedules);
     }
 
     /**
