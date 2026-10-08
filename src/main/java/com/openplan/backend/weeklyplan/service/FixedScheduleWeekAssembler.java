@@ -8,6 +8,7 @@ import com.openplan.backend.weeklyplan.dto.FixedScheduleWeekView;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -46,6 +47,11 @@ public class FixedScheduleWeekAssembler {
      *
      * <p><b>조회 2번으로 끝난다(N+1 없음)</b> — ① 날짜 겹침으로 후보 전량(1쿼리) ② 그 후보 id들 중
      * 이번 주 예외가 있는 id 집합(1쿼리, {@code IN} 배치). 고정 일정이 많아져도 쿼리 수는 늘지 않는다.
+     *
+     * <p><b>정렬은 Java에서 한다</b> — {@code weekday}는 DB에 문자열(VARCHAR)로 저장돼 SQL
+     * {@code ORDER BY}가 알파벳순이 된다. 달력순(MON→SUN) → 같은 요일은 시작 시각 순으로 맞추려면
+     * {@code Weekday.ordinal()} 기준 비교가 필요하다({@code AvailabilityService.toView}와 동일 관례,
+     * 리뷰 Should-fix).
      */
     public List<FixedScheduleWeekView> assemble(UUID userId, LocalDate weekStartDate) {
         LocalDate weekEndDate = weekStartDate.plusDays(WEEK_SPAN_DAYS);
@@ -61,6 +67,8 @@ public class FixedScheduleWeekAssembler {
                 weekExceptionRepository.findFixedScheduleIdsWithExceptionInWeek(weekStartDate, candidateIds));
 
         return candidates.stream()
+                .sorted(Comparator.comparingInt((FixedSchedule fs) -> fs.getWeekday().ordinal())
+                        .thenComparing(FixedSchedule::getStartTime))
                 .map(fs -> {
                     boolean activeThisWeek = fs.getStatus() == FixedScheduleStatus.ACTIVE
                             && !exceptedIds.contains(fs.getId());

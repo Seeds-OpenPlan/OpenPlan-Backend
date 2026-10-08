@@ -35,11 +35,16 @@ public interface FixedScheduleRepository extends JpaRepository<FixedSchedule, UU
      * <p>겹침 판정은 <b>날짜 범위만</b> 본다(요일 무관) — {@code startDate}/{@code endDate}는 반복이
      * "언제부터 언제까지" 유효한지를 정하고, 요일은 그 범위 안에서 어느 날에 반복되는지를 정하는
      * 별개 축이다. null은 그 쪽으로 무기한(시작 전부터 또는 끝없이 계속)을 뜻해 항상 겹친다고 본다.
+     *
+     * <p><b>DB {@code ORDER BY}를 쓰지 않는다</b> — {@code weekday}는 {@code @Enumerated(EnumType.STRING)}
+     * (VARCHAR)라 SQL {@code ORDER BY}는 알파벳순(FRI·MON·SAT…)이 되어 달력순(MON→SUN)과 다르다.
+     * ({@code findByUserIdOrderByWeekdayAscStartTimeAsc}도 같은 결함이 있으나 이 메서드의 범위 밖이라
+     * 그대로 둔다 — 별도 보고.) 호출자({@link com.openplan.backend.weeklyplan.service.FixedScheduleWeekAssembler})가
+     * {@code Weekday.ordinal()} 기준으로 Java에서 재정렬한다({@code AvailabilityService.toView}와 동일 관례).
      */
     @Query("select fs from FixedSchedule fs where fs.userId = :userId "
             + "and (fs.startDate is null or fs.startDate <= :weekEndDate) "
-            + "and (fs.endDate is null or fs.endDate >= :weekStartDate) "
-            + "order by fs.weekday asc, fs.startTime asc")
+            + "and (fs.endDate is null or fs.endDate >= :weekStartDate)")
     List<FixedSchedule> findOverlappingWeek(@Param("userId") UUID userId,
                                             @Param("weekStartDate") LocalDate weekStartDate,
                                             @Param("weekEndDate") LocalDate weekEndDate);

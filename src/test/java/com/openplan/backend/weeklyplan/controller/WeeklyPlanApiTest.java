@@ -300,6 +300,43 @@ class WeeklyPlanApiTest {
                 .andExpect(jsonPath("$.data.fixedSchedules.length()").value(0));
     }
 
+    @Test
+    @DisplayName("후보 2건 — 하나는 그 주 예외 있음·하나는 없음 → IN 배치 조회가 각각 올바르게 가른다")
+    void multipleCandidatesMixedExceptionAndNoException() throws Exception {
+        UUID excepted = insertFixedSchedule(MAIN, "예외있음", "MON", "09:00", "10:00", null, null, "ACTIVE");
+        UUID plain = insertFixedSchedule(MAIN, "예외없음", "TUE", "09:00", "10:00", null, null, "ACTIVE");
+        insertWeekException(excepted, WEEK); // excepted만 이 주 예외
+
+        mockMvc.perform(get(PATH).param("weekStartDate", "2026-07-27").header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.fixedSchedules.length()").value(2))
+                // weekday ASC(MON→TUE)라 excepted(MON)가 0번, plain(TUE)이 1번 — IN 배치 결과가 id별로 정확히 갈린다.
+                .andExpect(jsonPath("$.data.fixedSchedules[0].fixedScheduleId").value(excepted.toString()))
+                .andExpect(jsonPath("$.data.fixedSchedules[0].activeThisWeek").value(false))
+                .andExpect(jsonPath("$.data.fixedSchedules[1].fixedScheduleId").value(plain.toString()))
+                .andExpect(jsonPath("$.data.fixedSchedules[1].activeThisWeek").value(true));
+    }
+
+    @Test
+    @DisplayName("요일 섞인 후보(FRI·MON·WED) → 달력순(MON→WED→FRI) 정렬, 문자열 알파벳순(FRI·MON·WED) 아님")
+    void multipleCandidatesSortedCalendarOrderNotAlphabetical() throws Exception {
+        // 삽입 순서를 알파벳순(FRI·MON·WED)과 다르게 섞어, 응답이 입력 순서나 알파벳 순이 아니라
+        // 달력순으로 재정렬됐는지를 확인한다(리뷰 Should-fix — weekday가 VARCHAR라 SQL ORDER BY는 알파벳순).
+        insertFixedSchedule(MAIN, "금요일", "FRI", "09:00", "10:00", null, null, "ACTIVE");
+        insertFixedSchedule(MAIN, "월요일", "MON", "09:00", "10:00", null, null, "ACTIVE");
+        insertFixedSchedule(MAIN, "수요일", "WED", "09:00", "10:00", null, null, "ACTIVE");
+
+        mockMvc.perform(get(PATH).param("weekStartDate", "2026-07-27").header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.fixedSchedules.length()").value(3))
+                .andExpect(jsonPath("$.data.fixedSchedules[0].weekday").value("MON"))
+                .andExpect(jsonPath("$.data.fixedSchedules[0].title").value("월요일"))
+                .andExpect(jsonPath("$.data.fixedSchedules[1].weekday").value("WED"))
+                .andExpect(jsonPath("$.data.fixedSchedules[1].title").value("수요일"))
+                .andExpect(jsonPath("$.data.fixedSchedules[2].weekday").value("FRI"))
+                .andExpect(jsonPath("$.data.fixedSchedules[2].title").value("금요일"));
+    }
+
     // ---------- fixtures ----------
 
     private org.springframework.test.web.servlet.ResultActions create(UUID userId, String weekStartDate) throws Exception {
