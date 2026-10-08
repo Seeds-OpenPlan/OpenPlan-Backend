@@ -39,8 +39,16 @@ public enum ExternalCalendarProvider {
     //       프로덕션에 살아 있어야 제출할 수 있다.
     //    읽기만 하던 때로 되돌리려면 이 문자열만 calendar.readonly 로 바꾸면 된다 — 저장된
     //    granted_scope 가 자동으로 «쓸 수 없음» 이 되어 쓰기 경로가 조용히 닫힌다.
+    // 🔴 calendar.events 만으로는 **캘린더 목록을 못 읽는다** (2026-10-08 실계정 첫 연동에서 발견).
+    //    GoogleCalendarProvider 는 calendarList(가져올·내보낼 캘린더 선택)와 events 두 엔드포인트를
+    //    쓰는데, calendarList.list 가 받는 스코프는 calendar.readonly · calendar ·
+    //    calendar.calendarlist · calendar.calendarlist.readonly 넷뿐이고 calendar.events 는 없다.
+    //    readonly 일 때는 그 하나가 둘 다 덮었기에 드러나지 않았다 — events 로 넓히면서 목록이 403.
+    //    목록은 읽기만 하므로 calendarlist.readonly 를 더한다(calendar 전체는 공유 설정까지 열어 과하다).
+    //    readonly 로 되돌릴 때는 이 줄도 같이 빼도 된다 — calendar.readonly 가 목록을 덮는다.
     GOOGLE(OAuthProviderType.GOOGLE,
-            "openid email https://www.googleapis.com/auth/calendar.events",
+            "openid email https://www.googleapis.com/auth/calendar.events"
+                    + " https://www.googleapis.com/auth/calendar.calendarlist.readonly",
             CalendarAuthModel.OAUTH),
 
     /**
