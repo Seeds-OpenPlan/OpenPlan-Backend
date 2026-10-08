@@ -15,6 +15,7 @@ import com.openplan.backend.weeklyplan.domain.PlanBlock;
 import com.openplan.backend.weeklyplan.domain.PlanBlockType;
 import com.openplan.backend.weeklyplan.domain.ReplanOption;
 import com.openplan.backend.weeklyplan.domain.WeeklyPlan;
+import com.openplan.backend.weeklyplan.dto.FixedScheduleWeekView;
 import com.openplan.backend.weeklyplan.dto.GenerateReplanResponse;
 import com.openplan.backend.weeklyplan.dto.PlanBlockResponse;
 import com.openplan.backend.weeklyplan.dto.ReplanOptionResponse;
@@ -49,6 +50,7 @@ public class ReplanService {
     private final PlanBlockRepository planBlockRepository;
     private final ReplanOptionRepository replanOptionRepository;
     private final PlanSnapshotAssembler assembler;
+    private final FixedScheduleWeekAssembler fixedScheduleAssembler;
     private final PlanReplanPort replanPort;
     private final WeeklyPlanTotalsRecalculator recalculator;
     private final UserClock clock;
@@ -56,12 +58,14 @@ public class ReplanService {
 
     public ReplanService(WeeklyPlanRepository weeklyPlanRepository, PlanBlockRepository planBlockRepository,
                          ReplanOptionRepository replanOptionRepository, PlanSnapshotAssembler assembler,
+                         FixedScheduleWeekAssembler fixedScheduleAssembler,
                          PlanReplanPort replanPort, WeeklyPlanTotalsRecalculator recalculator, UserClock clock,
                          EntityManager entityManager) {
         this.weeklyPlanRepository = weeklyPlanRepository;
         this.planBlockRepository = planBlockRepository;
         this.replanOptionRepository = replanOptionRepository;
         this.assembler = assembler;
+        this.fixedScheduleAssembler = fixedScheduleAssembler;
         this.replanPort = replanPort;
         this.recalculator = recalculator;
         this.clock = clock;
@@ -116,7 +120,7 @@ public class ReplanService {
      * taskId 매칭해 목표 시각으로 이동하고, 이 대안을 선택 표시(is_selected·selected_at)한다.
      *
      * <p><b>초안 반영이며 확정이 아니다</b>(P2) — status는 DRAFT로 두되, 확정이었다면 편집 재개로 DRAFT 복귀.
-     * 반영 후 최신 {@link WeeklyPlanView} 반환. 대안 부재·타인 → 404.
+     * 반영 후 최신 {@link WeeklyPlanView}(fixedSchedules 포함, 이슈 #90) 반환. 대안 부재·타인 → 404.
      */
     @Transactional
     public WeeklyPlanView apply(UUID userId, UUID optionId) {
@@ -173,7 +177,9 @@ public class ReplanService {
         entityManager.refresh(latest);
         List<PlanBlockResponse> blocks = planBlockRepository.findViewsByWeeklyPlanId(planId)
                 .stream().map(PlanBlockResponse::fromView).toList();
-        return WeeklyPlanView.of(WeeklyPlanResponse.from(latest, blocks.size()), blocks);
+        List<FixedScheduleWeekView> fixedSchedules =
+                fixedScheduleAssembler.assemble(userId, latest.getWeekStartDate());
+        return WeeklyPlanView.of(WeeklyPlanResponse.from(latest, blocks.size()), blocks, fixedSchedules);
     }
 
     // ─────────────────────────────────────────── 매핑·문구

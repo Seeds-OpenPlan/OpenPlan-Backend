@@ -2,6 +2,7 @@ package com.openplan.backend.weeklyplan.service;
 
 import com.openplan.backend.global.time.UserClock;
 import com.openplan.backend.weeklyplan.domain.WeeklyPlan;
+import com.openplan.backend.weeklyplan.dto.FixedScheduleWeekView;
 import com.openplan.backend.weeklyplan.dto.PlanBlockResponse;
 import com.openplan.backend.weeklyplan.dto.WeeklyPlanCreateRequest;
 import com.openplan.backend.weeklyplan.dto.WeeklyPlanResponse;
@@ -27,12 +28,14 @@ public class WeeklyPlanService {
 
     private final WeeklyPlanRepository repository;
     private final PlanBlockRepository planBlockRepository;
+    private final FixedScheduleWeekAssembler fixedScheduleAssembler;
     private final UserClock clock;
 
     public WeeklyPlanService(WeeklyPlanRepository repository, PlanBlockRepository planBlockRepository,
-                             UserClock clock) {
+                             FixedScheduleWeekAssembler fixedScheduleAssembler, UserClock clock) {
         this.repository = repository;
         this.planBlockRepository = planBlockRepository;
+        this.fixedScheduleAssembler = fixedScheduleAssembler;
         this.clock = clock;
     }
 
@@ -70,21 +73,25 @@ public class WeeklyPlanService {
     }
 
     /**
-     * 주간 계획 조회 (PLAN-01·02). 주차별 단건 + 요약(사용시간·블록수) + 캘린더 렌더링용 blocks 목록(start_at 순).
-     * 읽기 — 서비스 tx 없음.
+     * 주간 계획 조회 (PLAN-01·02). 주차별 단건 + 요약(사용시간·블록수) + 캘린더 렌더링용 blocks 목록(start_at 순)
+     * + 그 주 고정 일정(이슈 #90). 읽기 — 서비스 tx 없음.
      *
      * <p><b>없는 주차는 오류가 아니다</b> — 200 + {@code data.plan = null}(정본 WeeklyPlanView). "이 주는 아직
      * 계획 없음"을 정상 상태로 표현한다(FE는 {@code data.plan} 유무로 판단, 별도 404 처리 불요). 타인 주차도 소유
      * 스코프에서 빠져 동일하게 {@code plan=null}. 봉투 {@code data}는 항상 존재(view 객체).
+     *
+     * <p><b>{@code fixedSchedules}는 plan 유무와 무관하게 채운다</b> — 고정 일정은 계획이 없는 주에도
+     * 그 주 화면(요일 그리드)에 표시돼야 하므로, plan=null 분기에서도 조립해 둔다(이슈 #90 요구사항).
      */
     public WeeklyPlanView getByWeek(UUID userId, LocalDate weekStartDate) {
+        List<FixedScheduleWeekView> fixedSchedules = fixedScheduleAssembler.assemble(userId, weekStartDate);
         return repository.findByUserIdAndWeekStartDate(userId, weekStartDate)
                 .map(plan -> {
                     List<PlanBlockResponse> blocks = planBlockRepository
                             .findViewsByWeeklyPlanId(plan.getId())
                             .stream().map(PlanBlockResponse::fromView).toList();
-                    return WeeklyPlanView.of(WeeklyPlanResponse.from(plan, blocks.size()), blocks);
+                    return WeeklyPlanView.of(WeeklyPlanResponse.from(plan, blocks.size()), blocks, fixedSchedules);
                 })
-                .orElse(WeeklyPlanView.empty()); // 없는 주차 → 200 + data.plan=null
+                .orElse(WeeklyPlanView.empty(fixedSchedules)); // 없는 주차 → 200 + data.plan=null, fixedSchedules는 유지
     }
 }

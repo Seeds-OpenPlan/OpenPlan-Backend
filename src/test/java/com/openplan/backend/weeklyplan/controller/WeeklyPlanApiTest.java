@@ -16,6 +16,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
@@ -55,6 +56,8 @@ class WeeklyPlanApiTest {
                 + "(SELECT weekly_plan_id FROM weekly_plans WHERE user_id IN (?, ?))", MAIN, OTHER);
         jdbc.update("DELETE FROM weekly_plans WHERE user_id IN (?, ?)", MAIN, OTHER);
         jdbc.update("DELETE FROM schedules WHERE user_id IN (?, ?)", MAIN, OTHER);
+        // fixed_schedule_week_exceptions는 FK ON DELETE CASCADE로 fixed_schedules 삭제에 함께 지워진다.
+        jdbc.update("DELETE FROM fixed_schedules WHERE user_id IN (?, ?)", MAIN, OTHER);
     }
 
     // ---------- POST 생성 ----------
@@ -207,6 +210,96 @@ class WeeklyPlanApiTest {
                 .andExpect(jsonPath("$.error.code").value("E-COM-001"));
     }
 
+    // ---------- fixedSchedules (이슈 #90) ----------
+
+    @Test
+    @DisplayName("고정 일정 포함 — 예외·INACTIVE 없으면 activeThisWeek=true")
+    void fixedSchedulesActiveByDefault() throws Exception {
+        UUID fixedId = insertFixedSchedule(MAIN, "수업", "MON", "09:00", "10:00", null, null, "ACTIVE");
+
+        mockMvc.perform(get(PATH).param("weekStartDate", "2026-07-27").header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.fixedSchedules.length()").value(1))
+                .andExpect(jsonPath("$.data.fixedSchedules[0].fixedScheduleId").value(fixedId.toString()))
+                .andExpect(jsonPath("$.data.fixedSchedules[0].title").value("수업"))
+                .andExpect(jsonPath("$.data.fixedSchedules[0].weekday").value("MON"))
+                .andExpect(jsonPath("$.data.fixedSchedules[0].startTime").value("09:00:00"))
+                .andExpect(jsonPath("$.data.fixedSchedules[0].endTime").value("10:00:00"))
+                .andExpect(jsonPath("$.data.fixedSchedules[0].source").value("MANUAL"))
+                .andExpect(jsonPath("$.data.fixedSchedules[0].status").value("ACTIVE"))
+                .andExpect(jsonPath("$.data.fixedSchedules[0].version").value(0))
+                .andExpect(jsonPath("$.data.fixedSchedules[0].activeThisWeek").value(true));
+    }
+
+    @Test
+    @DisplayName("그 주 week-exception 있으면 activeThisWeek=false, 다른 주는 true(PLAN-33)")
+    void weekExceptionMakesInactiveOnlyThatWeek() throws Exception {
+        UUID fixedId = insertFixedSchedule(MAIN, "수업", "MON", "09:00", "10:00", null, null, "ACTIVE");
+        insertWeekException(fixedId, WEEK);
+
+        mockMvc.perform(get(PATH).param("weekStartDate", "2026-07-27").header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.fixedSchedules.length()").value(1))
+                .andExpect(jsonPath("$.data.fixedSchedules[0].activeThisWeek").value(false));
+
+        // 다음 주(예외 없음) — 같은 고정 일정이 다시 활성으로 보여야 한다.
+        mockMvc.perform(get(PATH).param("weekStartDate", "2026-08-03").header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.fixedSchedules.length()").value(1))
+                .andExpect(jsonPath("$.data.fixedSchedules[0].activeThisWeek").value(true));
+    }
+
+    @Test
+    @DisplayName("status=INACTIVE면 예외가 없어도 activeThisWeek=false — 목록에선 제외하지 않는다(고스트 표시)")
+    void inactiveStatusMakesActiveThisWeekFalseButListed() throws Exception {
+        insertFixedSchedule(MAIN, "해지된 수업", "TUE", "09:00", "10:00", null, null, "INACTIVE");
+
+        mockMvc.perform(get(PATH).param("weekStartDate", "2026-07-27").header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.fixedSchedules.length()").value(1))
+                .andExpect(jsonPath("$.data.fixedSchedules[0].status").value("INACTIVE"))
+                .andExpect(jsonPath("$.data.fixedSchedules[0].activeThisWeek").value(false));
+    }
+
+    @Test
+    @DisplayName("고정 일정 기간(startDate~endDate) 밖인 주는 목록에서 제외")
+    void outOfDateRangeExcluded() throws Exception {
+        // 9월 전체만 유효한 고정 일정 — 7/27 주는 겹치지 않아 제외돼야 한다.
+        insertFixedSchedule(MAIN, "특강", "WED", "14:00", "16:00",
+                LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 30), "ACTIVE");
+
+        mockMvc.perform(get(PATH).param("weekStartDate", "2026-07-27").header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.fixedSchedules.length()").value(0));
+
+        // 겹치는 주(9/2 시작 ~ 9/8)에는 포함돼야 한다.
+        mockMvc.perform(get(PATH).param("weekStartDate", "2026-08-31").header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.fixedSchedules.length()").value(1));
+    }
+
+    @Test
+    @DisplayName("계획 없는 주(plan=null)에도 fixedSchedules는 채워진다 — 고정 일정은 계획 존재와 무관")
+    void fixedSchedulesPresentEvenWithoutPlan() throws Exception {
+        insertFixedSchedule(MAIN, "수업", "MON", "09:00", "10:00", null, null, "ACTIVE");
+
+        mockMvc.perform(get(PATH).param("weekStartDate", "2026-07-27").header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.plan").doesNotExist()) // 계획 없음 — 오류 아님
+                .andExpect(jsonPath("$.data.fixedSchedules.length()").value(1))
+                .andExpect(jsonPath("$.data.fixedSchedules[0].activeThisWeek").value(true));
+    }
+
+    @Test
+    @DisplayName("소유자 스코프 — 타인 고정 일정은 내 조회에 안 보임")
+    void fixedSchedulesOwnerScope() throws Exception {
+        insertFixedSchedule(OTHER, "타인 수업", "MON", "09:00", "10:00", null, null, "ACTIVE");
+
+        mockMvc.perform(get(PATH).param("weekStartDate", "2026-07-27").header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.fixedSchedules.length()").value(0));
+    }
+
     // ---------- fixtures ----------
 
     private org.springframework.test.web.servlet.ResultActions create(UUID userId, String weekStartDate) throws Exception {
@@ -260,5 +353,27 @@ class WeeklyPlanApiTest {
                 OffsetDateTime.ofInstant(BASE, ZoneOffset.UTC),
                 OffsetDateTime.ofInstant(BASE.plusSeconds(3600), ZoneOffset.UTC),
                 OffsetDateTime.ofInstant(BASE, ZoneOffset.UTC));
+    }
+
+    /** 고정 일정 직접 삽입(이슈 #90 테스트용) — source는 항상 MANUAL, status는 호출자가 ACTIVE/INACTIVE 지정. */
+    private UUID insertFixedSchedule(UUID userId, String title, String weekday, String startTime, String endTime,
+                                     LocalDate startDate, LocalDate endDate, String status) {
+        UUID id = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO fixed_schedules (fixed_schedule_id, user_id, title, weekday, start_time, end_time,
+                                             start_date, end_date, source, status, version, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'MANUAL', ?, 0, ?)
+                """,
+                id, userId, title, weekday, LocalTime.parse(startTime), LocalTime.parse(endTime),
+                startDate, endDate, status, OffsetDateTime.ofInstant(BASE, ZoneOffset.UTC));
+        return id;
+    }
+
+    /** 주차 한정 비활성화 예외 직접 삽입(PLAN-33) — FixedScheduleWeekExceptionRepository.insertIfAbsent와 동일 효과. */
+    private void insertWeekException(UUID fixedScheduleId, LocalDate weekStartDate) {
+        jdbc.update("""
+                INSERT INTO fixed_schedule_week_exceptions (exception_id, fixed_schedule_id, week_start_date)
+                VALUES (?, ?, ?)
+                """, UUID.randomUUID(), fixedScheduleId, weekStartDate);
     }
 }
