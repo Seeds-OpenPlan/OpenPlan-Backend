@@ -37,6 +37,7 @@ tags:
   - name: external-calendar-connections
   - name: external-calendar-events
   - name: notifications
+  - name: push
   - name: support
   - name: announcements
   - name: projects
@@ -953,6 +954,93 @@ paths:
       x-user-stories: [NOTI-03]
       responses:
         "200": { description: 처리 완료 }
+
+  # ───────────────────────────────────────────── PUSH (ADR-0015, BE-1)
+  /users/me/push-settings:
+    get:
+      tags: [push]
+      operationId: getPushSettings
+      summary: "푸시 설정 조회 (3토글) — 행이 없으면 전부 꺼짐"
+      x-lane: BE-1
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/PushSettings" }
+    put:
+      tags: [push]
+      operationId: savePushSettings
+      summary: "푸시 설정 저장 — 3토글 전부 전송(부분 저장 없음)"
+      x-lane: BE-1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PushSettings" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/PushSettings" }
+  /push/vapid-public-key:
+    get:
+      tags: [push]
+      operationId: getVapidPublicKey
+      summary: "VAPID 공개키 — 서버에 키가 없으면 null(FE가 푸시 섹션을 숨긴다)"
+      x-lane: BE-1
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      publicKey: { type: [string, "null"] }
+  /users/me/push-subscriptions:
+    post:
+      tags: [push]
+      operationId: createPushSubscription
+      summary: "구독 등록(upsert by endpoint)"
+      x-lane: BE-1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PushSubscribeRequest" }
+      responses:
+        "200": { description: "등록(또는 재할당) 완료" }
+        "422":
+          description: "E-COM-009 platform이 ANDROID_APP이 아니다"
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    delete:
+      tags: [push]
+      operationId: deletePushSubscription
+      summary: "구독 해지 — 본인 소유만(멱등, 부재·타인도 204)"
+      x-lane: BE-1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [endpoint]
+              properties:
+                endpoint: { type: string }
+      responses:
+        "204": { description: "해지 완료(봉투 없음)" }
+
   /support/tickets:
     get:
       tags: [support]
@@ -2626,6 +2714,27 @@ components:
         routePath: { type: string, description: "NOTI-04 이동 경로. SUPPORT_ANSWERED는 본인 문의 상세만 (NFR-030)" }
         readAt: { type: [string, "null"], format: date-time }
         createdAt: { type: string, format: date-time }
+    PushSettings:
+      type: object
+      description: "ADR-0015 결정 ⑥ — 기본 전부 false. notification_settings(알림 센터용)와는 별개 설정이다."
+      required: [taskEnabled, fixedScheduleEnabled, scheduleEnabled]
+      properties:
+        taskEnabled: { type: boolean }
+        fixedScheduleEnabled: { type: boolean }
+        scheduleEnabled: { type: boolean }
+    PushSubscribeRequest:
+      type: object
+      description: "브라우저 Push API PushSubscription.toJSON()을 그대로 받는다(ADR-0015 결정 ④)."
+      required: [endpoint, keys, platform]
+      properties:
+        endpoint: { type: string }
+        keys:
+          type: object
+          required: [p256dh, auth]
+          properties:
+            p256dh: { type: string }
+            auth: { type: string }
+        platform: { type: string, enum: [ANDROID_APP], description: "안드로이드 앱 전용(사용자 결정) — 다른 값은 422" }
     SupportTicket:
       type: object
       properties:

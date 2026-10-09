@@ -118,6 +118,15 @@ op:
   external-calendar:
     token-key: ${EXT_TOKEN_KEY:}
 
+  # 시작 10분 전 푸시 알림 (ADR-0015). 표준 Web Push(VAPID) — Firebase·BouncyCastle 불필요.
+  # 🔴 셋 중 하나라도 비면 기동은 하되 발송기는 아무것도 하지 않는다(로그 1회 — PushReminderDispatcher).
+  #    소셜 로그인 자격증명(op.oauth.clients)과 같은 "없어도 기동한다" 패턴. 키 생성법은 .env.example 참고.
+  push:
+    vapid:
+      public-key: ${VAPID_PUBLIC_KEY:}
+      private-key: ${VAPID_PRIVATE_KEY:}
+      subject: ${VAPID_SUBJECT:}
+
 logging:
   pattern:
     # traceId(MDC) 동반 — X-Trace-Id 헤더와 대조 (exceptions.md §1)
