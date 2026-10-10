@@ -1,6 +1,9 @@
 package com.openplan.backend.weeklyplan.controller;
 
 import com.jayway.jsonpath.JsonPath;
+import com.openplan.backend.externalcalendar.outbound.OutboundCalendarOp;
+import com.openplan.backend.externalcalendar.outbound.OutboundCalendarOpRepository;
+import com.openplan.backend.externalcalendar.outbound.OutboundTargetType;
 import com.openplan.backend.support.FixedClockConfig;
 import com.openplan.backend.support.TestcontainersConfig;
 import com.openplan.backend.task.domain.TaskStatus;
@@ -22,6 +25,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -52,6 +56,8 @@ class PlanBlockMoveApiTest {
     private MockMvc mockMvc;
     @Autowired
     private JdbcTemplate jdbc;
+    @Autowired
+    private OutboundCalendarOpRepository outboundOpRepository;
 
     private UUID project;
 
@@ -117,10 +123,40 @@ class PlanBlockMoveApiTest {
                 Timestamp.class, scheduleId).toInstant();
         assertThat(scheduleStart).isEqualTo(Instant.parse("2026-08-03T05:00:00Z"));
 
-        // 아웃바운드 큐에 이 일정의 작업이 쌓여 다음 동기화에서 구글로 나갈 준비가 됐다
-        assertThat(jdbc.queryForObject(
-                "SELECT COUNT(*) FROM outbound_calendar_ops WHERE target_type = 'SCHEDULE' AND target_id = ? AND status = 'PENDING'",
-                Integer.class, scheduleId)).isGreaterThanOrEqualTo(1);
+        // 아웃바운드 큐에 쌓인 작업의 payload 가 실제로 새 시각을 담고 있는지까지 — count만 보면
+        // 생성 시 쌓인 PENDING CREATE가 replacePayload로 옛 시각을 그대로 들고 있어도 통과해 버린다.
+        List<OutboundCalendarOp> queued = outboundOpRepository.findUnsentByTarget(
+                OutboundTargetType.SCHEDULE, scheduleId);
+        assertThat(queued).hasSize(1);
+        assertThat(queued.get(0).getPayload().startAt()).isEqualTo(Instant.parse("2026-08-03T05:00:00Z"));
+        assertThat(queued.get(0).getPayload().endAt()).isEqualTo(Instant.parse("2026-08-03T06:00:00Z"));
+    }
+
+    @Test
+    @DisplayName("SCHEDULE 블록 — 시각 미동봉(주차만 이동)이면 일정·아웃바운드 큐를 건드리지 않는다")
+    void movingScheduleBlockWithoutTimeChangeSkipsRelocate() throws Exception {
+        UUID plan = insertWeeklyPlan(MAIN, WEEK, "DRAFT", null);
+        insertWritableGoogleConnection(MAIN);
+
+        String createBody = "{\"blockType\":\"SCHEDULE\",\"schedule\":{\"title\":\"통원\","
+                + "\"estimatedMinutes\":60,\"priority\":2},\"startAt\":\"" + START + "\",\"endAt\":\"" + END + "\"}";
+        String created = mockMvc.perform(post("/api/v1/weekly-plans/" + plan + "/blocks")
+                        .header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON).content(createBody))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        UUID blockId = UUID.fromString(JsonPath.read(created, "$.data.planBlockId"));
+        UUID scheduleId = UUID.fromString(JsonPath.read(created, "$.data.scheduleId"));
+
+        // 시각 없이 같은 주 안에서의 "이동"만 요청(실질적으로 아무 필드도 안 바뀜) — 생성 시 쌓인
+        // PENDING 작업 1건 외에 더 쌓이지 않아야 한다.
+        mockMvc.perform(patch("/api/v1/plan-blocks/" + blockId).header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isOk());
+
+        assertThat(jdbc.queryForObject("SELECT start_at FROM schedules WHERE schedule_id = ?",
+                Timestamp.class, scheduleId).toInstant()).isEqualTo(Instant.parse(START));
+        assertThat(outboundOpRepository.findUnsentByTarget(OutboundTargetType.SCHEDULE, scheduleId)).hasSize(1);
     }
 
     @Test
