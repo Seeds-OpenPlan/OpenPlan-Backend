@@ -17,6 +17,7 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -63,6 +64,7 @@ class PlanBlockMoveApiTest {
         jdbc.update("DELETE FROM tasks WHERE project_id IN "
                 + "(SELECT project_id FROM projects WHERE user_id IN (?, ?))", MAIN, OTHER);
         jdbc.update("DELETE FROM weekly_plans WHERE user_id IN (?, ?)", MAIN, OTHER);
+        jdbc.update("DELETE FROM external_calendar_connections WHERE user_id IN (?, ?)", MAIN, OTHER);
         jdbc.update("DELETE FROM schedules WHERE user_id IN (?, ?)", MAIN, OTHER);
         jdbc.update("DELETE FROM projects WHERE user_id IN (?, ?)", MAIN, OTHER);
         project = insertProject(MAIN, "프로젝트");
@@ -87,6 +89,38 @@ class PlanBlockMoveApiTest {
 
         assertThat(jdbc.queryForObject("SELECT total_planned_minutes FROM weekly_plans WHERE weekly_plan_id = ?",
                 Integer.class, plan)).isEqualTo(60);
+    }
+
+    @Test
+    @DisplayName("SCHEDULE 블록 이동 — 연결된 일정 시각도 같이 바뀌고 아웃바운드 큐에 쌓인다 (버그 수정 회귀)")
+    void movingScheduleBlockRelocatesScheduleAndQueuesOutbound() throws Exception {
+        UUID plan = insertWeeklyPlan(MAIN, WEEK, "DRAFT", null);
+        insertWritableGoogleConnection(MAIN);
+
+        String createBody = "{\"blockType\":\"SCHEDULE\",\"schedule\":{\"title\":\"통원\","
+                + "\"estimatedMinutes\":60,\"priority\":2},\"startAt\":\"" + START + "\",\"endAt\":\"" + END + "\"}";
+        String created = mockMvc.perform(post("/api/v1/weekly-plans/" + plan + "/blocks")
+                        .header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON).content(createBody))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        UUID blockId = UUID.fromString(JsonPath.read(created, "$.data.planBlockId"));
+        UUID scheduleId = UUID.fromString(JsonPath.read(created, "$.data.scheduleId"));
+
+        mockMvc.perform(patch("/api/v1/plan-blocks/" + blockId).header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"startAt\":\"2026-08-03T05:00:00Z\",\"endAt\":\"2026-08-03T06:00:00Z\"}"))
+                .andExpect(status().isOk());
+
+        // 버그였던 부분 — 일정(schedules)도 블록을 따라 새 시각으로 바뀐다
+        Instant scheduleStart = jdbc.queryForObject("SELECT start_at FROM schedules WHERE schedule_id = ?",
+                Timestamp.class, scheduleId).toInstant();
+        assertThat(scheduleStart).isEqualTo(Instant.parse("2026-08-03T05:00:00Z"));
+
+        // 아웃바운드 큐에 이 일정의 작업이 쌓여 다음 동기화에서 구글로 나갈 준비가 됐다
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM outbound_calendar_ops WHERE target_type = 'SCHEDULE' AND target_id = ? AND status = 'PENDING'",
+                Integer.class, scheduleId)).isGreaterThanOrEqualTo(1);
     }
 
     @Test
@@ -291,6 +325,20 @@ class PlanBlockMoveApiTest {
                 INSERT INTO user_profiles (profile_id, user_id, name, purpose, timezone, week_start_day)
                 VALUES (?, ?, '테스트', '테스트', 'Asia/Seoul', 'MON') ON CONFLICT (user_id) DO NOTHING
                 """, UUID.randomUUID(), id);
+    }
+
+    /** 쓰기 가능한 구글 연동 — 아웃바운드 큐가 실제로 쌓이려면 대상 연동·캘린더가 있어야 한다. */
+    private UUID insertWritableGoogleConnection(UUID userId) {
+        UUID id = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO external_calendar_connections
+                    (connection_id, user_id, provider, account_identifier, sync_mode, status,
+                     connected_at, created_at, access_token_enc, refresh_token_enc, granted_scope, write_calendar_id)
+                VALUES (?, ?, 'GOOGLE', 'tester@gmail.com', 'MANUAL', 'ACTIVE', ?, ?, 'enc', 'renc',
+                        'openid email https://www.googleapis.com/auth/calendar.events', 'primary')
+                """, id, userId, OffsetDateTime.ofInstant(BASE, ZoneOffset.UTC),
+                OffsetDateTime.ofInstant(BASE, ZoneOffset.UTC));
+        return id;
     }
 
     private UUID insertProject(UUID userId, String name) {
