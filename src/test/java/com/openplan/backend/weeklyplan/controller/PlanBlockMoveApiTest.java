@@ -1,6 +1,9 @@
 package com.openplan.backend.weeklyplan.controller;
 
 import com.jayway.jsonpath.JsonPath;
+import com.openplan.backend.externalcalendar.outbound.OutboundCalendarOp;
+import com.openplan.backend.externalcalendar.outbound.OutboundCalendarOpRepository;
+import com.openplan.backend.externalcalendar.outbound.OutboundTargetType;
 import com.openplan.backend.support.FixedClockConfig;
 import com.openplan.backend.support.TestcontainersConfig;
 import com.openplan.backend.task.domain.TaskStatus;
@@ -17,10 +20,12 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -51,6 +56,8 @@ class PlanBlockMoveApiTest {
     private MockMvc mockMvc;
     @Autowired
     private JdbcTemplate jdbc;
+    @Autowired
+    private OutboundCalendarOpRepository outboundOpRepository;
 
     private UUID project;
 
@@ -63,6 +70,7 @@ class PlanBlockMoveApiTest {
         jdbc.update("DELETE FROM tasks WHERE project_id IN "
                 + "(SELECT project_id FROM projects WHERE user_id IN (?, ?))", MAIN, OTHER);
         jdbc.update("DELETE FROM weekly_plans WHERE user_id IN (?, ?)", MAIN, OTHER);
+        jdbc.update("DELETE FROM external_calendar_connections WHERE user_id IN (?, ?)", MAIN, OTHER);
         jdbc.update("DELETE FROM schedules WHERE user_id IN (?, ?)", MAIN, OTHER);
         jdbc.update("DELETE FROM projects WHERE user_id IN (?, ?)", MAIN, OTHER);
         project = insertProject(MAIN, "프로젝트");
@@ -87,6 +95,68 @@ class PlanBlockMoveApiTest {
 
         assertThat(jdbc.queryForObject("SELECT total_planned_minutes FROM weekly_plans WHERE weekly_plan_id = ?",
                 Integer.class, plan)).isEqualTo(60);
+    }
+
+    @Test
+    @DisplayName("SCHEDULE 블록 이동 — 연결된 일정 시각도 같이 바뀌고 아웃바운드 큐에 쌓인다 (버그 수정 회귀)")
+    void movingScheduleBlockRelocatesScheduleAndQueuesOutbound() throws Exception {
+        UUID plan = insertWeeklyPlan(MAIN, WEEK, "DRAFT", null);
+        insertWritableGoogleConnection(MAIN);
+
+        String createBody = "{\"blockType\":\"SCHEDULE\",\"schedule\":{\"title\":\"통원\","
+                + "\"estimatedMinutes\":60,\"priority\":2},\"startAt\":\"" + START + "\",\"endAt\":\"" + END + "\"}";
+        String created = mockMvc.perform(post("/api/v1/weekly-plans/" + plan + "/blocks")
+                        .header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON).content(createBody))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        UUID blockId = UUID.fromString(JsonPath.read(created, "$.data.planBlockId"));
+        UUID scheduleId = UUID.fromString(JsonPath.read(created, "$.data.scheduleId"));
+
+        mockMvc.perform(patch("/api/v1/plan-blocks/" + blockId).header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"startAt\":\"2026-08-03T05:00:00Z\",\"endAt\":\"2026-08-03T06:00:00Z\"}"))
+                .andExpect(status().isOk());
+
+        // 버그였던 부분 — 일정(schedules)도 블록을 따라 새 시각으로 바뀐다
+        Instant scheduleStart = jdbc.queryForObject("SELECT start_at FROM schedules WHERE schedule_id = ?",
+                Timestamp.class, scheduleId).toInstant();
+        assertThat(scheduleStart).isEqualTo(Instant.parse("2026-08-03T05:00:00Z"));
+
+        // 아웃바운드 큐에 쌓인 작업의 payload 가 실제로 새 시각을 담고 있는지까지 — count만 보면
+        // 생성 시 쌓인 PENDING CREATE가 replacePayload로 옛 시각을 그대로 들고 있어도 통과해 버린다.
+        List<OutboundCalendarOp> queued = outboundOpRepository.findUnsentByTarget(
+                OutboundTargetType.SCHEDULE, scheduleId);
+        assertThat(queued).hasSize(1);
+        assertThat(queued.get(0).getPayload().startAt()).isEqualTo(Instant.parse("2026-08-03T05:00:00Z"));
+        assertThat(queued.get(0).getPayload().endAt()).isEqualTo(Instant.parse("2026-08-03T06:00:00Z"));
+    }
+
+    @Test
+    @DisplayName("SCHEDULE 블록 — 시각 미동봉(주차만 이동)이면 일정·아웃바운드 큐를 건드리지 않는다")
+    void movingScheduleBlockWithoutTimeChangeSkipsRelocate() throws Exception {
+        UUID plan = insertWeeklyPlan(MAIN, WEEK, "DRAFT", null);
+        insertWritableGoogleConnection(MAIN);
+
+        String createBody = "{\"blockType\":\"SCHEDULE\",\"schedule\":{\"title\":\"통원\","
+                + "\"estimatedMinutes\":60,\"priority\":2},\"startAt\":\"" + START + "\",\"endAt\":\"" + END + "\"}";
+        String created = mockMvc.perform(post("/api/v1/weekly-plans/" + plan + "/blocks")
+                        .header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON).content(createBody))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        UUID blockId = UUID.fromString(JsonPath.read(created, "$.data.planBlockId"));
+        UUID scheduleId = UUID.fromString(JsonPath.read(created, "$.data.scheduleId"));
+
+        // 시각 없이 같은 주 안에서의 "이동"만 요청(실질적으로 아무 필드도 안 바뀜) — 생성 시 쌓인
+        // PENDING 작업 1건 외에 더 쌓이지 않아야 한다.
+        mockMvc.perform(patch("/api/v1/plan-blocks/" + blockId).header("X-Dev-User", MAIN.toString())
+                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isOk());
+
+        assertThat(jdbc.queryForObject("SELECT start_at FROM schedules WHERE schedule_id = ?",
+                Timestamp.class, scheduleId).toInstant()).isEqualTo(Instant.parse(START));
+        assertThat(outboundOpRepository.findUnsentByTarget(OutboundTargetType.SCHEDULE, scheduleId)).hasSize(1);
     }
 
     @Test
@@ -291,6 +361,20 @@ class PlanBlockMoveApiTest {
                 INSERT INTO user_profiles (profile_id, user_id, name, purpose, timezone, week_start_day)
                 VALUES (?, ?, '테스트', '테스트', 'Asia/Seoul', 'MON') ON CONFLICT (user_id) DO NOTHING
                 """, UUID.randomUUID(), id);
+    }
+
+    /** 쓰기 가능한 구글 연동 — 아웃바운드 큐가 실제로 쌓이려면 대상 연동·캘린더가 있어야 한다. */
+    private UUID insertWritableGoogleConnection(UUID userId) {
+        UUID id = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO external_calendar_connections
+                    (connection_id, user_id, provider, account_identifier, sync_mode, status,
+                     connected_at, created_at, access_token_enc, refresh_token_enc, granted_scope, write_calendar_id)
+                VALUES (?, ?, 'GOOGLE', 'tester@gmail.com', 'MANUAL', 'ACTIVE', ?, ?, 'enc', 'renc',
+                        'openid email https://www.googleapis.com/auth/calendar.events', 'primary')
+                """, id, userId, OffsetDateTime.ofInstant(BASE, ZoneOffset.UTC),
+                OffsetDateTime.ofInstant(BASE, ZoneOffset.UTC));
+        return id;
     }
 
     private UUID insertProject(UUID userId, String name) {
