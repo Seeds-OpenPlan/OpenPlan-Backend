@@ -189,6 +189,10 @@ public class PlanBlockService {
      *   <li><b>시각(PLAN-19)</b>: startAt/endAt 병합 후 5분 단위·start&lt;end 검증(E-COM-009·E-PLAN-002).</li>
      *   <li><b>주차 이동(PLAN-20)</b>: targetWeekStartDate가 오면 대상 주 계획을 get-or-create해 블록을 옮긴다.
      *       원본·대상 계획 both 확정이면 DRAFT 복귀, 양쪽 주 total을 재계산한다.</li>
+     *   <li><b>SCHEDULE 블록이면 연결된 일정도 같이 옮기고 외부로 내보낸다</b> — 구글→OpenPlan 방향은
+     *       {@code ScheduleInboundReconciler.applyExternalEdit}가 이미 "일정이 옮겨지면 블록도 따라간다"를
+     *       구현해 두었는데, 반대 방향(OpenPlan에서 블록을 드래그)만 일정·아웃바운드 큐에 빠져 있던 것을
+     *       채운다(#69 대칭). 안 채우면 구글 쪽 일정 시각이 영원히 옛 값으로 남는다.</li>
      * </ul>
      * 부재·타인 블록 → 404. 겹침·가용초과는 막지 않는다(검증 엔진 소관).
      */
@@ -211,6 +215,16 @@ public class PlanBlockService {
             requireFiveMinuteAligned(endAt, "endAt");
         }
 
+        // SCHEDULE 블록이면 연결된 일정 시각도 같이 옮긴다 — flush 전에(아래 reschedule의
+        // clearAutomatically가 컨텍스트를 비우기 전에) dirty update로 반영해야 한다.
+        Schedule schedule = null;
+        if (block.getBlockType() == PlanBlockType.SCHEDULE) {
+            schedule = scheduleRepository.findById(block.getScheduleId()).orElse(null);
+            if (schedule != null) {
+                schedule.relocate(startAt, endAt);
+            }
+        }
+
         UUID sourcePlanId = block.getWeeklyPlanId();
         UUID targetPlanId = sourcePlanId;
 
@@ -224,8 +238,13 @@ public class PlanBlockService {
         // 원본 계획 확정 편집 재개 → DRAFT
         weeklyPlanRepository.findById(sourcePlanId).ifPresent(WeeklyPlan::reopenToDraftIfConfirmed);
 
-        planBlockRepository.flush(); // reopen(엔티티) 반영 후 벌크 UPDATE (clearAutomatically로 컨텍스트 비움)
+        planBlockRepository.flush(); // reopen·일정 시각(엔티티) 반영 후 벌크 UPDATE (clearAutomatically로 컨텍스트 비움)
         planBlockRepository.reschedule(blockId, startAt, endAt, targetPlanId);
+
+        if (schedule != null) {
+            // 밖으로 내보낼 것을 적기만 한다 — 외부 호출은 다음 동기화가 한다(#69 D5, 생성·편집과 동일 관례).
+            outboundQueue.enqueueScheduleUpsert(userId, schedule);
+        }
 
         // 재계산 — 주차 이동이면 원본·대상 both, 아니면 원본만
         List<UUID> affected = new ArrayList<>();
