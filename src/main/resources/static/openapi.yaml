@@ -1755,7 +1755,7 @@ paths:
     get:
       tags: [weekly-plans]
       operationId: getWeeklyPlanView
-      summary: "주간 화면 조립 응답 (현재 계획+블록 — 고정일정·가용시간·검증요약은 후속 편입, NFR-011/024)"
+      summary: "주간 화면 조립 응답 (현재 계획+블록+고정일정(activeThisWeek, 이슈 #90) — 가용시간·검증요약은 후속 편입, NFR-011/024)"
       x-lane: BE-2
       x-user-stories: [PLAN-01, PLAN-02, PLAN-04, PLAN-05, PLAN-21]
       parameters:

@@ -18,6 +18,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
@@ -59,16 +60,19 @@ class PlanBlockBatchApiTest {
                 + "(SELECT project_id FROM projects WHERE user_id IN (?, ?))", MAIN, OTHER);
         jdbc.update("DELETE FROM weekly_plans WHERE user_id IN (?, ?)", MAIN, OTHER);
         jdbc.update("DELETE FROM schedules WHERE user_id IN (?, ?)", MAIN, OTHER);
+        jdbc.update("DELETE FROM fixed_schedules WHERE user_id IN (?, ?)", MAIN, OTHER);
         jdbc.update("DELETE FROM projects WHERE user_id IN (?, ?)", MAIN, OTHER);
         project = insertProject(MAIN, "프로젝트");
     }
 
     @Test
-    @DisplayName("CREATE 2건 일괄 → 200 · 블록 2개 생성 · WeeklyPlanView(data.plan·blocks) 반환 · total=240")
+    @DisplayName("CREATE 2건 일괄 → 200 · 블록 2개 생성 · WeeklyPlanView(data.plan·blocks·fixedSchedules) 반환 · total=240")
     void batchCreate() throws Exception {
         UUID plan = insertWeeklyPlan(MAIN, WEEK);
         UUID task1 = insertTask(project, "태스크1", TaskStatus.UNASSIGNED);
         UUID task2 = insertTask(project, "태스크2", TaskStatus.UNASSIGNED);
+        // WEEK(2026-08-03)은 월요일 — 이 고정 일정이 그 주에 걸쳐 응답 fixedSchedules에 실려야 한다(이슈 #90).
+        insertFixedSchedule(MAIN, "고정수업", "MON", "07:00", "08:00");
 
         String body = """
                 {"operations":[
@@ -82,7 +86,9 @@ class PlanBlockBatchApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.plan.weeklyPlanId").value(plan.toString()))
                 .andExpect(jsonPath("$.data.plan.placedBlockCount").value(2))
-                .andExpect(jsonPath("$.data.blocks.length()").value(2));
+                .andExpect(jsonPath("$.data.blocks.length()").value(2))
+                .andExpect(jsonPath("$.data.fixedSchedules.length()").value(1)) // 이슈 #90 — 블록 배치와 무관하게 조립
+                .andExpect(jsonPath("$.data.fixedSchedules[0].activeThisWeek").value(true));
 
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM plan_blocks WHERE weekly_plan_id = ?",
                 Integer.class, plan)).isEqualTo(2);
@@ -353,6 +359,18 @@ class PlanBlockBatchApiTest {
                                           total_planned_minutes, status, confirmed_at, version, created_at)
                 VALUES (?, ?, ?, ?, 0, 'DRAFT', NULL, 0, ?)
                 """, id, userId, weekStart, weekStart.plusDays(6), OffsetDateTime.ofInstant(BASE, ZoneOffset.UTC));
+        return id;
+    }
+
+    /** 고정 일정 직접 삽입(이슈 #90 WeeklyPlanView.fixedSchedules 단정용) — MANUAL·ACTIVE·기간 무제한. */
+    private UUID insertFixedSchedule(UUID userId, String title, String weekday, String startTime, String endTime) {
+        UUID id = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO fixed_schedules (fixed_schedule_id, user_id, title, weekday, start_time, end_time,
+                                             start_date, end_date, source, status, version, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, 'MANUAL', 'ACTIVE', 0, ?)
+                """, id, userId, title, weekday, LocalTime.parse(startTime), LocalTime.parse(endTime),
+                OffsetDateTime.ofInstant(BASE, ZoneOffset.UTC));
         return id;
     }
 }

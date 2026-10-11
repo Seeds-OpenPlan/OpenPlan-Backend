@@ -63,19 +63,22 @@ class ReplanApplyApiTest {
                 + "(SELECT project_id FROM projects WHERE user_id IN (?, ?))", MAIN, OTHER);
         jdbc.update("DELETE FROM weekly_plans WHERE user_id IN (?, ?)", MAIN, OTHER);
         jdbc.update("DELETE FROM availability_patterns WHERE user_id IN (?, ?)", MAIN, OTHER);
+        jdbc.update("DELETE FROM fixed_schedules WHERE user_id IN (?, ?)", MAIN, OTHER);
         jdbc.update("DELETE FROM projects WHERE user_id IN (?, ?)", MAIN, OTHER);
         project = insertProject(MAIN, "프로젝트");
         insertAvailability(MAIN, "MON", "09:00", "18:00");
     }
 
     @Test
-    @DisplayName("대안 적용 → 200 · 겹쳤던 블록이 대안대로 이동 · is_selected 기록 · DRAFT 유지")
+    @DisplayName("대안 적용 → 200 · 겹쳤던 블록이 대안대로 이동 · is_selected 기록 · DRAFT 유지 · fixedSchedules 동봉(이슈 #90)")
     void applyMovesBlocksAndRecordsSelection() throws Exception {
         UUID plan = insertWeeklyPlan(MAIN, WEEK);
         UUID t1 = insertTask(project, "태스크1", 1, 60);
         UUID t2 = insertTask(project, "태스크2", 2, 60);
         insertTaskBlock(plan, t1, at(9, 0), at(10, 0));
         UUID block2 = insertTaskBlock(plan, t2, at(9, 30), at(10, 30)); // 겹침
+        // WEEK(2026-08-03)는 월요일 — 대안 적용 응답에도 그 주 고정 일정이 동봉돼야 한다(이슈 #90).
+        insertFixedSchedule(MAIN, "고정수업", "MON", "07:00", "08:00");
 
         // 대안 생성 → MINIMAL_CHANGE의 optionId 확보
         String genJson = mockMvc.perform(post(gen(plan)).header("X-Dev-User", MAIN.toString()))
@@ -89,7 +92,9 @@ class ReplanApplyApiTest {
                 .andExpect(jsonPath("$.data.plan.status").value("DRAFT")) // 확정 아님
                 .andExpect(jsonPath("$.data.blocks.length()").value(2))
                 // JDBC 재계산분이 1차 캐시에 가려지지 않는지 — plan은 진입부에서 이미 컨텍스트에 올라가 있다
-                .andExpect(jsonPath("$.data.plan.totalPlannedMinutes").value(120)); // 60 + 60
+                .andExpect(jsonPath("$.data.plan.totalPlannedMinutes").value(120)) // 60 + 60
+                .andExpect(jsonPath("$.data.fixedSchedules.length()").value(1))
+                .andExpect(jsonPath("$.data.fixedSchedules[0].activeThisWeek").value(true));
 
         // 겹쳤던 block2가 KST 10:00(09:30에서 이동)으로 옮겨짐 (MINIMAL_CHANGE 결과).
         // timestamptz를 Instant로 받아 시각 비교(문자열 포맷은 세션 타임존 영향).
@@ -240,6 +245,18 @@ class ReplanApplyApiTest {
                                           total_planned_minutes, status, confirmed_at, version, created_at)
                 VALUES (?, ?, ?, ?, 0, 'DRAFT', NULL, 0, ?)
                 """, id, userId, weekStart, weekStart.plusDays(6), OffsetDateTime.ofInstant(BASE, ZoneOffset.UTC));
+        return id;
+    }
+
+    /** 고정 일정 직접 삽입(이슈 #90 WeeklyPlanView.fixedSchedules 단정용) — MANUAL·ACTIVE·기간 무제한. */
+    private UUID insertFixedSchedule(UUID userId, String title, String weekday, String startTime, String endTime) {
+        UUID id = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO fixed_schedules (fixed_schedule_id, user_id, title, weekday, start_time, end_time,
+                                             start_date, end_date, source, status, version, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, 'MANUAL', 'ACTIVE', 0, ?)
+                """, id, userId, title, weekday, LocalTime.parse(startTime), LocalTime.parse(endTime),
+                OffsetDateTime.ofInstant(BASE, ZoneOffset.UTC));
         return id;
     }
 }

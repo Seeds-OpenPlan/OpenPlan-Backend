@@ -44,4 +44,18 @@ public interface FixedScheduleWeekExceptionRepository extends JpaRepository<Fixe
      */
     @Query("select e.weekStartDate from FixedScheduleWeekException e where e.fixedScheduleId = :fixedScheduleId")
     List<LocalDate> findWeekStartDatesByFixedScheduleId(@Param("fixedScheduleId") UUID fixedScheduleId);
+
+    /**
+     * 주어진 고정 일정 후보들 중 그 주({@code weekStartDate}) 예외가 있는 id만 (이슈 #90 — 주간 화면
+     * {@code activeThisWeek} 판정). <b>한 번에 조회</b> — 고정 일정 수만큼 "이 주 예외 있나" 쿼리를
+     * 반복하면 N+1이 되므로, 후보 id 목록을 통째로 넘겨 한 쿼리로 집합을 받는다
+     * ({@link #findWeekStartDatesByFixedScheduleId}와 같은 "주 수만큼 쿼리 금지" 원칙을 id 축으로 적용).
+     *
+     * @param fixedScheduleIds 호출자가 이미 사용자 스코프로 조회한 후보(보통 {@code findOverlappingWeek}
+     *                         결과) — 빈 목록이면 호출하지 않는다(IN () 은 방언에 따라 오류).
+     */
+    @Query("select e.fixedScheduleId from FixedScheduleWeekException e "
+            + "where e.weekStartDate = :weekStartDate and e.fixedScheduleId in :fixedScheduleIds")
+    List<UUID> findFixedScheduleIdsWithExceptionInWeek(@Param("weekStartDate") LocalDate weekStartDate,
+                                                        @Param("fixedScheduleIds") List<UUID> fixedScheduleIds);
 }
