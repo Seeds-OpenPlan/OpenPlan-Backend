@@ -1,20 +1,24 @@
--- ADR-0015 — 시작 10분 전 푸시 알림. 신규 도메인 3테이블(push 네임스페이스), DB 변경 전부
+-- ADR-0015 — 시작 N분 전 푸시 알림(사용자가 고른 시간 · 기본 10분). 신규 도메인 3테이블(push 네임스페이스), DB 변경 전부
 -- 이 파일 하나로 끝난다(알림 기존 5유형·notification_settings 는 손대지 않는다 — ADR-0014 유지).
 --
 -- 설계 요지(ADR-0015 결정 ⑥·③·④):
---   · push_settings  — 사용자 × 토글 3종. 행이 없으면 **전부 꺼짐**으로 읽는다(기본값과 동일 — 지연 시드 불필요,
---     notification_settings 처럼 NOT NULL FK 를 충족시킬 이유가 없다).
+--   · push_settings  — 사용자 × 토글 3종 + 알림 시간 1개. 행이 없으면 **전부 켜짐 · 10분 전**으로 읽는다
+--     (기본값과 동일 — 지연 시드 불필요, notification_settings 처럼 NOT NULL FK 를 충족시킬 이유가 없다).
+--     알림 시간은 정해진 보기 중 하나다(2026-10-11 사용자 결정 — ADR-0015 개정).
 --   · push_subscriptions — 기기 1대 = 1행(endpoint UNIQUE). 기기를 바꾸면 새 행, 구독 해지(404/410)는 행 삭제.
 --   · push_deliveries — "한 번만 보낸다"의 유일한 메커니즘. UNIQUE(user_id,target_type,target_id,start_at)에
 --     INSERT 하고 충돌하면 보내지 않는다 — 발송 성공/실패와 무관하게 **보내기 전에 미리 찍는다**(결정 ③).
 
 CREATE TABLE push_settings (
     user_id                 UUID        PRIMARY KEY REFERENCES users (user_id) ON DELETE CASCADE,
-    task_enabled            BOOLEAN     NOT NULL DEFAULT false,
-    fixed_schedule_enabled  BOOLEAN     NOT NULL DEFAULT false,
-    schedule_enabled        BOOLEAN     NOT NULL DEFAULT false,
+    task_enabled            BOOLEAN     NOT NULL DEFAULT true,
+    fixed_schedule_enabled  BOOLEAN     NOT NULL DEFAULT true,
+    schedule_enabled        BOOLEAN     NOT NULL DEFAULT true,
+    lead_minutes            INTEGER     NOT NULL DEFAULT 10,
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
-    created_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- 보기 목록은 PushLeadTime.ALLOWED_MINUTES 와 1:1. 하나를 늘리면 둘을 함께 고친다.
+    CONSTRAINT ck_push_settings_lead_minutes CHECK (lead_minutes IN (0, 5, 10, 15, 30, 60))
 );
 
 CREATE TABLE push_subscriptions (

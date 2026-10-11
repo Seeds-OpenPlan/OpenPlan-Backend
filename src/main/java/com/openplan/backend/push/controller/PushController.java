@@ -29,7 +29,7 @@ import java.util.UUID;
  * 소유 도메인(push) 기준으로 여기 둔다.
  */
 @RestController
-@Tag(name = "push", description = "시작 10분 전 푸시 알림 (ADR-0015)")
+@Tag(name = "push", description = "시작 N분 전 푸시 알림 (ADR-0015)")
 public class PushController {
 
     private final PushSettingService settingService;
@@ -44,13 +44,13 @@ public class PushController {
     }
 
     @GetMapping("/users/me/push-settings")
-    @Operation(summary = "푸시 설정 조회 — 3토글, 행이 없으면 전부 꺼짐")
+    @Operation(summary = "푸시 설정 조회 — 3토글 + 알림 시간, 행이 없으면 전부 켜짐 · 10분 전")
     public ApiResponse<PushSettingResponse> getSettings(@CurrentUser UUID userId) {
         return ApiResponse.ok(settingService.getSettings(userId));
     }
 
     @PutMapping("/users/me/push-settings")
-    @Operation(summary = "푸시 설정 저장 — 3토글 전부 전송(부분 저장 없음)")
+    @Operation(summary = "푸시 설정 저장 — 3토글 + 알림 시간 전부 전송(부분 저장 없음), 보기 밖 알림 시간은 422")
     public ApiResponse<PushSettingResponse> saveSettings(@CurrentUser UUID userId,
                                                          @Valid @RequestBody SavePushSettingsRequest request) {
         return ApiResponse.ok(settingService.saveSettings(userId, request));

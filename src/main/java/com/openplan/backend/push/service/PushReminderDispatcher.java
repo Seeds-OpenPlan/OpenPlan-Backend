@@ -6,6 +6,7 @@ import com.openplan.backend.common.WeekRange;
 import com.openplan.backend.common.Weekday;
 import com.openplan.backend.global.time.UserClock;
 import com.openplan.backend.push.domain.PushDeliveryTargetType;
+import com.openplan.backend.push.domain.PushLeadTime;
 import com.openplan.backend.push.domain.PushSubscription;
 import com.openplan.backend.push.infra.VapidProperties;
 import com.openplan.backend.push.repository.PushDeliveryRepository;
@@ -30,11 +31,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 /**
- * 시작 10분 전 푸시 발송기 (ADR-0015) — ADR-0006 스케줄러 금지를 이 한 곳에서만 푼다(결정 ①).
+ * 시작 N분 전 푸시 발송기 (ADR-0015) — ADR-0006 스케줄러 금지를 이 한 곳에서만 푼다(결정 ①).
  *
- * <p><b>창(window)과 선행시간 환산</b>: 발송 시각 = 시작 − 10분, 매 틱 창 = {@code (now−5분, now]}
- * (결정 ②). 이를 {@code start_at}의 범위로 바꾸면 {@code (now+5분, now+10분]}과 같다 — "이미 시작한
- * 대상 제외"(start_at ≤ now)는 이 범위 안에 자동으로 포함된다(now+5분 > now).
+ * <p><b>창(window)</b>: 발송 시각 = 시작 − 사용자가 고른 알림 시간({@link PushLeadTime}, 2026-10-11 개정),
+ * 매 틱 창 = {@code (now−5분, now]}(결정 ②). 사용자마다 알림 시간이 달라 창을 <b>발송 시각</b>에 건다 —
+ * 시작 시각 범위 하나로는 거를 수 없다. 알림 시간이 0(정각)이 아니면 "이미 시작한 대상 제외"는 창 안에
+ * 자동으로 포함되고, 정각이면 창이 늦어도 5분까지만 따라잡는다.
  *
  * <p><b>예외는 대상 1건 단위로 가둔다</b> — 한 사용자·한 블록의 발송 실패가 같은 틱의 다른 대상까지
  * 막으면 안 된다({@link #dispatch}). 틱 전체를 감싸는 바깥 try/catch({@link #tick})는 대상 조회 자체가
@@ -46,7 +48,6 @@ public class PushReminderDispatcher {
 
     private static final Logger log = LoggerFactory.getLogger(PushReminderDispatcher.class);
 
-    private static final Duration LEAD_TIME = Duration.ofMinutes(10); // 사용자 결정 — 고정, 선택 불가
     private static final Duration WINDOW = Duration.ofMinutes(5);     // 재배포로 놓친 회차를 따라잡는 여유(결정 ②)
 
     private final VapidProperties vapidProperties;
@@ -92,24 +93,26 @@ public class PushReminderDispatcher {
             return;
         }
         Instant now = clock.now();
-        Instant lowerExclusive = now.plus(LEAD_TIME).minus(WINDOW);
-        Instant upperInclusive = now.plus(LEAD_TIME);
+        Instant sendLowerExclusive = now.minus(WINDOW);
+        Instant sendUpperInclusive = now;
 
-        for (PushTargetReader.PushTarget t : targetReader.taskTargets(lowerExclusive, upperInclusive)) {
-            dispatch(t.userId(), PushDeliveryTargetType.TASK, t.targetId(), t.startAt(), t.title());
+        for (PushTargetReader.PushTarget t : targetReader.taskTargets(sendLowerExclusive, sendUpperInclusive)) {
+            dispatch(t.userId(), PushDeliveryTargetType.TASK, t.targetId(), t.startAt(), t.title(), t.leadMinutes());
         }
-        for (PushTargetReader.PushTarget t : targetReader.scheduleTargets(lowerExclusive, upperInclusive)) {
-            dispatch(t.userId(), PushDeliveryTargetType.SCHEDULE, t.targetId(), t.startAt(), t.title());
+        for (PushTargetReader.PushTarget t : targetReader.scheduleTargets(sendLowerExclusive, sendUpperInclusive)) {
+            dispatch(t.userId(), PushDeliveryTargetType.SCHEDULE, t.targetId(), t.startAt(), t.title(),
+                    t.leadMinutes());
         }
-        dispatchFixedSchedules(lowerExclusive, upperInclusive);
+        dispatchFixedSchedules(sendLowerExclusive, sendUpperInclusive);
     }
 
     /**
      * 고정 일정은 요일 반복이라 SQL로 "그 날짜의 회차"를 바로 거를 수 없다 — 활성 후보를 받아 사용자
-     * zone에서 날짜를 펼치고(결정 ②), 그 날짜가 창에 드는 절대 시각을 만든 뒤에야 판정할 수 있다.
-     * 창이 사용자 zone의 자정을 넘는 경우를 대비해 창의 시작·끝 각각의 zone-local 날짜를 모두 훑는다.
+     * zone에서 날짜를 펼치고(결정 ②), 그 회차의 발송 시각(시작 − 알림 시간)이 창에 드는지 판정한다.
+     * 회차의 시작은 발송 창보다 알림 시간만큼 뒤라, 창 시작의 날짜부터 <b>창 끝 + 알림 시간</b>의 날짜까지
+     * zone-local 날짜를 모두 훑는다(사용자 zone의 자정을 넘는 경우 대비).
      */
-    private void dispatchFixedSchedules(Instant lowerExclusive, Instant upperInclusive) {
+    private void dispatchFixedSchedules(Instant sendLowerExclusive, Instant sendUpperInclusive) {
         List<PushTargetReader.FixedScheduleCandidate> candidates = targetReader.fixedScheduleCandidates();
         if (candidates.isEmpty()) {
             return;
@@ -124,24 +127,29 @@ public class PushReminderDispatcher {
             UUID userId = entry.getKey();
             ZoneId zone = clock.zoneOf(userId);
             Weekday weekStartDay = clock.weekStartDayOf(userId);
-            LocalDate dateAtLower = lowerExclusive.atZone(zone).toLocalDate();
-            LocalDate dateAtUpper = upperInclusive.atZone(zone).toLocalDate();
-
             for (PushTargetReader.FixedScheduleCandidate c : entry.getValue()) {
+                Duration lead = Duration.ofMinutes(c.leadMinutes());
+                Instant startLowerExclusive = sendLowerExclusive.plus(lead);
+                Instant startUpperInclusive = sendUpperInclusive.plus(lead);
+                LocalDate dateAtLower = startLowerExclusive.atZone(zone).toLocalDate();
+                LocalDate dateAtUpper = startUpperInclusive.atZone(zone).toLocalDate();
                 Set<LocalDate> exceptions = exceptionsByScheduleId.getOrDefault(c.fixedScheduleId(), Set.of());
                 for (LocalDate date = dateAtLower; !date.isAfter(dateAtUpper); date = date.plusDays(1)) {
                     Instant occurrenceStart = occurrenceStartIfInWindow(c, date, zone, weekStartDay, exceptions,
-                            lowerExclusive, upperInclusive);
+                            startLowerExclusive, startUpperInclusive);
                     if (occurrenceStart != null) {
                         dispatch(userId, PushDeliveryTargetType.FIXED_SCHEDULE, c.fixedScheduleId(),
-                                occurrenceStart, c.title());
+                                occurrenceStart, c.title(), c.leadMinutes());
                     }
                 }
             }
         }
     }
 
-    /** @return 그 날짜의 회차가 창에 들면 절대 시작 시각, 아니면 null(요일 불일치·기간 밖·주차 예외·창 밖). */
+    /**
+     * @param lowerExclusive 시작 시각 기준 창(발송 창 + 알림 시간) — 이 후보의 알림 시간으로 이미 옮겨 놓은 값이다.
+     * @return 그 날짜의 회차가 창에 들면 절대 시작 시각, 아니면 null(요일 불일치·기간 밖·주차 예외·창 밖).
+     */
     private Instant occurrenceStartIfInWindow(PushTargetReader.FixedScheduleCandidate c, LocalDate date,
                                               ZoneId zone, Weekday weekStartDay, Set<LocalDate> exceptions,
                                               Instant lowerExclusive, Instant upperInclusive) {
@@ -172,7 +180,8 @@ public class PushReminderDispatcher {
      * 멱등 게이트 → 구독 전체 발송. 대상 1건의 실패가 다른 대상에 번지지 않도록 여기서 가둔다
      * (ADR-0015 — 디스패처는 예외로 죽지 않는다).
      */
-    private void dispatch(UUID userId, PushDeliveryTargetType type, UUID targetId, Instant startAt, String title) {
+    private void dispatch(UUID userId, PushDeliveryTargetType type, UUID targetId, Instant startAt, String title,
+                          int leadMinutes) {
         try {
             boolean firstTime = deliveryRepository.tryMark(userId, type.name(), targetId, startAt, clock.now());
             if (!firstTime) {
@@ -182,7 +191,7 @@ public class PushReminderDispatcher {
             if (subscriptions.isEmpty()) {
                 return; // 조회(결정 ②의 EXISTS)와 발송 사이에 해지된 경우 — push_deliveries는 이미 찍혀 무해
             }
-            String payload = buildPayload(type, targetId, title, startAt, userId);
+            String payload = buildPayload(type, targetId, title, startAt, leadMinutes, userId);
             for (PushSubscription subscription : subscriptions) {
                 WebPushSender.Outcome outcome = sender.send(subscription, payload);
                 if (outcome == WebPushSender.Outcome.SUBSCRIPTION_GONE) {
@@ -195,12 +204,12 @@ public class PushReminderDispatcher {
     }
 
     private String buildPayload(PushDeliveryTargetType type, UUID targetId, String title, Instant startAt,
-                                UUID userId) {
+                                int leadMinutes, UUID userId) {
         ZoneId zone = clock.zoneOf(userId);
         String time = DateTimeFormatter.ofPattern("HH:mm").format(startAt.atZone(zone));
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("title", title);
-        payload.put("body", "10분 뒤 시작합니다 · " + time);
+        payload.put("body", PushLeadTime.phrase(leadMinutes) + " · " + time);
         payload.put("url", "/weekly");
         payload.put("tag", type.name().toLowerCase(Locale.ROOT) + ":" + targetId + ":" + startAt.getEpochSecond());
         try {

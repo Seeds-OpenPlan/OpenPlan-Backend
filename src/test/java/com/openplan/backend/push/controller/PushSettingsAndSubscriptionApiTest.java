@@ -53,13 +53,14 @@ class PushSettingsAndSubscriptionApiTest {
     // ---------------------------------------------------------------- 설정
 
     @Test
-    @DisplayName("행이 없으면 3토글 전부 false")
-    void defaultAllOff() throws Exception {
+    @DisplayName("행이 없으면 3토글 전부 true · 알림 시간 10분(2026-10-11 사용자 결정)")
+    void defaultAllOnTenMinutes() throws Exception {
         mockMvc.perform(as(get("/api/v1/users/me/push-settings"), MAIN))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.taskEnabled").value(false))
-                .andExpect(jsonPath("$.data.fixedScheduleEnabled").value(false))
-                .andExpect(jsonPath("$.data.scheduleEnabled").value(false));
+                .andExpect(jsonPath("$.data.taskEnabled").value(true))
+                .andExpect(jsonPath("$.data.fixedScheduleEnabled").value(true))
+                .andExpect(jsonPath("$.data.scheduleEnabled").value(true))
+                .andExpect(jsonPath("$.data.leadMinutes").value(10));
     }
 
     @Test
@@ -68,15 +69,41 @@ class PushSettingsAndSubscriptionApiTest {
         mockMvc.perform(as(put("/api/v1/users/me/push-settings"), MAIN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"taskEnabled":true,"fixedScheduleEnabled":false,"scheduleEnabled":true}"""))
+                                {"taskEnabled":true,"fixedScheduleEnabled":false,"scheduleEnabled":true,
+                                 "leadMinutes":30}"""))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.taskEnabled").value(true))
-                .andExpect(jsonPath("$.data.scheduleEnabled").value(true));
+                .andExpect(jsonPath("$.data.scheduleEnabled").value(true))
+                .andExpect(jsonPath("$.data.leadMinutes").value(30));
 
         mockMvc.perform(as(get("/api/v1/users/me/push-settings"), MAIN))
                 .andExpect(jsonPath("$.data.taskEnabled").value(true))
                 .andExpect(jsonPath("$.data.fixedScheduleEnabled").value(false))
-                .andExpect(jsonPath("$.data.scheduleEnabled").value(true));
+                .andExpect(jsonPath("$.data.scheduleEnabled").value(true))
+                .andExpect(jsonPath("$.data.leadMinutes").value(30));
+    }
+
+    @Test
+    @DisplayName("알림 시간이 보기(0·5·10·15·30·60) 밖이면 422 E-COM-009 — DB CHECK 까지 가서 500 이 되지 않는다")
+    void saveRejectsLeadMinutesOutsideChoices() throws Exception {
+        mockMvc.perform(as(put("/api/v1/users/me/push-settings"), MAIN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"taskEnabled":true,"fixedScheduleEnabled":true,"scheduleEnabled":true,
+                                 "leadMinutes":7}"""))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.code").value("E-COM-009"))
+                .andExpect(jsonPath("$.error.details.fields[0].field").value("leadMinutes"));
+    }
+
+    @Test
+    @DisplayName("알림 시간을 빼고 보내면 400 — 부분 저장은 없다")
+    void saveRequiresLeadMinutes() throws Exception {
+        mockMvc.perform(as(put("/api/v1/users/me/push-settings"), MAIN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"taskEnabled":true,"fixedScheduleEnabled":true,"scheduleEnabled":true}"""))
+                .andExpect(status().isBadRequest());
     }
 
     // ---------------------------------------------------------------- VAPID 공개키

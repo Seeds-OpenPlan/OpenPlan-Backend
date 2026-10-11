@@ -236,6 +236,69 @@ class PushReminderDispatcherTest {
         assertThat(sender.calls()).as("새 시작에는 다시 보낸다").hasSize(2);
     }
 
+    // ---------------------------------------------------------------- 알림 시간 (2026-10-11 개정)
+
+    @Test
+    @DisplayName("설정 행이 없으면 기본값(전부 켜짐 · 10분 전)으로 보낸다")
+    void noSettingsRowMeansAllOnTenMinutes() {
+        UUID plan = insertWeeklyPlan(USER, "CONFIRMED");
+        UUID task = insertTask(USER, "보고서");
+        insertPlanBlock(plan, "TASK", task, null, IN_WINDOW);
+
+        dispatcher.runOnce();
+
+        assertThat(sender.calls()).hasSize(1);
+        assertThat(sender.calls().get(0).payloadJson()).contains("10분 뒤 시작합니다");
+    }
+
+    @Test
+    @DisplayName("알림 시간 30분: 시작 30분 전 창에서 보내고, 10분 전 창의 블록은 보내지 않는다")
+    void leadThirtyMinutesUsesItsOwnWindow() {
+        setToggles(USER, true, false, false);
+        setLeadMinutes(USER, 30);
+        UUID plan = insertWeeklyPlan(USER, "CONFIRMED");
+        UUID task = insertTask(USER, "보고서");
+        insertPlanBlock(plan, "TASK", task, null, NOW.plusSeconds(28 * 60));   // 발송 시각 now−2분 → 창 안
+        insertPlanBlock(plan, "TASK", task, null, IN_WINDOW);                  // 발송 시각 now−23분 → 창 밖
+
+        dispatcher.runOnce();
+
+        assertThat(sender.calls()).hasSize(1);
+        assertThat(sender.calls().get(0).payloadJson()).contains("30분 뒤 시작합니다");
+    }
+
+    @Test
+    @DisplayName("알림 시간 정각(0분): 막 시작한 일정을 「지금 시작합니다」로 보낸다")
+    void leadZeroSendsAtStart() {
+        setToggles(USER, false, false, true);
+        setLeadMinutes(USER, 0);
+        UUID plan = insertWeeklyPlan(USER, "DRAFT");
+        UUID schedule = insertSchedule(USER, "회의", NOW.minusSeconds(60));
+        insertPlanBlock(plan, "SCHEDULE", null, schedule, NOW.minusSeconds(60));
+
+        dispatcher.runOnce();
+
+        assertThat(sender.calls()).hasSize(1);
+        assertThat(sender.calls().get(0).payloadJson()).contains("지금 시작합니다");
+    }
+
+    @Test
+    @DisplayName("알림 시간 1시간: 고정 일정 회차를 1시간 전에 「1시간 뒤 시작합니다」로 보낸다")
+    void leadSixtyMinutesForFixedSchedule() {
+        setToggles(USER, false, true, false);
+        setLeadMinutes(USER, 60);
+        // FIXED_NOW = 09:00 Asia/Seoul — 10:00 회차의 발송 시각이 바로 지금이다.
+        insertFixedSchedule(USER, "수업", "WED", LocalTime.of(10, 0), null, null);
+        insertFixedSchedule(USER, "다른수업", "WED", LocalTime.of(9, 10), null, null);   // 10분 전 창이라 1시간 설정에선 아니다
+
+        dispatcher.runOnce();
+
+        assertThat(sender.calls()).hasSize(1);
+        assertThat(sender.calls().get(0).payloadJson())
+                .contains("\"title\":\"수업\"")
+                .contains("1시간 뒤 시작합니다");
+    }
+
     // ---------------------------------------------------------------- 픽스처
 
     private void seedUser(UUID id) {
@@ -257,6 +320,10 @@ class PushReminderDispatcherTest {
                     fixed_schedule_enabled = EXCLUDED.fixed_schedule_enabled,
                     schedule_enabled = EXCLUDED.schedule_enabled
                 """, userId, task, fixedSchedule, schedule);
+    }
+
+    private void setLeadMinutes(UUID userId, int minutes) {
+        jdbc.update("UPDATE push_settings SET lead_minutes = ? WHERE user_id = ?", minutes, userId);
     }
 
     private void insertSubscription(UUID userId, String endpoint) {

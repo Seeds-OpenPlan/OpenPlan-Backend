@@ -960,7 +960,7 @@ paths:
     get:
       tags: [push]
       operationId: getPushSettings
-      summary: "푸시 설정 조회 (3토글) — 행이 없으면 전부 꺼짐"
+      summary: "푸시 설정 조회 (3토글 + 알림 시간) — 행이 없으면 전부 켜짐 · 10분 전"
       x-lane: BE-1
       responses:
         "200":
@@ -974,7 +974,7 @@ paths:
     put:
       tags: [push]
       operationId: savePushSettings
-      summary: "푸시 설정 저장 — 3토글 전부 전송(부분 저장 없음)"
+      summary: "푸시 설정 저장 — 3토글 + 알림 시간 전부 전송(부분 저장 없음). 알림 시간이 보기 밖이면 422 E-COM-009"
       x-lane: BE-1
       requestBody:
         required: true
@@ -2716,12 +2716,16 @@ components:
         createdAt: { type: string, format: date-time }
     PushSettings:
       type: object
-      description: "ADR-0015 결정 ⑥ — 기본 전부 false. notification_settings(알림 센터용)와는 별개 설정이다."
-      required: [taskEnabled, fixedScheduleEnabled, scheduleEnabled]
+      description: "ADR-0015 결정 ⑥(2026-10-11 개정) — 기본 전부 true · leadMinutes 10. notification_settings(알림 센터용)와는 별개 설정이다."
+      required: [taskEnabled, fixedScheduleEnabled, scheduleEnabled, leadMinutes]
       properties:
         taskEnabled: { type: boolean }
         fixedScheduleEnabled: { type: boolean }
         scheduleEnabled: { type: boolean }
+        leadMinutes:
+          type: integer
+          enum: [0, 5, 10, 15, 30, 60]
+          description: "시작 몇 분 전에 보낼지 — 켠 항목 전부에 공통(0 = 정각). 다른 값은 422 E-COM-009"
     PushSubscribeRequest:
       type: object
       description: "브라우저 Push API PushSubscription.toJSON()을 그대로 받는다(ADR-0015 결정 ④)."
