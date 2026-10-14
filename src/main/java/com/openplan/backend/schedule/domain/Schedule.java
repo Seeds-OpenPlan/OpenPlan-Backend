@@ -105,4 +105,16 @@ public class Schedule {
         this.startAt = startAt;
         this.endAt = endAt;
     }
+
+    /**
+     * OpenPlan 안에서 이 일정의 블록이 이동(PLAN-19·20)해 시각이 바뀐다.
+     *
+     * <p>{@link #edit}과 나눠 둔 이유는 {@link #relocatedFromExternal}과 같다 — {@code edit}의
+     * «시각은 편집으로 못 바꾼다» 규약은 그대로 두고, 블록 이동만 시각을 바꿀 수 있는 유일한 경로로
+     * 남긴다. 제목은 바꾸지 않는다(블록 이동은 시각만 조정, 제목 변경과 무관).
+     */
+    public void relocate(Instant startAt, Instant endAt) {
+        this.startAt = startAt;
+        this.endAt = endAt;
+    }
 }

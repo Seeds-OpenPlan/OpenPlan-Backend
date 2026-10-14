@@ -17,6 +17,7 @@ import com.openplan.backend.weeklyplan.domain.PlanBlock;
 import com.openplan.backend.weeklyplan.domain.PlanBlockType;
 import com.openplan.backend.weeklyplan.domain.WeeklyPlan;
 import com.openplan.backend.weeklyplan.dto.BlockBatchRequest;
+import com.openplan.backend.weeklyplan.dto.FixedScheduleWeekView;
 import com.openplan.backend.weeklyplan.dto.PlanBlockCreateRequest;
 import com.openplan.backend.weeklyplan.dto.PlanBlockMoveRequest;
 import com.openplan.backend.weeklyplan.dto.PlanBlockResponse;
@@ -54,6 +55,7 @@ public class PlanBlockService {
     private final ScheduleRepository scheduleRepository;
     private final ScheduleValidator scheduleValidator;
     private final WeeklyPlanTotalsRecalculator recalculator;
+    private final FixedScheduleWeekAssembler fixedScheduleAssembler;
     private final ErrorMessages errorMessages;
     private final UserClock clock;
     private final OutboundCalendarQueue outboundQueue;
@@ -62,6 +64,7 @@ public class PlanBlockService {
     public PlanBlockService(PlanBlockRepository planBlockRepository, WeeklyPlanRepository weeklyPlanRepository,
                             TaskRepository taskRepository, ScheduleRepository scheduleRepository,
                             ScheduleValidator scheduleValidator, WeeklyPlanTotalsRecalculator recalculator,
+                            FixedScheduleWeekAssembler fixedScheduleAssembler,
                             ErrorMessages errorMessages, UserClock clock,
                             OutboundCalendarQueue outboundQueue,
                             EntityManager entityManager) {
@@ -71,6 +74,7 @@ public class PlanBlockService {
         this.scheduleRepository = scheduleRepository;
         this.scheduleValidator = scheduleValidator;
         this.recalculator = recalculator;
+        this.fixedScheduleAssembler = fixedScheduleAssembler;
         this.errorMessages = errorMessages;
         this.clock = clock;
         this.outboundQueue = outboundQueue;
@@ -189,6 +193,12 @@ public class PlanBlockService {
      *   <li><b>시각(PLAN-19)</b>: startAt/endAt 병합 후 5분 단위·start&lt;end 검증(E-COM-009·E-PLAN-002).</li>
      *   <li><b>주차 이동(PLAN-20)</b>: targetWeekStartDate가 오면 대상 주 계획을 get-or-create해 블록을 옮긴다.
      *       원본·대상 계획 both 확정이면 DRAFT 복귀, 양쪽 주 total을 재계산한다.</li>
+     *   <li><b>SCHEDULE 블록이면, 시각이 실제로 바뀌었을 때만 연결된 일정도 같이 옮기고 외부로
+     *       내보낸다</b> — 구글→OpenPlan 방향은 {@code ScheduleInboundReconciler.applyExternalEdit}가
+     *       이미 "일정이 옮겨지면 블록도 따라간다"를 구현해 두었는데, 반대 방향(OpenPlan에서 블록을
+     *       드래그)만 일정·아웃바운드 큐에 빠져 있던 것을 채운다(#69 대칭). 안 채우면 구글 쪽 일정
+     *       시각이 영원히 옛 값으로 남는다. 시각 미동봉(주차만 옮기는 요청 등)에는 건너뛴다 — 안
+     *       바뀐 시각을 또 내보낼 이유가 없다.</li>
      * </ul>
      * 부재·타인 블록 → 404. 겹침·가용초과는 막지 않는다(검증 엔진 소관).
      */
@@ -210,6 +220,18 @@ public class PlanBlockService {
             requireFiveMinuteAligned(startAt, "startAt"); // 422 E-COM-009
             requireFiveMinuteAligned(endAt, "endAt");
         }
+        boolean timeChanged = !startAt.equals(block.getStartAt()) || !endAt.equals(block.getEndAt());
+
+        // SCHEDULE 블록이고 시각이 실제로 바뀌었으면 연결된 일정 시각도 같이 옮긴다 — flush 전에
+        // (아래 reschedule의 clearAutomatically가 컨텍스트를 비우기 전에) dirty update로 반영해야 한다.
+        // scheduleId null 방어는 deleteBlock()의 같은 필드 처리(SCHEDULE 블록 삭제)와 동일하게 둔다.
+        Schedule schedule = null;
+        if (timeChanged && block.getBlockType() == PlanBlockType.SCHEDULE && block.getScheduleId() != null) {
+            schedule = scheduleRepository.findById(block.getScheduleId()).orElse(null);
+            if (schedule != null) {
+                schedule.relocate(startAt, endAt);
+            }
+        }
 
         UUID sourcePlanId = block.getWeeklyPlanId();
         UUID targetPlanId = sourcePlanId;
@@ -224,8 +246,13 @@ public class PlanBlockService {
         // 원본 계획 확정 편집 재개 → DRAFT
         weeklyPlanRepository.findById(sourcePlanId).ifPresent(WeeklyPlan::reopenToDraftIfConfirmed);
 
-        planBlockRepository.flush(); // reopen(엔티티) 반영 후 벌크 UPDATE (clearAutomatically로 컨텍스트 비움)
+        planBlockRepository.flush(); // reopen·일정 시각(엔티티) 반영 후 벌크 UPDATE (clearAutomatically로 컨텍스트 비움)
         planBlockRepository.reschedule(blockId, startAt, endAt, targetPlanId);
+
+        if (schedule != null) {
+            // 밖으로 내보낼 것을 적기만 한다 — 외부 호출은 다음 동기화가 한다(#69 D5, 생성·편집과 동일 관례).
+            outboundQueue.enqueueScheduleUpsert(userId, schedule);
+        }
 
         // 재계산 — 주차 이동이면 원본·대상 both, 아니면 원본만
         List<UUID> affected = new ArrayList<>();
@@ -261,7 +288,8 @@ public class PlanBlockService {
     /**
      * 블록 일괄 적용 (RB-PLAN-01·PLAN-29). {@code operations}를 순서대로 <b>한 트랜잭션</b>에서 실행한다 —
      * 하나라도 실패하면 전체 롤백(원자적). 낱개 로직({@link #createBlock}·{@link #moveBlock}·{@link #deleteBlock})을
-     * 그대로 재사용한다(같은 빈 self-invocation이라 이 메서드의 tx에 합류). 적용 후 최신 {@link WeeklyPlanView} 반환.
+     * 그대로 재사용한다(같은 빈 self-invocation이라 이 메서드의 tx에 합류). 적용 후 최신
+     * {@link WeeklyPlanView}(fixedSchedules 포함, 이슈 #90) 반환.
      *
      * <p>CREATE는 경로의 {@code planId}에 배치한다. MOVE는 정본 {@code PlanBlockInput}이라 시각 조정만(주차 이동 없음).
      * 계획 부재·타인 → 404. op별 필수 필드 누락 → 422.
@@ -312,7 +340,9 @@ public class PlanBlockService {
         //   테스트는 통과했다). 우연에 기대지 않도록 여기서 명시적으로 새로 읽는다.
         List<PlanBlockResponse> blocks = planBlockRepository.findViewsByWeeklyPlanId(planId)
                 .stream().map(PlanBlockResponse::fromView).toList();
-        return WeeklyPlanView.of(WeeklyPlanResponse.from(latest, blocks.size()), blocks);
+        List<FixedScheduleWeekView> fixedSchedules =
+                fixedScheduleAssembler.assemble(userId, latest.getWeekStartDate());
+        return WeeklyPlanView.of(WeeklyPlanResponse.from(latest, blocks.size()), blocks, fixedSchedules);
     }
 
     /**
