@@ -5,14 +5,12 @@ import com.openplan.backend.global.error.ErrorMessages;
 import com.openplan.backend.global.error.OpenPlanException;
 import com.openplan.backend.global.time.UserClock;
 import com.openplan.backend.push.domain.PushLeadTime;
-import com.openplan.backend.push.domain.PushSetting;
 import com.openplan.backend.push.dto.PushSettingResponse;
 import com.openplan.backend.push.dto.SavePushSettingsRequest;
 import com.openplan.backend.push.repository.PushSettingRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -42,20 +40,15 @@ public class PushSettingService {
                 .orElse(PushSettingResponse.DEFAULT);
     }
 
-    /** PUT /users/me/push-settings — upsert(행이 없으면 생성, 있으면 갈아끼운다). */
+    /** PUT /users/me/push-settings — 원자적 upsert(행이 없으면 생성, 있으면 갈아끼운다. 동시 PUT 도 500 없이 수렴). */
     @Transactional
     public PushSettingResponse saveSettings(UUID userId, SavePushSettingsRequest request) {
         int leadMinutes = requireAllowedLeadMinutes(request.leadMinutes());
-        Instant now = clock.now();
-        PushSetting setting = repository.findByUserId(userId).orElse(null);
-        if (setting == null) {
-            setting = PushSetting.create(userId, request.taskEnabled(), request.fixedScheduleEnabled(),
-                    request.scheduleEnabled(), leadMinutes, now);
-        } else {
-            setting.change(request.taskEnabled(), request.fixedScheduleEnabled(), request.scheduleEnabled(),
-                    leadMinutes, now);
-        }
-        return PushSettingResponse.from(repository.save(setting));
+        repository.upsert(userId, request.taskEnabled(), request.fixedScheduleEnabled(), request.scheduleEnabled(),
+                leadMinutes, clock.now());
+        // PUT 은 전체 교체 — 저장된 값이 곧 요청 값이다(재조회 불필요).
+        return new PushSettingResponse(request.taskEnabled(), request.fixedScheduleEnabled(),
+                request.scheduleEnabled(), leadMinutes);
     }
 
     /**

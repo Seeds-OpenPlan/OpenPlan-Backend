@@ -106,6 +106,21 @@ class PushSettingsAndSubscriptionApiTest {
                 .andExpect(status().isBadRequest());
     }
 
+    @Test
+    @DisplayName("행이 없는 사용자의 PUT 2회 동시 — 둘 다 200, 1행으로 수렴(PK 경합 500 없음, PR #93 리뷰)")
+    void concurrentFirstSaveConvergesWithout500() throws Exception {
+        String body = """
+                {"taskEnabled":true,"fixedScheduleEnabled":true,"scheduleEnabled":false,"leadMinutes":15}""";
+        int[] statuses = runConcurrently(() -> mockMvc.perform(as(put("/api/v1/users/me/push-settings"), MAIN)
+                        .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andReturn().getResponse().getStatus());
+
+        org.junit.jupiter.api.Assertions.assertArrayEquals(new int[]{200, 200}, statuses);
+        Integer rows = jdbc.queryForObject(
+                "SELECT count(*) FROM push_settings WHERE user_id = ?", Integer.class, MAIN);
+        org.junit.jupiter.api.Assertions.assertEquals(1, rows);
+    }
+
     // ---------------------------------------------------------------- VAPID 공개키
 
     @Test
@@ -163,6 +178,23 @@ class PushSettingsAndSubscriptionApiTest {
     }
 
     @Test
+    @DisplayName("같은 새 endpoint 로 구독 2회 동시 — 둘 다 200, 1행으로 수렴(UNIQUE 경합 500 없음, PR #93 리뷰)")
+    void concurrentSubscribeSameEndpointConvergesWithout500() throws Exception {
+        String endpoint = "https://push.example.net/ep-race";
+        String body = """
+                {"endpoint":"%s","keys":{"p256dh":"p1","auth":"a1"},"platform":"ANDROID_APP"}"""
+                .formatted(endpoint);
+        int[] statuses = runConcurrently(() -> mockMvc.perform(as(post("/api/v1/users/me/push-subscriptions"), MAIN)
+                        .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andReturn().getResponse().getStatus());
+
+        org.junit.jupiter.api.Assertions.assertArrayEquals(new int[]{200, 200}, statuses);
+        Integer rows = jdbc.queryForObject(
+                "SELECT count(*) FROM push_subscriptions WHERE endpoint = ?", Integer.class, endpoint);
+        org.junit.jupiter.api.Assertions.assertEquals(1, rows);
+    }
+
+    @Test
     @DisplayName("구독 해지 — 본인 소유만 지운다. 남의 구독을 지정하면 204여도 삭제되지 않는다")
     void unsubscribeOnlyDeletesOwnSubscription() throws Exception {
         String endpoint = "https://push.example.net/ep-owned-by-main";
@@ -200,6 +232,30 @@ class PushSettingsAndSubscriptionApiTest {
     }
 
     // ---------------------------------------------------------------- 픽스처
+
+    /**
+     * 같은 요청을 두 스레드에서 go 신호에 맞춰 동시에 보내고 HTTP 상태 2개를 돌려준다
+     * ({@code PlanBlockMoveApiTest.concurrentMoveToSameNewWeekConvergesWithout500}와 같은 방식).
+     */
+    private int[] runConcurrently(java.util.concurrent.Callable<Integer> request) throws Exception {
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        java.util.concurrent.CountDownLatch ready = new java.util.concurrent.CountDownLatch(2);
+        java.util.concurrent.CountDownLatch go = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.Callable<Integer> gated = () -> {
+            ready.countDown();
+            go.await();
+            return request.call();
+        };
+        try {
+            java.util.concurrent.Future<Integer> f1 = pool.submit(gated);
+            java.util.concurrent.Future<Integer> f2 = pool.submit(gated);
+            ready.await();
+            go.countDown();
+            return new int[]{f1.get(), f2.get()};
+        } finally {
+            pool.shutdownNow();
+        }
+    }
 
     private MockHttpServletRequestBuilder as(MockHttpServletRequestBuilder b, UUID userId) {
         return b.header("X-Dev-User", userId.toString());

@@ -5,7 +5,6 @@ import com.openplan.backend.global.error.ErrorMessages;
 import com.openplan.backend.global.error.OpenPlanException;
 import com.openplan.backend.global.time.UserClock;
 import com.openplan.backend.push.domain.PushPlatform;
-import com.openplan.backend.push.domain.PushSubscription;
 import com.openplan.backend.push.dto.PushSubscribeRequest;
 import com.openplan.backend.push.repository.PushSubscriptionRepository;
 import org.springframework.stereotype.Service;
@@ -33,21 +32,15 @@ public class PushSubscriptionService {
     }
 
     /**
-     * POST /users/me/push-subscriptions — endpoint로 upsert. 이미 있는 endpoint면 소유자·키를
+     * POST /users/me/push-subscriptions — endpoint로 원자적 upsert. 이미 있는 endpoint면 소유자·키를
      * 갈아끼운다(기기가 다른 계정으로 로그인했거나, 브라우저가 키를 재발급한 경우 — 둘 다 "이 기기의
-     * 지금 진짜 구독"이 새 값이라는 뜻이다).
+     * 지금 진짜 구독"이 새 값이라는 뜻이다). 같은 새 endpoint 의 동시 요청도 500 없이 1행으로 수렴한다.
      */
     @Transactional
     public void subscribe(UUID userId, PushSubscribeRequest request) {
         PushPlatform platform = parsePlatform(request.platform());
-        PushSubscription existing = repository.findByEndpoint(request.endpoint()).orElse(null);
-        if (existing != null) {
-            existing.reassignTo(userId, request.keys().p256dh(), request.keys().auth(), platform);
-            repository.save(existing);
-            return;
-        }
-        repository.save(PushSubscription.create(userId, request.endpoint(), request.keys().p256dh(),
-                request.keys().auth(), platform, clock.now()));
+        repository.upsert(UUID.randomUUID(), userId, request.endpoint(), request.keys().p256dh(),
+                request.keys().auth(), platform.name(), clock.now());
     }
 
     /** DELETE /users/me/push-subscriptions — 소유자 스코프. 부재·타인 소유 모두 조용히 204(멱등). */

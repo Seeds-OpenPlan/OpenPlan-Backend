@@ -44,31 +44,8 @@ public class PushSetting {
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
-    /** JPA 전용. */
+    /** JPA 전용 — 쓰기는 {@code PushSettingRepository.upsert} 한 곳뿐이다(읽기 전용 엔티티). */
     protected PushSetting() {
-    }
-
-    /** 최초 저장(PUT) — 행이 없던 사용자. 요청이 전 항목을 담으므로 그대로 쓴다. */
-    public static PushSetting create(UUID userId, boolean taskEnabled, boolean fixedScheduleEnabled,
-                                     boolean scheduleEnabled, int leadMinutes, Instant now) {
-        PushSetting s = new PushSetting();
-        s.userId = userId;
-        s.taskEnabled = taskEnabled;
-        s.fixedScheduleEnabled = fixedScheduleEnabled;
-        s.scheduleEnabled = scheduleEnabled;
-        s.leadMinutes = leadMinutes;
-        s.createdAt = now;
-        s.updatedAt = now;
-        return s;
-    }
-
-    public void change(boolean taskEnabled, boolean fixedScheduleEnabled, boolean scheduleEnabled,
-                       int leadMinutes, Instant now) {
-        this.taskEnabled = taskEnabled;
-        this.fixedScheduleEnabled = fixedScheduleEnabled;
-        this.scheduleEnabled = scheduleEnabled;
-        this.leadMinutes = leadMinutes;
-        this.updatedAt = now;
     }
 
     public UUID getUserId() {

@@ -47,29 +47,8 @@ public class PushSubscription {
     @Column(name = "last_success_at")
     private Instant lastSuccessAt;
 
-    /** JPA 전용. */
+    /** JPA 전용 — 생성·재할당은 {@code PushSubscriptionRepository.upsert} 한 곳에서 한다. */
     protected PushSubscription() {
-    }
-
-    public static PushSubscription create(UUID userId, String endpoint, String p256dh, String auth,
-                                          PushPlatform platform, Instant now) {
-        PushSubscription s = new PushSubscription();
-        s.id = UUID.randomUUID();
-        s.userId = userId;
-        s.endpoint = endpoint;
-        s.p256dh = p256dh;
-        s.auth = auth;
-        s.platform = platform;
-        s.createdAt = now;
-        return s;
-    }
-
-    /** 같은 기기(endpoint)가 다른 사용자·새 키로 재구독 — 소유자·암호화 키를 갈아끼운다. */
-    public void reassignTo(UUID userId, String p256dh, String auth, PushPlatform platform) {
-        this.userId = userId;
-        this.p256dh = p256dh;
-        this.auth = auth;
-        this.platform = platform;
     }
 
     public void markSendSucceeded(Instant now) {
