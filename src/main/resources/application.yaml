@@ -10,6 +10,10 @@ spring:
     username: ${DB_USERNAME:openplan}
     password: ${DB_PASSWORD:openplan1234}
     driver-class-name: org.postgresql.Driver
+    hikari:
+      # 행 잠금 대기의 상한. 없으면 교착에 빠진 요청이 연결을 영원히 쥐어 풀 전체가 멈춘다
+      # (2026-10-19 운영 장애). 넘기면 그 요청만 실패하고 연결은 풀로 돌아온다.
+      connection-init-sql: SET lock_timeout = '10s'
 
   jpa:
     hibernate:

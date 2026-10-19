@@ -412,7 +412,14 @@ public class ExternalCalendarService {
     @Transactional
     public List<ExternalEventResponse> listEvents(UUID userId, UUID connectionId, ApplyStatus applyStatus) {
         ExternalCalendarConnection connection = requireConnection(userId, connectionId);
-        if (connection.isActive()) {
+        // 🔴 같은 사용자의 동기화는 한 번에 하나만 돈다. 겹치면 둘이 같은 대기열 행을 고치며 서로의
+        //    행 잠금을 기다리고, 안쪽 REQUIRES_NEW 가 연결을 하나 더 요구해 DB 가 교착으로 보지 못한
+        //    채 영원히 멈춘다 — 2026-10-19 에 화면 연속 진입만으로 풀 10개가 25분간 묶여 전 사용자의
+        //    요청이 멈췄다. 진 쪽은 기다리지 않고 이미 저장된 일정만 돌려준다(이긴 쪽이 곧 최신으로 맞춘다).
+        if (connection.isActive() && !connectionRepository.tryLockSyncFor(userId)) {
+            log.info("동기화가 이미 진행 중 — 이번 호출은 저장된 일정만 돌려준다: userId={} connectionId={}",
+                    userId, connectionId);
+        } else if (connection.isActive()) {
             // 🔴 **내보내기가 먼저다.** 대기 중인 변경을 밀어낸 뒤에 읽어야, 방금 만든 일정이
             //    같은 회차에 우리 UID 로 돌아와 에코 차단에 걸린다. 순서를 바꾸면 그 일정이
             //    다음 회차까지 "외부에 없는 것" 으로 남아 삭제 전파가 오판할 여지가 생긴다.

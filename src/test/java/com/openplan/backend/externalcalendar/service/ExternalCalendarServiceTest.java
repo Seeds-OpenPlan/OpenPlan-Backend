@@ -558,10 +558,26 @@ class ExternalCalendarServiceTest {
                 eq(Set.of("cal-a", "cal-b")), eq("cal-a"), any(), any());
     }
 
+    @Test
+    @DisplayName("🔴 같은 사용자의 동기화가 이미 돌고 있으면 기다리지 않고 저장된 일정만 돌려준다 — 겹치면 풀 전체가 멈췄다(2026-10-19)")
+    void listEvents_동기화_잠금을_못_잡으면_동기화를_건너뛴다() {
+        ExternalCalendarConnection connection = ExternalCalendarConnection.connect(
+                USER, ExternalCalendarProvider.GOOGLE, "me@example.com", "enc", "renc", NOW, null, NOW);
+        when(connectionRepository.findByIdAndUserId(connection.getId(), USER)).thenReturn(Optional.of(connection));
+        when(connectionRepository.tryLockSyncFor(USER)).thenReturn(false);
+        when(eventRepository.findByConnectionIdOrderByStartAtAsc(connection.getId())).thenReturn(List.of());
+
+        assertThat(service.listEvents(USER, connection.getId(), null)).isEmpty();
+
+        // 대기열·외부 호출 어느 것도 건드리지 않아야 한다 — 건드리면 이긴 쪽과 같은 행을 두고 다시 겹친다.
+        verifyNoInteractions(fixedOccurrenceReconciler, outboundPusher, providerRegistry, tokens, eventWriter);
+    }
+
     private ExternalCalendarConnection stubSync() {
         ExternalCalendarConnection connection = ExternalCalendarConnection.connect(
                 USER, ExternalCalendarProvider.GOOGLE, "me@example.com", "enc", "renc", NOW, null, NOW);
         when(connectionRepository.findByIdAndUserId(connection.getId(), USER)).thenReturn(Optional.of(connection));
+        when(connectionRepository.tryLockSyncFor(USER)).thenReturn(true);
         when(selectionRepository.findByConnectionIdOrderByCalendarNameAsc(connection.getId())).thenReturn(List.of(
                 ExternalCalendarSelection.select(connection.getId(), "cal-a", "개인", NOW),
                 ExternalCalendarSelection.select(connection.getId(), "cal-b", "팀", NOW)));
