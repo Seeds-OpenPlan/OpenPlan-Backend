@@ -151,7 +151,8 @@ log "4/8 .env 확인"
 # 시드와 사전검사가 같은 목록을 본다 — 둘이 갈라지면 "안내는 여섯인데 검사는 넷" 이 된다.
 REQUIRED_KEYS=(DB_HOST DB_PASSWORD JWT_SECRET APP_BASE_URL API_BASE_URL
                GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET MAIL_USERNAME MAIL_PASSWORD
-               GROQ_API_KEY EXT_TOKEN_KEY)
+               GROQ_API_KEY EXT_TOKEN_KEY
+               VAPID_PUBLIC_KEY VAPID_PRIVATE_KEY VAPID_SUBJECT)
 
 if [ ! -f "$APP_DIR/.env" ]; then
   # 🔴 .env.example 을 그대로 쓰면 안 된다. 거기엔 로컬 개발 기본값이 채워져 있어
@@ -181,12 +182,18 @@ if [ ! -f "$APP_DIR/.env" ]; then
      MAIL_PASSWORD   Gmail 앱 비밀번호 16자 (계정 비밀번호 아님)
      EXT_TOKEN_KEY   외부 캘린더 토큰 암호화 키   openssl rand -base64 32
      GROQ_API_KEY    AI 모델 키                   console.groq.com 발급값
+     VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT   푸시 알림 키
+                     생성법은 .env.example 의 VAPID 절(openssl 만으로 끝남)
 
   MAIL_* 이 없으면 가입 메일이 안 나가고, 이메일 미인증 계정은 로그인이
   403 으로 막혀 "떴지만 아무도 못 쓰는" 서버가 됩니다.
 
   GROQ_API_KEY 가 없으면 AI 초안이 매번 503 으로 떨어지고 Spring 이 규칙 폴백으로
   대신합니다 — 화면은 멀쩡하고 AI 기능만 조용히 사라집니다. 그래서 필수값에 넣었습니다.
+
+  VAPID_* 이 없으면 서버는 뜨지만 푸시 알림이 영영 나가지 않습니다(로그 1회뿐).
+  .env 가 이미 있는 서버를 재배포할 때는 이 줄이 자동으로 생기지 않아 조용히 빠지기
+  쉬워서 필수값에 넣었습니다(EXT_TOKEN_KEY 와 같은 이유).
 
   GOOGLE_* 이 없으면 소셜 로그인 버튼이 눌리기는 하는데 항상
   /login?error=E-AUTH-010 으로 되돌아옵니다 — 서버는 멀쩡히 뜹니다.
