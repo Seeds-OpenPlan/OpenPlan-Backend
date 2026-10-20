@@ -89,4 +89,28 @@ class AiContractSerializationTest {
         assertThat(parsed.reason()).isEqualTo("근거");
         assertThat(parsed.meta().model()).isEqualTo("m");
     }
+
+    @Test
+    @DisplayName("설명 요청도 같은 매퍼로 MON·HH:mm 규약을 지킨다(공유 PlanSnapshot)")
+    void 설명_요청도_같은_표기_규약() throws Exception {
+        var request = new AiPlanExplainClient.ExplainRequest(snapshot(), List.of("규칙 1에 의해 겹칩니다"));
+
+        String json = mapper.writeValueAsString(request);
+
+        assertThat(json).contains("\"weekday\":\"MON\"");
+        assertThat(json).contains("\"issues\":[\"규칙 1에 의해 겹칩니다\"]");
+    }
+
+    @Test
+    @DisplayName("설명 응답도 모르는 필드를 견딘다")
+    void 설명_응답도_미지의_필드를_견딘다() throws Exception {
+        String body = """
+                {"explanation":"이번 주 설명입니다","meta":{"model":"m","latencyMs":10,"futureField":"x"}}""";
+
+        AiPlanExplainClient.ExplainResponse parsed =
+                mapper.readValue(body, AiPlanExplainClient.ExplainResponse.class);
+
+        assertThat(parsed.explanation()).isEqualTo("이번 주 설명입니다");
+        assertThat(parsed.meta().model()).isEqualTo("m");
+    }
 }

@@ -38,6 +38,9 @@ class AiConfigWiringTest {
                     assertThat(ctx.getBean(PlanPlacementPort.class)).isInstanceOf(AiPlacementAdapter.class);
                     // 규칙 빈은 지워지지 않고 폴백으로 남아 있어야 한다(계약 §4 "폴백이 계약의 일부다").
                     assertThat(ctx.getBean("planPlacementPort")).isInstanceOf(FirstFitPlacementEngine.class);
+                    // 설명 접합도 draft 와 같은 조건으로 함께 올라온다 — PlanExplanationService 가
+                    // Optional<AiPlanExplainClient> 로 받는 전제(설정되면 반드시 있다)가 여기서 성립해야 한다.
+                    assertThat(ctx).hasSingleBean(AiPlanExplainClient.class);
                 });
     }
 
@@ -51,6 +54,9 @@ class AiConfigWiringTest {
                     assertThat(ctx).hasNotFailed();
                     assertThat(ctx.getBean(PlanPlacementPort.class)).isInstanceOf(FirstFitPlacementEngine.class);
                     assertThat(ctx).doesNotHaveBean(AiPlacementAdapter.class);
+                    // 설명 접합도 함께 안 올라와야 한다 — PlanExplanationService 가 Optional.empty() 로
+                    // 받아 503(E-PLAN-005)으로 알리는 경로가 바로 이 상태를 전제로 한다.
+                    assertThat(ctx).doesNotHaveBean(AiPlanExplainClient.class);
                 });
     }
 
@@ -60,6 +66,7 @@ class AiConfigWiringTest {
         runner.run(ctx -> {
             assertThat(ctx).hasNotFailed();
             assertThat(ctx.getBean(PlanPlacementPort.class)).isInstanceOf(FirstFitPlacementEngine.class);
+            assertThat(ctx).doesNotHaveBean(AiPlanExplainClient.class);
         });
     }
 }

@@ -3,6 +3,7 @@ package com.openplan.backend.weeklyplan.repository;
 import com.openplan.backend.weeklyplan.domain.ValidationIssueRecord;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -13,4 +14,10 @@ public interface ValidationIssueRecordRepository extends JpaRepository<Validatio
 
     /** 재검증 전 기존 판정 제거(전면 교체). @return 삭제 행 수. */
     long deleteByWeeklyPlanId(UUID weeklyPlanId);
+
+    /**
+     * 현재 영속된 판정 전량(=가장 최근 검증 실행분 — 전면 교체 방식이라 "최근"을 따로 거를 필요가 없다).
+     * {@code PlanExplanationSnapshotReader} 가 설명 프롬프트의 issues 재료로 쓴다.
+     */
+    List<ValidationIssueRecord> findByWeeklyPlanId(UUID weeklyPlanId);
 }

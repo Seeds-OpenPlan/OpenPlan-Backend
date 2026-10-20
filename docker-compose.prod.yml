@@ -84,6 +84,19 @@ services:
       REASONING_EFFORT: ${REASONING_EFFORT:-low}
       # 🔴 1024 면 replan 응답이 char 2062 에서 잘린다(08-24 에 원인 불명으로 하루를 썼다).
       MAX_TOKENS: ${MAX_TOKENS:-2048}
+      # ── 로컬 모델(Qwen on Modal) — LIGHT 티어(설명) 전용. 위 키·모델들과 달리 COMPLEX 에는 안 쓴다.
+      # 🔴 여기도 "적힌 키만 컨테이너로 간다" 가 그대로 적용된다 — 네 줄 중 하나라도 빠뜨리면
+      #    .env 에 값이 있어도 전달되지 않는다.
+      # LOCAL_MODEL 이 설정되면 LIGHT 가 Modal GPU 의 자체 호스팅 Qwen(ollama/qwen3:4b-instruct)으로 가고,
+      # 비어 있으면 LIGHT 는 그대로 LIGHT_MODEL(Groq)을 쓴다 — 로컬을 안 켠 배포가 이것 때문에 멈추지 않는다.
+      LOCAL_MODEL: ${LOCAL_MODEL:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+      # Modal 프록시 토큰 — Ollama 자체엔 인증이 없어 앞단이 `Authorization: Bearer <값>` 으로 막는다.
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
+      # 🔴 로컬 호출만의 제한 시간(초). Modal 은 0대로 내려갔다 깨는 첫 요청이 35~96초였다
+      #    (2026-10-20 실측) — 넘기면 LIGHT_MODEL(Groq)로 다시 묻는다(EXPLAIN_TIMEOUT 15초 안에서
+      #    폴백까지 끝내야 하므로 로컬 몫은 그보다 훨씬 짧게 잡는다).
+      LOCAL_TIMEOUT_SECONDS: ${LOCAL_TIMEOUT_SECONDS:-8}
     expose:
       - "8000"
     # ports 를 두지 않는다. 8000 을 호스트에 열면 인증 없이 모델을 호출할 수 있는 구멍이 된다 —

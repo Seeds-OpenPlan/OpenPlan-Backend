@@ -1970,6 +1970,33 @@ paths:
                 type: object
                 properties:
                   data: { $ref: "#/components/schemas/PlacementProposal" }
+  /weekly-plans/{planId}/explanation:
+    post:
+      tags: [weekly-plans]
+      operationId: explainWeeklyPlan
+      summary: "계획 설명 생성 — 현재 블록 + 영속된 검증 이슈를 사람이 읽을 문장으로"
+      description: |
+        본문 없음. 현재 블록 배치와(있으면) 가장 최근에 영속된 검증 이슈(reason)를 설명 접합에
+        넘겨 한국어 설명 한 덩어리를 받는다. 검증을 한 번도 안 돌렸으면 이슈 없이 배치만 설명한다
+        (문제를 지어내지 않는다).
+
+        🔴 **대체 경로가 없다.** `auto-placements`(SS-05)는 AI가 죽어도 규칙 first-fit으로
+        내려가지만, 이미 내려진 판정을 사람 말로 풀어 설명하는 일은 규칙 엔진이 지어낼 수 없다.
+        그래서 설명 접합이 미설정이거나 호출이 실패/타임아웃하면 그대로 503(E-PLAN-005)을 반환한다.
+      x-lane: BE-2
+      parameters: [{ $ref: "#/components/parameters/PlanId" }]
+      responses:
+        "200":
+          description: 설명 생성 완료
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/PlanExplanation" }
+        "503":
+          description: E-PLAN-005 설명 접합 미설정 또는 호출 실패·타임아웃(대체 없음)
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
   /weekly-plans/{planId}/block-batches:
     post:
       tags: [weekly-plans]
@@ -3007,6 +3034,14 @@ components:
         #    달라 제안기만이 그 문구를 알기 때문이다(Spring↔AI 계약 §4: "reason 은 필수다 …
         #    AI 제안도 근거를 동반한다"). grep 감사로는 이 필드를 덮을 수 없으니 여기 적어 둔다.
         reason: { type: string, description: "배치 근거. 규칙 경로면 정렬 규칙 설명(우선순위→마감일→예상시간, first-fit), AI 경로면 초안이 동반한 근거 문구 — 이 필드는 P4 카탈로그 예외" }
+    PlanExplanation:
+      type: object
+      description: >
+        /weekly-plans/{planId}/explanation 출력. explanation 자체가 생성문이라 P4(카탈로그 외
+        AI 표현 금지) 적용 대상이 아니다 — PlacementProposal.reason과 같은 성격의 예외.
+      properties:
+        explanation: { type: string, description: "한국어 평문 3~6문장. 판정(옳고그름)은 하지 않고 배치·지적된 이슈만 설명 (Spring↔AI 계약)" }
+        model: { type: [string, "null"], description: "설명을 생성한 모델 식별자. 다른 AI 접합의 meta.model(비노출)과 달리 대체 경로가 없어 FE 디버깅 단서로 그대로 노출한다" }
     ReplanOption:
       type: object
       properties:
