@@ -109,6 +109,18 @@ public class AiConfig {
     }
 
     /**
+     * 설명 접합도 draft 와 같은 {@code aiRestClient}(주소·타임아웃·전용 매퍼)를 그대로 쓴다 — 같은
+     * AI 서비스의 다른 엔드포인트일 뿐 접속 정보가 다를 이유가 없다. {@code op.ai.base-url} 이
+     * 없으면 이 빈도 draft 와 함께 통째로 안 올라간다 — {@code PlanExplanationService} 가
+     * {@code Optional<AiPlanExplainClient>} 로 받아 "설정 안 됨"을 503 으로 알린다(대체 경로 없음 — 위
+     * {@link AiPlanDraftClient}의 폴백과 달리 설명은 대체할 규칙이 없다).
+     */
+    @Bean
+    AiPlanExplainClient aiPlanExplainClient(RestClient aiRestClient) {
+        return new AiPlanExplainClient(aiRestClient);
+    }
+
+    /**
      * AI 를 {@link PlanPlacementPort} 앞단에 앉힌다. 규칙 빈({@code planPlacementPort})은 그대로 남아
      * 폴백으로 주입된다 — 지우는 것이 아니라 <b>뒤에 세우는</b> 것이다(계약 §4 "폴백이 계약의 일부다").
      */

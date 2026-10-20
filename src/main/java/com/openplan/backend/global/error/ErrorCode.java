@@ -54,6 +54,14 @@ public enum ErrorCode {
     // 2.4 주간 계획 (E-PLAN) — BE-2
     E_PLAN_002("E-PLAN-002", HttpStatus.UNPROCESSABLE_ENTITY),
     E_PLAN_004("E-PLAN-004", HttpStatus.CONFLICT),
+    /**
+     * 계획 설명 생성 실패 — 설명 접합 미설정({@code op.ai.base-url} 없음) 또는 호출 실패·타임아웃.
+     *
+     * <p>{@link com.openplan.backend.ai.AiPlanDraftClient}(초안)와 달리 <b>대체할 규칙 경로가 없다</b> —
+     * "이미 내려진 판정을 사람 말로 풀어 설명"하는 일을 규칙 엔진이 대신 지어낼 수 없기 때문이다.
+     * 그래서 초안의 조용한 폴백과 달리 여기는 그대로 503 으로 사용자에게 알린다.
+     */
+    E_PLAN_005("E-PLAN-005", HttpStatus.SERVICE_UNAVAILABLE),
 
     // 2.5 외부 연동 (E-EXT) — BE-1
     E_EXT_001("E-EXT-001", HttpStatus.BAD_GATEWAY),
