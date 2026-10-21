@@ -93,6 +93,14 @@ public class OutboundOpExecutor {
                 op.fail("대상 캘린더가 없다 — 내보내기가 해제된 상태다", now);
                 return;
             }
+            if (op.getOperation() == OutboundOperation.CREATE && !mappingExists(op)) {
+                // 🔴 원본이 지워져 매핑이 CASCADE 로 사라졌다. 보내면 결과를 적을 곳이 없어 밖에 아무도
+                //    지울 수 없는 유령이 생긴다 — 지운 고정 일정이 9주치로 되살아난 것이 이 경로다(QA F4).
+                //    적재 쪽이 지우기 전에 거두는 것이 정본이고, 이것은 그 사이를 빠져나온 것의 안전망이다.
+                log.info("원본이 지워진 CREATE 를 거둔다: opId={} target={}", opId, op.getTargetType());
+                opRepository.delete(op);
+                return;
+            }
             CalendarProvider provider = registry.get(connection.getProvider());
             ProviderCredential credential = tokens.usableCredential(connection);
             // 🔴 CREATE 만 «지금 설정» 을 다시 읽는다. 제공자 장애로 CREATE 가 FAILED 로 남아 있는
@@ -127,6 +135,15 @@ public class OutboundOpExecutor {
             log.warn("외부 캘린더 쓰기 실패: opId={} op={}", opId, op.getOperation(), e);
             op.fail(e.getClass().getSimpleName() + ": " + e.getMessage(), now);
         }
+    }
+
+    /** 이 작업의 매핑 행이 아직 있는가 — 없으면 원본이 지워진 것이다. */
+    private boolean mappingExists(OutboundCalendarOp op) {
+        return switch (op.getTargetType()) {
+            case SCHEDULE -> refRepository.existsById(op.getTargetId());
+            case FIXED_OCCURRENCE -> occurrenceRepository.existsById(op.getTargetId());
+            case PLAN_BLOCK -> blockRefRepository.existsById(op.getTargetId());
+        };
     }
 
     /**

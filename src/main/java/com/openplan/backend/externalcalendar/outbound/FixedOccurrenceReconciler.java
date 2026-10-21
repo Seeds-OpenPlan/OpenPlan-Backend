@@ -2,6 +2,7 @@ package com.openplan.backend.externalcalendar.outbound;
 
 import com.openplan.backend.common.Weekday;
 import com.openplan.backend.externalcalendar.domain.ExternalCalendarConnection;
+import com.openplan.backend.externalcalendar.repository.ExternalCalendarConnectionRepository;
 import com.openplan.backend.global.time.UserClock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,6 +19,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -49,15 +51,50 @@ public class FixedOccurrenceReconciler {
     private final OutboundCalendarOpRepository opRepository;
     private final UserClock clock;
     private final FixedOccurrenceWriter occurrenceWriter;
+    private final ExternalCalendarConnectionRepository connectionRepository;
 
     public FixedOccurrenceReconciler(JdbcTemplate jdbc, FixedOccurrenceRepository occurrenceRepository,
                                      OutboundCalendarOpRepository opRepository, UserClock clock,
-                                     FixedOccurrenceWriter occurrenceWriter) {
+                                     FixedOccurrenceWriter occurrenceWriter,
+                                     ExternalCalendarConnectionRepository connectionRepository) {
         this.jdbc = jdbc;
         this.occurrenceRepository = occurrenceRepository;
         this.opRepository = opRepository;
         this.clock = clock;
         this.occurrenceWriter = occurrenceWriter;
+        this.connectionRepository = connectionRepository;
+    }
+
+    /**
+     * 고정 일정이 지워진다 — 그 회차들을 밖에서도 지우도록 적는다.
+     *
+     * <p>🔴 <b>지우기 전에 불려야 한다.</b> 고정 일정은 hard delete 이고 회차 행은
+     * {@code ON DELETE CASCADE} 로 함께 사라진다. 그러면 {@link #reconcile} 이 «없어야 하는데 있는 것»
+     * 을 찾을 근거가 없어져 — DELETE 는 하나도 쌓이지 않고, 대기 중인 CREATE 는 그대로 남아 뒤늦게
+     * 나간다. 실제로 운영에서 <b>지운 고정 일정이 몇 분 뒤 생성 당시 제목으로 9주치 생기고, 다시는
+     * 지워지지 않았다</b>(QA 2026-10-21 F4). 개인 일정 삭제({@code enqueueScheduleDelete})와 같은 이유다.
+     *
+     * <p>나간 적 없는 회차는 대기 CREATE 만 거둔다({@link #enqueueDelete}). 내보내기가 해제됐거나
+     * 쓸 수 없으면 밖의 일정은 그대로 두고 대기 작업만 거둔다 — 해제 이후 변경은 더 나가지 않는다(계약).
+     */
+    public void retireSchedule(UUID userId, UUID fixedScheduleId) {
+        List<FixedOccurrence> occurrences = occurrenceRepository.findByFixedScheduleId(fixedScheduleId);
+        if (occurrences.isEmpty()) {
+            return;
+        }
+        var now = clock.now();
+        for (FixedOccurrence o : occurrences) {
+            Optional<ExternalCalendarConnection> home = connectionRepository.findById(o.getConnectionId())
+                    .filter(ExternalCalendarConnection::canWrite)
+                    .filter(c -> c.getWriteCalendarId() != null && !c.getWriteCalendarId().isBlank());
+            if (home.isEmpty()) {
+                opRepository.deleteAll(
+                        opRepository.findUnsentByTarget(OutboundTargetType.FIXED_OCCURRENCE, o.getId()));
+                continue;
+            }
+            enqueueDelete(userId, home.get(), o, home.get().getWriteCalendarId(), now);
+        }
+        log.debug("고정 일정 삭제 — 회차 {}건의 외부 삭제를 적었다: fixedScheduleId={}", occurrences.size(), fixedScheduleId);
     }
 
     /** 이 연동으로 내보낼 회차를 맞춘다. 쓰기 대상 캘린더가 없으면 아무것도 하지 않는다. */
