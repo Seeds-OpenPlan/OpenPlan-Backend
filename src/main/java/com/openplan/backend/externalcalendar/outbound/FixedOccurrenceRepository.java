@@ -10,5 +10,7 @@ public interface FixedOccurrenceRepository extends JpaRepository<FixedOccurrence
 
     List<FixedOccurrence> findByUserId(UUID userId);
 
+    List<FixedOccurrence> findByFixedScheduleId(UUID fixedScheduleId);
+
     Optional<FixedOccurrence> findByExternalUid(String externalUid);
 }

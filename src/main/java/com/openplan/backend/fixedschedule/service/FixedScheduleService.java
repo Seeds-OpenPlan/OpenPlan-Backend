@@ -1,6 +1,7 @@
 package com.openplan.backend.fixedschedule.service;
 
 import com.openplan.backend.common.Weekday;
+import com.openplan.backend.externalcalendar.outbound.FixedOccurrenceReconciler;
 import com.openplan.backend.fixedschedule.domain.FixedSchedule;
 import com.openplan.backend.fixedschedule.domain.FixedScheduleStatus;
 import com.openplan.backend.fixedschedule.dto.FixedScheduleCreateRequest;
@@ -35,14 +36,17 @@ public class FixedScheduleService {
     private final FixedScheduleWeekExceptionRepository weekExceptionRepository;
     private final FixedScheduleValidator validator;
     private final UserClock clock;
+    private final FixedOccurrenceReconciler occurrenceReconciler;
 
     public FixedScheduleService(FixedScheduleRepository repository,
                                 FixedScheduleWeekExceptionRepository weekExceptionRepository,
-                                FixedScheduleValidator validator, UserClock clock) {
+                                FixedScheduleValidator validator, UserClock clock,
+                                FixedOccurrenceReconciler occurrenceReconciler) {
         this.repository = repository;
         this.weekExceptionRepository = weekExceptionRepository;
         this.validator = validator;
         this.clock = clock;
+        this.occurrenceReconciler = occurrenceReconciler;
     }
 
     /**
@@ -116,11 +120,15 @@ public class FixedScheduleService {
      * 고정 일정 삭제 (FIX-09). hard delete. 부재·타인 → 404 E-COM-004(존재 은닉, 멱등 아님).
      * 주차 예외({@code fixed_schedule_week_exceptions})는 FK ON DELETE CASCADE로 DB가 함께 지운다(앱 별도 처리 불요).
      * 삭제 후 주간 계획 재검증(FIX-09)은 검증 엔진 라우트(ST-B2-09) 소관.
+     *
+     * <p>🔴 외부로 내보낸 회차의 삭제를 <b>지우기 전에</b> 적는다 — 회차 행도 CASCADE 로 함께 사라져,
+     * 지운 뒤에는 밖에서 무엇을 지워야 하는지 알 길이 없다({@link FixedOccurrenceReconciler#retireSchedule}).
      */
     @Transactional
     public void delete(UUID userId, UUID id) {
         FixedSchedule fs = repository.findByIdAndUserId(id, userId)
                 .orElseThrow(() -> new OpenPlanException(ErrorCode.E_COM_004)); // 404
+        occurrenceReconciler.retireSchedule(userId, id);
         repository.delete(fs);
     }
 

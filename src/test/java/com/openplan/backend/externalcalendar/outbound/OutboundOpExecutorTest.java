@@ -98,6 +98,7 @@ class OutboundOpExecutorTest {
     void create_는_지금_설정된_대상으로_나간다() {
         OutboundCalendarOp op = op(OutboundOperation.CREATE, "cal-옛것");
         stubExecutable(op, connection("cal-지금것"), true);
+        when(refRepository.existsById(op.getTargetId())).thenReturn(true);
         when(provider.createEvent(any(), eq("cal-지금것"), any()))
                 .thenReturn(new ProviderWriteResult("evt-new", "/dav/new.ics", "etag-new"));
 
@@ -148,5 +149,22 @@ class OutboundOpExecutorTest {
             assertThat(op.getLastError()).as(operation.name()).contains("내보내기가 해제된 상태다");
         }
         verifyNoInteractions(provider);
+    }
+
+    @Test
+    @DisplayName("🔴 원본이 지워져 매핑이 없는 CREATE 는 보내지 않고 거둔다 — 지운 고정 일정이 되살아나지 않게(QA F4)")
+    void 매핑이_없는_create_는_거둔다() {
+        OutboundPayload payload = new OutboundPayload("uid-1", "[QA] 고정",
+                Instant.parse("2026-10-23T10:00:00Z"), Instant.parse("2026-10-23T11:00:00Z"),
+                "cal-지금것", null, null, null);
+        OutboundCalendarOp op = OutboundCalendarOp.queue(USER, UUID.randomUUID(),
+                OutboundTargetType.FIXED_OCCURRENCE, UUID.randomUUID(), OutboundOperation.CREATE, payload, NOW);
+        stubExecutable(op, connection("cal-지금것"), false);
+        when(occurrenceRepository.existsById(op.getTargetId())).thenReturn(false);
+
+        executor.execute(op.getId());
+
+        verifyNoInteractions(provider);
+        verify(opRepository).delete(op);
     }
 }

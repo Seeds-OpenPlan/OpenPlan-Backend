@@ -2,6 +2,7 @@ package com.openplan.backend.externalcalendar.outbound;
 
 import com.openplan.backend.externalcalendar.domain.ExternalCalendarConnection;
 import com.openplan.backend.externalcalendar.domain.ExternalCalendarProvider;
+import com.openplan.backend.externalcalendar.repository.ExternalCalendarConnectionRepository;
 import com.openplan.backend.global.time.UserClock;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -23,6 +24,7 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -57,6 +59,8 @@ class FixedOccurrenceReconcilerTest {
     private UserClock clock;
     @Mock
     private FixedOccurrenceWriter occurrenceWriter;
+    @Mock
+    private ExternalCalendarConnectionRepository connectionRepository;
 
     @InjectMocks
     private FixedOccurrenceReconciler reconciler;
@@ -79,6 +83,7 @@ class FixedOccurrenceReconcilerTest {
         given(jdbc.queryForList(anyString(), eq(String.class), eq(USER))).willReturn(List.of());
         given(occurrenceRepository.findByUserId(USER)).willReturn(List.of());
         given(occurrenceWriter.reserve(any())).willAnswer(i -> i.getArgument(0));
+        given(connectionRepository.findById(connection.getId())).willReturn(Optional.of(connection));
     }
 
     private List<FixedOccurrencePlanner.Occurrence> wanted() {
@@ -156,5 +161,74 @@ class FixedOccurrenceReconcilerTest {
 
         verify(opRepository, never()).save(any());
         verify(occurrenceRepository, never()).delete(any());
+    }
+
+    // ── 고정 일정 삭제 (QA 2026-10-21 F4) ─────────────────────────────────────────────────
+    // 고정 일정은 hard delete 이고 회차 행이 CASCADE 로 함께 사라진다. 지우기 전에 적지 않으면
+    // reconcile 은 지울 근거를 잃고, 대기 CREATE 가 뒤늦게 나가 지운 일정이 9주치로 되살아났다.
+
+    private FixedOccurrence sentOccurrence(LocalDate date, String sentCalendarId) {
+        FixedOccurrence o = FixedOccurrence.reserve(pattern.fixedScheduleId(), USER, connection.getId(), date, NOW);
+        o.recordSent("evt-" + date, null, "etag-" + date, "수업", NOW, NOW, NOW);
+        o.locateInCalendar(sentCalendarId);
+        return o;
+    }
+
+    @Test
+    @DisplayName("🔴 고정 일정을 지우면 나간 회차마다 DELETE 를 적는다 — 이벤트가 실재하는 캘린더로")
+    void 고정_일정_삭제는_나간_회차의_DELETE를_적는다() {
+        FixedOccurrence first = sentOccurrence(LocalDate.of(2026, 9, 23), "cal-옛것");
+        FixedOccurrence second = sentOccurrence(LocalDate.of(2026, 9, 30), "cal-옛것");
+        given(occurrenceRepository.findByFixedScheduleId(pattern.fixedScheduleId()))
+                .willReturn(List.of(first, second));
+
+        reconciler.retireSchedule(USER, pattern.fixedScheduleId());
+
+        org.mockito.ArgumentCaptor<OutboundCalendarOp> saved = org.mockito.ArgumentCaptor.forClass(OutboundCalendarOp.class);
+        verify(opRepository, org.mockito.Mockito.times(2)).save(saved.capture());
+        assertThat(saved.getAllValues()).allSatisfy(op -> {
+            assertThat(op.getOperation()).isEqualTo(OutboundOperation.DELETE);
+            assertThat(op.getTargetType()).isEqualTo(OutboundTargetType.FIXED_OCCURRENCE);
+            // 지금 설정(cal-w)이 아니라 보낸 곳 — 회차 행이 곧 사라지므로 payload 가 유일한 근거다.
+            assertThat(op.getPayload().writeCalendarId()).isEqualTo("cal-옛것");
+            assertThat(op.getPayload().externalEventId()).startsWith("evt-");
+        });
+    }
+
+    @Test
+    @DisplayName("🔴 나간 적 없는 회차는 대기 CREATE 를 거두기만 한다 — 뒤늦게 나가 유령이 되지 않게")
+    void 고정_일정_삭제는_대기_CREATE를_거둔다() {
+        FixedOccurrence unsentOccurrence = FixedOccurrence.reserve(pattern.fixedScheduleId(), USER,
+                connection.getId(), LocalDate.of(2026, 9, 23), NOW);
+        given(occurrenceRepository.findByFixedScheduleId(pattern.fixedScheduleId()))
+                .willReturn(List.of(unsentOccurrence));
+        List<OutboundCalendarOp> unsent = List.of(pendingCreate(unsentOccurrence));
+        given(opRepository.findUnsentByTarget(OutboundTargetType.FIXED_OCCURRENCE, unsentOccurrence.getId()))
+                .willReturn(unsent);
+
+        reconciler.retireSchedule(USER, pattern.fixedScheduleId());
+
+        verify(opRepository).deleteAll(unsent);
+        verify(opRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("내보내기가 해제됐으면 밖의 일정은 두고 대기 작업만 거둔다 — 해제 이후 변경은 더 나가지 않는다")
+    void 내보내기_해제_뒤_삭제는_대기_작업만_거둔다() {
+        ExternalCalendarConnection released = ExternalCalendarConnection.connect(USER,
+                ExternalCalendarProvider.GOOGLE, "me@example.com", "enc", "renc",
+                Instant.parse("2030-01-01T00:00:00Z"), WRITE_SCOPE, NOW);
+        FixedOccurrence o = FixedOccurrence.reserve(pattern.fixedScheduleId(), USER, released.getId(),
+                LocalDate.of(2026, 9, 23), NOW);
+        o.recordSent("evt-1", null, "etag-1", "수업", NOW, NOW, NOW);
+        given(connectionRepository.findById(released.getId())).willReturn(Optional.of(released));
+        given(occurrenceRepository.findByFixedScheduleId(pattern.fixedScheduleId())).willReturn(List.of(o));
+        List<OutboundCalendarOp> unsent = List.of(pendingCreate(o));
+        given(opRepository.findUnsentByTarget(OutboundTargetType.FIXED_OCCURRENCE, o.getId())).willReturn(unsent);
+
+        reconciler.retireSchedule(USER, pattern.fixedScheduleId());
+
+        verify(opRepository).deleteAll(unsent);
+        verify(opRepository, never()).save(any());
     }
 }
