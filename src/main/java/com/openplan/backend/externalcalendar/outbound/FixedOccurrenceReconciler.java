@@ -76,9 +76,14 @@ public class FixedOccurrenceReconciler {
      *
      * <p>나간 적 없는 회차는 대기 CREATE 만 거둔다({@link #enqueueDelete}). 내보내기가 해제됐거나
      * 쓸 수 없으면 밖의 일정은 그대로 두고 대기 작업만 거둔다 — 해제 이후 변경은 더 나가지 않는다(계약).
+     *
+     * <p>🔴 회차를 <b>잠그며</b> 읽는다. 동기화가 바로 그 회차의 CREATE 를 보내는 중이면, 잠그지 않은 읽기는
+     * «안 나감» 을 보고 CREATE 만 거둔다 — 그사이 밖에는 이벤트가 생기고, 결과를 적을 회차 행은 CASCADE 로
+     * 사라져 아무도 지울 수 없는 유령이 남는다(#97 리뷰 Should-fix). 실행기가 같은 행을 쥐고 보내므로,
+     * 여기서는 그 커밋을 기다렸다가 «나갔음» 을 보고 DELETE 를 적는다.
      */
     public void retireSchedule(UUID userId, UUID fixedScheduleId) {
-        List<FixedOccurrence> occurrences = occurrenceRepository.findByFixedScheduleId(fixedScheduleId);
+        List<FixedOccurrence> occurrences = occurrenceRepository.findLockedByFixedScheduleId(fixedScheduleId);
         if (occurrences.isEmpty()) {
             return;
         }

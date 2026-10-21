@@ -13,8 +13,13 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -41,6 +46,8 @@ class FixedScheduleApiTest {
     private MockMvc mockMvc;
     @Autowired
     private JdbcTemplate jdbc;
+    @Autowired
+    private PlatformTransactionManager transactionManager;
 
     @BeforeEach
     void setUp() {
@@ -405,6 +412,96 @@ class FixedScheduleApiTest {
         Integer occurrences = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM fixed_schedule_occurrences WHERE fixed_schedule_id = ?", Integer.class, id);
         org.junit.jupiter.api.Assertions.assertEquals(0, occurrences);
+    }
+
+    /**
+     * 🔴 #97 리뷰 Should-fix — 동기화가 회차의 CREATE 를 <b>보내는 중에</b> 고정 일정을 지운다.
+     * 실행기는 매핑 행을 잠근 채 보내므로, 삭제는 그 커밋을 기다렸다가 «나갔음» 을 보고 DELETE 를 적어야 한다.
+     * 잠그지 않고 읽으면 «안 나감» 으로 보고 CREATE 만 거둔 뒤 회차를 CASCADE 로 지워, 방금 밖에 생긴 이벤트를
+     * 아무도 지울 수 없게 된다. 여기서는 실행기를 «행을 잠그고 → (보내고) → 결과를 적고 커밋» 하는 트랜잭션으로 흉내 낸다.
+     */
+    @Test
+    @DisplayName("🔴 회차를 내보내는 중에 고정 일정을 지우면 → 전송 커밋을 기다렸다가 그 이벤트의 DELETE 를 적는다")
+    void deleteWaitsForInFlightSendAndQueuesDelete() throws Exception {
+        UUID id = create(MAIN, "수업", "FRI", "19:00", "20:00");
+        UUID connection = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO external_calendar_connections
+                    (connection_id, user_id, provider, account_identifier, sync_mode, status,
+                     connected_at, created_at, access_token_enc, refresh_token_enc, granted_scope, write_calendar_id)
+                VALUES (?, ?, 'GOOGLE', 'tester@gmail.com', 'MANUAL', 'ACTIVE', now(), now(), 'enc', 'renc',
+                        'openid email https://www.googleapis.com/auth/calendar.events', 'cal-지금것')
+                """, connection, MAIN);
+        UUID occurrence = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO fixed_schedule_occurrences
+                    (occurrence_id, fixed_schedule_id, user_id, connection_id, occurrence_date, external_uid)
+                VALUES (?, ?, ?, ?, DATE '2026-10-23', ?)
+                """, occurrence, id, MAIN, connection, "uid-inflight-" + occurrence);
+        UUID createOp = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO outbound_calendar_ops
+                    (op_id, user_id, connection_id, target_type, target_id, operation, payload, status)
+                VALUES (?, ?, ?, 'FIXED_OCCURRENCE', ?, 'CREATE', CAST(? AS jsonb), 'PENDING')
+                """, createOp, MAIN, connection, occurrence,
+                "{\"uid\":\"uid-inflight\",\"title\":\"수업\",\"writeCalendarId\":\"cal-지금것\"}");
+
+        CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch providerReturned = new CountDownLatch(1);
+        TransactionTemplate tx = new TransactionTemplate(transactionManager);
+        CompletableFuture<Void> sending = CompletableFuture.runAsync(() -> tx.executeWithoutResult(status -> {
+            jdbc.queryForList("SELECT occurrence_id FROM fixed_schedule_occurrences WHERE occurrence_id = ? FOR UPDATE",
+                    occurrence);
+            locked.countDown();
+            try {
+                providerReturned.await(10, TimeUnit.SECONDS);   // 제공자 호출 중
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            jdbc.update("""
+                    UPDATE fixed_schedule_occurrences
+                       SET external_event_id = 'evt-inflight', etag = 'etag-inflight', sent_title = '수업',
+                           sent_start_at = now(), sent_end_at = now(), sent_calendar_id = 'cal-지금것'
+                     WHERE occurrence_id = ?
+                    """, occurrence);
+            jdbc.update("UPDATE outbound_calendar_ops SET status = 'DONE' WHERE op_id = ?", createOp);
+        }));
+        org.junit.jupiter.api.Assertions.assertTrue(locked.await(10, TimeUnit.SECONDS));
+
+        CompletableFuture<Integer> deleting = CompletableFuture.supplyAsync(() -> {
+            try {
+                return mockMvc.perform(delete(PATH + "/" + id).header("X-Dev-User", MAIN.toString()))
+                        .andReturn().getResponse().getStatus();
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        // 삭제가 실제로 회차 잠금 앞에 서 있는지 DB 에서 확인한 뒤에 전송을 끝낸다 — 잠금이 없으면 삭제는
+        // 기다리지 않고 지나가 버리고, 이 대기는 끝내 성립하지 않는다.
+        boolean deleteWaited = false;
+        for (int i = 0; i < 100 && !deleteWaited && !deleting.isDone(); i++) {
+            Integer waiting = jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM pg_stat_activity
+                     WHERE datname = current_database() AND wait_event_type = 'Lock'
+                    """, Integer.class);
+            deleteWaited = waiting != null && waiting > 0;
+            if (!deleteWaited) {
+                Thread.sleep(50);
+            }
+        }
+        providerReturned.countDown();
+        sending.get(10, TimeUnit.SECONDS);
+        org.junit.jupiter.api.Assertions.assertEquals(204, deleting.get(10, TimeUnit.SECONDS));
+        org.junit.jupiter.api.Assertions.assertTrue(deleteWaited, "삭제가 보내는 중인 회차의 잠금을 기다리지 않았다");
+
+        var queued = jdbc.queryForList("""
+                SELECT operation, status, payload->>'writeCalendarId' AS cal, payload->>'externalEventId' AS evt
+                  FROM outbound_calendar_ops WHERE target_id = ? AND operation = 'DELETE'
+                """, occurrence);
+        org.junit.jupiter.api.Assertions.assertEquals(1, queued.size(), "방금 밖에 생긴 이벤트의 DELETE 가 없다 — 유령이 남는다");
+        org.junit.jupiter.api.Assertions.assertEquals("PENDING", queued.getFirst().get("status"));
+        org.junit.jupiter.api.Assertions.assertEquals("cal-지금것", queued.getFirst().get("cal"));
+        org.junit.jupiter.api.Assertions.assertEquals("evt-inflight", queued.getFirst().get("evt"));
     }
 
     // ---------- 주차 예외 (PLAN-33/34) ----------
