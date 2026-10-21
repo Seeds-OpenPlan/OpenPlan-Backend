@@ -47,6 +47,8 @@ class FixedScheduleApiTest {
         seedUser(MAIN);
         seedUser(OTHER);
         jdbc.update("DELETE FROM fixed_schedules WHERE user_id IN (?, ?)", MAIN, OTHER);
+        // 연동을 지우면 회차·아웃박스 행도 CASCADE 로 함께 지워진다.
+        jdbc.update("DELETE FROM external_calendar_connections WHERE user_id IN (?, ?)", MAIN, OTHER);
     }
 
     // ---------- POST 생성 ----------
@@ -341,6 +343,68 @@ class FixedScheduleApiTest {
                 "SELECT COUNT(*) FROM fixed_schedule_week_exceptions WHERE fixed_schedule_id = ?",
                 Integer.class, id);
         org.junit.jupiter.api.Assertions.assertEquals(0, remaining);
+    }
+
+    /**
+     * 🔴 QA 2026-10-21 F4 회귀 — 회차 행이 CASCADE 로 사라지기 <b>전에</b> 외부 삭제가 적혀야 한다.
+     * 단위 테스트(FixedOccurrenceReconcilerTest)는 리포지토리를 mock 으로 대신해 실제 CASCADE 순서와
+     * 컬럼 매핑을 보지 못한다(#97 리뷰 Should-fix). 여기서는 실제 스키마로 끝까지 따라간다.
+     */
+    @Test
+    @DisplayName("🔴 내보낸 회차가 있는 고정 일정 삭제 → 나간 회차는 DELETE 가 보낸 캘린더로 적재되고, 대기 CREATE 는 거둬진다")
+    void deleteQueuesOutboundDeleteForExportedOccurrences() throws Exception {
+        UUID id = create(MAIN, "수업", "FRI", "19:00", "20:00");
+        UUID connection = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO external_calendar_connections
+                    (connection_id, user_id, provider, account_identifier, sync_mode, status,
+                     connected_at, created_at, access_token_enc, refresh_token_enc, granted_scope, write_calendar_id)
+                VALUES (?, ?, 'GOOGLE', 'tester@gmail.com', 'MANUAL', 'ACTIVE', now(), now(), 'enc', 'renc',
+                        'openid email https://www.googleapis.com/auth/calendar.events', 'cal-지금것')
+                """, connection, MAIN);
+        // 이미 구글에 나간 회차 — 대상 설정을 바꾼 뒤라 «있는 곳» 이 지금 설정과 다르다.
+        UUID sent = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO fixed_schedule_occurrences
+                    (occurrence_id, fixed_schedule_id, user_id, connection_id, occurrence_date, external_uid,
+                     external_event_id, etag, sent_title, sent_start_at, sent_end_at, sent_calendar_id)
+                VALUES (?, ?, ?, ?, DATE '2026-10-23', ?, 'evt-1', 'etag-1', '수업', now(), now(), 'cal-옛것')
+                """, sent, id, MAIN, connection, "uid-sent-" + sent);
+        // 아직 안 나간 회차와 그 대기 CREATE — 남겨 두면 지운 뒤에 뒤늦게 나가 유령이 된다.
+        UUID unsent = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO fixed_schedule_occurrences
+                    (occurrence_id, fixed_schedule_id, user_id, connection_id, occurrence_date, external_uid)
+                VALUES (?, ?, ?, ?, DATE '2026-10-30', ?)
+                """, unsent, id, MAIN, connection, "uid-unsent-" + unsent);
+        jdbc.update("""
+                INSERT INTO outbound_calendar_ops
+                    (op_id, user_id, connection_id, target_type, target_id, operation, payload, status)
+                VALUES (?, ?, ?, 'FIXED_OCCURRENCE', ?, 'CREATE', CAST(? AS jsonb), 'PENDING')
+                """, UUID.randomUUID(), MAIN, connection, unsent,
+                "{\"uid\":\"uid-unsent\",\"title\":\"수업\",\"writeCalendarId\":\"cal-지금것\"}");
+
+        mockMvc.perform(delete(PATH + "/" + id).header("X-Dev-User", MAIN.toString()))
+                .andExpect(status().isNoContent());
+
+        var queued = jdbc.queryForList("""
+                SELECT operation, status, payload->>'writeCalendarId' AS cal, payload->>'externalEventId' AS evt
+                  FROM outbound_calendar_ops WHERE target_id = ?
+                """, sent);
+        org.junit.jupiter.api.Assertions.assertEquals(1, queued.size());
+        org.junit.jupiter.api.Assertions.assertEquals("DELETE", queued.getFirst().get("operation"));
+        org.junit.jupiter.api.Assertions.assertEquals("PENDING", queued.getFirst().get("status"));
+        // 지금 설정(cal-지금것)이 아니라 이벤트가 실재하는 곳 — 회차 행이 사라져 payload 가 유일한 근거다.
+        org.junit.jupiter.api.Assertions.assertEquals("cal-옛것", queued.getFirst().get("cal"));
+        org.junit.jupiter.api.Assertions.assertEquals("evt-1", queued.getFirst().get("evt"));
+
+        Integer pendingCreates = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM outbound_calendar_ops WHERE target_id = ?", Integer.class, unsent);
+        org.junit.jupiter.api.Assertions.assertEquals(0, pendingCreates);
+
+        Integer occurrences = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM fixed_schedule_occurrences WHERE fixed_schedule_id = ?", Integer.class, id);
+        org.junit.jupiter.api.Assertions.assertEquals(0, occurrences);
     }
 
     // ---------- 주차 예외 (PLAN-33/34) ----------
