@@ -140,7 +140,7 @@ class OutboundCalendarQueueTest {
     @Test
     @DisplayName("🔴 내보낸 적 없는 일정의 삭제는 적지 않는다 — 밖에 지울 것이 없다")
     void 매핑이_없으면_삭제를_적지_않는다() {
-        given(refRepository.findById(any())).willReturn(Optional.empty());
+        given(refRepository.findLockedByScheduleId(any())).willReturn(Optional.empty());
 
         queue.enqueueScheduleDelete(USER, schedule.getId());
 
@@ -181,7 +181,7 @@ class OutboundCalendarQueueTest {
         sent.recordSent("evt-1", "/dav/evt-1.ics", "etag-1", "스터디",
                 schedule.getStartAt(), schedule.getEndAt(), NOW);
         sent.locateInCalendar("cal-A");
-        given(refRepository.findById(schedule.getId())).willReturn(Optional.of(sent));
+        given(refRepository.findLockedByScheduleId(schedule.getId())).willReturn(Optional.of(sent));
         given(connectionRepository.findById(home.getId())).willReturn(Optional.of(home));
         given(connectionRepository.findByUserIdOrderByConnectedAtAsc(USER)).willReturn(List.of(home));
 
@@ -215,6 +215,7 @@ class OutboundCalendarQueueTest {
             ref.recordSent("evt-1", null, "etag-1", "스터디", schedule.getStartAt(), schedule.getEndAt(), NOW);
         }
         given(refRepository.findById(schedule.getId())).willReturn(Optional.of(ref));
+        given(refRepository.findLockedByScheduleId(schedule.getId())).willReturn(Optional.of(ref));   // 삭제 경로
         given(connectionRepository.findById(home.getId())).willReturn(Optional.of(home));
         return ref;
     }

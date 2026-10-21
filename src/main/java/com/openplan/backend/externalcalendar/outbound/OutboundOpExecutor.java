@@ -78,6 +78,14 @@ public class OutboundOpExecutor {
         if (op == null || op.getStatus() == OutboundStatus.DONE) {
             return;
         }
+        // 🔴 매핑 행을 잠그고 보낸다 — 삭제 쪽도 같은 행을 잠그며 읽으므로 둘이 차례를 지킨다.
+        //    보내는 중에 삭제가 들어오면 삭제가 이 커밋을 기다렸다가 «나갔음» 을 보고 DELETE 를 적는다.
+        //    삭제가 먼저 잡았으면 여기서 기다렸다가, 작업이 거둬졌으면 아무것도 보내지 않는다.
+        boolean mapped = lockMapping(op);
+        if (!opRepository.existsById(opId)) {
+            log.info("잠금을 기다리는 사이 원본이 지워져 작업이 거둬졌다: opId={} target={}", opId, op.getTargetType());
+            return;
+        }
         Instant now = clock.now();
         try {
             Optional<ExternalCalendarConnection> found = connectionRepository.findById(op.getConnectionId());
@@ -93,7 +101,7 @@ public class OutboundOpExecutor {
                 op.fail("대상 캘린더가 없다 — 내보내기가 해제된 상태다", now);
                 return;
             }
-            if (op.getOperation() == OutboundOperation.CREATE && !mappingExists(op)) {
+            if (op.getOperation() == OutboundOperation.CREATE && !mapped) {
                 // 🔴 원본이 지워져 매핑이 CASCADE 로 사라졌다. 보내면 결과를 적을 곳이 없어 밖에 아무도
                 //    지울 수 없는 유령이 생긴다 — 지운 고정 일정이 9주치로 되살아난 것이 이 경로다(QA F4).
                 //    적재 쪽이 지우기 전에 거두는 것이 정본이고, 이것은 그 사이를 빠져나온 것의 안전망이다.
@@ -137,12 +145,18 @@ public class OutboundOpExecutor {
         }
     }
 
-    /** 이 작업의 매핑 행이 아직 있는가 — 없으면 원본이 지워진 것이다. */
-    private boolean mappingExists(OutboundCalendarOp op) {
+    /**
+     * 이 작업의 매핑 행을 잠그고, 아직 있는지 답한다 — 없으면 원본이 지워진 것이다.
+     *
+     * <p>🔴 잠금은 이 트랜잭션이 끝날 때까지 쥔다. 매핑이 있는지 보내기 <b>전에</b> 한 번 보는 것만으로는
+     * 보내는 동안 들어온 삭제를 막지 못한다 — 삭제가 «안 나감» 을 보고 CREATE 만 거둔 뒤 매핑을 CASCADE 로
+     * 지우면, 방금 밖에 생긴 이벤트의 결과를 적을 곳이 없다(#97 리뷰 Should-fix).
+     */
+    private boolean lockMapping(OutboundCalendarOp op) {
         return switch (op.getTargetType()) {
-            case SCHEDULE -> refRepository.existsById(op.getTargetId());
-            case FIXED_OCCURRENCE -> occurrenceRepository.existsById(op.getTargetId());
-            case PLAN_BLOCK -> blockRefRepository.existsById(op.getTargetId());
+            case SCHEDULE -> refRepository.findLockedByScheduleId(op.getTargetId()).isPresent();
+            case FIXED_OCCURRENCE -> occurrenceRepository.findLockedById(op.getTargetId()).isPresent();
+            case PLAN_BLOCK -> blockRefRepository.findLockedById(op.getTargetId()).isPresent();
         };
     }
 

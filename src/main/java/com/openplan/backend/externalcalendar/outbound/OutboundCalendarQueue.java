@@ -114,7 +114,9 @@ public class OutboundCalendarQueue {
      * 참조 없이 쌓인 DELETE 는 영원히 실패한다(#80 리뷰 Blocking).
      */
     public void enqueueScheduleDelete(UUID userId, UUID scheduleId) {
-        Optional<ScheduleExternalRef> found = refRepository.findById(scheduleId);
+        // 🔴 잠그며 읽는다 — 보내는 중인 CREATE 의 결과를 기다려야 «안 나감» 으로 오판해 유령을 남기지 않는다
+        //    (FixedOccurrenceReconciler#retireSchedule 과 같은 이유 · #97 리뷰 Should-fix).
+        Optional<ScheduleExternalRef> found = refRepository.findLockedByScheduleId(scheduleId);
         if (found.isEmpty()) {
             return;   // 내보낸 적이 없다 — 밖에 지울 것도 없다.
         }

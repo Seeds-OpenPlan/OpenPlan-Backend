@@ -179,7 +179,7 @@ class FixedOccurrenceReconcilerTest {
     void 고정_일정_삭제는_나간_회차의_DELETE를_적는다() {
         FixedOccurrence first = sentOccurrence(LocalDate.of(2026, 9, 23), "cal-옛것");
         FixedOccurrence second = sentOccurrence(LocalDate.of(2026, 9, 30), "cal-옛것");
-        given(occurrenceRepository.findByFixedScheduleId(pattern.fixedScheduleId()))
+        given(occurrenceRepository.findLockedByFixedScheduleId(pattern.fixedScheduleId()))
                 .willReturn(List.of(first, second));
 
         reconciler.retireSchedule(USER, pattern.fixedScheduleId());
@@ -200,7 +200,7 @@ class FixedOccurrenceReconcilerTest {
     void 고정_일정_삭제는_대기_CREATE를_거둔다() {
         FixedOccurrence unsentOccurrence = FixedOccurrence.reserve(pattern.fixedScheduleId(), USER,
                 connection.getId(), LocalDate.of(2026, 9, 23), NOW);
-        given(occurrenceRepository.findByFixedScheduleId(pattern.fixedScheduleId()))
+        given(occurrenceRepository.findLockedByFixedScheduleId(pattern.fixedScheduleId()))
                 .willReturn(List.of(unsentOccurrence));
         List<OutboundCalendarOp> unsent = List.of(pendingCreate(unsentOccurrence));
         given(opRepository.findUnsentByTarget(OutboundTargetType.FIXED_OCCURRENCE, unsentOccurrence.getId()))
@@ -222,7 +222,7 @@ class FixedOccurrenceReconcilerTest {
                 LocalDate.of(2026, 9, 23), NOW);
         o.recordSent("evt-1", null, "etag-1", "수업", NOW, NOW, NOW);
         given(connectionRepository.findById(released.getId())).willReturn(Optional.of(released));
-        given(occurrenceRepository.findByFixedScheduleId(pattern.fixedScheduleId())).willReturn(List.of(o));
+        given(occurrenceRepository.findLockedByFixedScheduleId(pattern.fixedScheduleId())).willReturn(List.of(o));
         List<OutboundCalendarOp> unsent = List.of(pendingCreate(o));
         given(opRepository.findUnsentByTarget(OutboundTargetType.FIXED_OCCURRENCE, o.getId())).willReturn(unsent);
 

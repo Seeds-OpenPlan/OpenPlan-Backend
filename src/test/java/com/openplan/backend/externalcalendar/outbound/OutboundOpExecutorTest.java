@@ -86,6 +86,7 @@ class OutboundOpExecutorTest {
 
     private void stubExecutable(OutboundCalendarOp op, ExternalCalendarConnection conn, boolean needsProvider) {
         when(opRepository.findById(op.getId())).thenReturn(Optional.of(op));
+        when(opRepository.existsById(op.getId())).thenReturn(true);
         when(clock.now()).thenReturn(NOW);
         when(connectionRepository.findById(op.getConnectionId())).thenReturn(Optional.of(conn));
         if (needsProvider) {
@@ -98,7 +99,8 @@ class OutboundOpExecutorTest {
     void create_는_지금_설정된_대상으로_나간다() {
         OutboundCalendarOp op = op(OutboundOperation.CREATE, "cal-옛것");
         stubExecutable(op, connection("cal-지금것"), true);
-        when(refRepository.existsById(op.getTargetId())).thenReturn(true);
+        when(refRepository.findLockedByScheduleId(op.getTargetId())).thenReturn(Optional.of(
+                ScheduleExternalRef.reserve(op.getTargetId(), op.getConnectionId(), "uid-1", NOW)));
         when(provider.createEvent(any(), eq("cal-지금것"), any()))
                 .thenReturn(new ProviderWriteResult("evt-new", "/dav/new.ics", "etag-new"));
 
@@ -160,11 +162,27 @@ class OutboundOpExecutorTest {
         OutboundCalendarOp op = OutboundCalendarOp.queue(USER, UUID.randomUUID(),
                 OutboundTargetType.FIXED_OCCURRENCE, UUID.randomUUID(), OutboundOperation.CREATE, payload, NOW);
         stubExecutable(op, connection("cal-지금것"), false);
-        when(occurrenceRepository.existsById(op.getTargetId())).thenReturn(false);
+        when(occurrenceRepository.findLockedById(op.getTargetId())).thenReturn(Optional.empty());
 
         executor.execute(op.getId());
 
         verifyNoInteractions(provider);
         verify(opRepository).delete(op);
+    }
+
+    @Test
+    @DisplayName("🔴 매핑 잠금을 기다리는 사이 삭제가 작업을 거뒀으면 아무것도 보내지 않는다 — 지운 일정이 밖에 생기지 않게")
+    void 잠금을_기다리는_사이_거둬진_작업은_보내지_않는다() {
+        OutboundCalendarOp op = op(OutboundOperation.CREATE, "cal-지금것");
+        when(opRepository.findById(op.getId())).thenReturn(Optional.of(op));
+        // 삭제 트랜잭션이 매핑을 먼저 잡고 CREATE 를 거둔 뒤 커밋했다 — 잠금을 얻고 보니 작업이 없다.
+        when(refRepository.findLockedByScheduleId(op.getTargetId())).thenReturn(Optional.empty());
+        when(opRepository.existsById(op.getId())).thenReturn(false);
+
+        executor.execute(op.getId());
+
+        verifyNoInteractions(provider);
+        verify(opRepository, never()).delete(any());
+        assertThat(op.getStatus()).isEqualTo(OutboundStatus.PENDING);
     }
 }
