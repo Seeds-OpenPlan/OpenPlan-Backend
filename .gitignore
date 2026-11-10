@@ -38,3 +38,10 @@ Thumbs.db
 # 배포 전체가 3단계에서 즉사한다(2026-08-24 실측 — 08-23 HTTPS 전환 이후 모든 배포가
 # 여기서 죽어 있었다). 무시 목록에 두면 stash 대상 자체가 되지 않는다.
 /certbot/
+# 🔴 backups/ 는 DB 덤프다. 무시 목록에 없으면 CD 재배포마다 bootstrap.sh 가 stash 로 옮겨
+#    작업 트리에서 사라진다. cd.conf·.cd-state·logs/ 도 같은 이유다 — AWS 서버에 쌓인 자동
+#    stash 57개가 이것들이었다(2026-10-29 백업에서 확인).
+/backups/
+/cd.conf
+/.cd-state
+/logs/
