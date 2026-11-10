@@ -2,9 +2,9 @@
 # OpenPlan — 운영 DB 일일 백업 (cron 이 부른다. deploy/install-cron.sh 가 등록한다)
 #
 # 🔴 RDS 가 해 주던 자동 백업이 없어져서 생긴 파일이다. 같은 VM 의 디스크에 쌓이므로
-#    "실수로 지운 데이터" 는 되살리지만 **VM 자체를 잃으면 함께 사라진다**(Always Free 는
-#    유휴 회수가 있다). 그래서 가끔은 밖으로 가져가야 한다:
-#      scp ubuntu@openplan.services:~/openplan/backups/openplan-<날짜>.dump .
+#    "실수로 지운 데이터" 는 되살리지만 **VM 이나 디스크를 잃으면 함께 사라진다**.
+#    그래서 가끔은 밖으로 가져가야 한다:
+#      gcloud compute scp openplan-prod:~/openplan/backups/openplan-<날짜>.dump . --zone us-central1-f
 #
 # 형식은 AWS 종료 백업과 같은 pg_dump -Fc 다 — 복원은 deploy/restore-db.sh 로 한다.
 

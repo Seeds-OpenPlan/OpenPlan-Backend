@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # OpenPlan — CD 설치. 서버에서 한 번만 실행한다.
 #
-#   ssh -i ~/.ssh/<키> ubuntu@openplan.services   (EC2 시절은 ec2-user)
+#   (GCP 콘솔의 SSH 버튼으로 접속 · EC2 시절은 ssh ec2-user@openplan.services)
 #   cd ~/openplan && git fetch origin && git switch -C "$(cat cd.conf 2>/dev/null | grep -oP '(?<=^BE_BRANCH=).*' || echo main)" FETCH_HEAD
 #   BE_BRANCH=main bash deploy/install-cd.sh
 #

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# OpenPlan — 서버 배포 부트스트랩 (Oracle Cloud Ubuntu ARM · 예전 EC2 Amazon Linux 2023 겸용)
+# OpenPlan — 서버 배포 부트스트랩 (GCP e2-micro Ubuntu 24.04 · 예전 EC2 Amazon Linux 2023 겸용)
 #
-# 하는 일: Docker·git 설치 → (Ubuntu) 방화벽 80·443 개방 → 저장소 클론 → FE 빌드
+# 하는 일: Docker·git 설치 → 스왑 → 저장소 클론 → FE 빌드
 #          → postgres 기동(+최초 1회 덤프 복원) → BE 이미지 빌드 → 기동
 #          → CD 설치·동기화 → 배포 스탬프 기록 → 정기 작업(DB 백업·인증서 갱신) 등록.
 #
@@ -54,7 +54,7 @@ if command -v dnf >/dev/null 2>&1; then
   sudo dnf -y update
   sudo dnf -y install docker git
 else
-  # 🔴 Ubuntu(Oracle Cloud) 는 배포판 docker.io 대신 Docker 공식 저장소를 쓴다. 배포판 것은
+  # 🔴 Ubuntu(GCP) 는 배포판 docker.io 대신 Docker 공식 저장소를 쓴다. 배포판 것은
   #    buildx 가 낡아 6단계가 "compose build requires buildx 0.17.0 or later" 로 죽는다(아래
   #    2단계 주석, AL2023 에서 겪은 것과 같은 문제). 공식 설치 스크립트는 compose·buildx
   #    플러그인을 최신으로 같이 깐다. 이미 깔려 있으면 건너뛴다 — CD 재배포마다 다시 돌기 때문이다.
@@ -66,31 +66,17 @@ else
   fi
 fi
 
-# ── 1-a. 방화벽 (Oracle Cloud Ubuntu) ────────────────────────────────────────
-# 🔴 Oracle Cloud 의 Ubuntu 이미지는 VM 안의 iptables 가 22 외 전부를 REJECT 한다. 콘솔의
-#    보안 목록(Security List)에서 80·443 을 열어도 여기서 또 막혀 밖에서 안 닿는다 — 두 곳을
-#    다 열어야 한다. REJECT 줄보다 **앞에** 넣어야 효과가 있어 -I INPUT 6 이 아니라
-#    REJECT 바로 앞 위치를 찾아 넣는다. netfilter-persistent 로 저장해야 재부팅 뒤에도 남는다.
-#    EC2(AL2023)에는 이 규칙이 없어 건너뛴다.
-if [ -f /etc/iptables/rules.v4 ] && command -v netfilter-persistent >/dev/null 2>&1; then
-  log "1a/9 방화벽 80·443 개방"
-  for p in 80 443; do
-    if ! sudo iptables -C INPUT -p tcp -m state --state NEW --dport "$p" -j ACCEPT 2>/dev/null; then
-      pos="$(sudo iptables -L INPUT --line-numbers -n | awk '$2=="REJECT"{print $1; exit}')"
-      sudo iptables -I INPUT "${pos:-1}" -p tcp -m state --state NEW --dport "$p" -j ACCEPT
-      echo "  $p 열었다"
-    fi
-  done
-  sudo netfilter-persistent save >/dev/null
-fi
-
 # ── 1-b. 스왑 ────────────────────────────────────────────────────────────────
 # t3.medium 은 RAM 4GB(실측 3.7GB)가 상한이다. Gradle 데몬 + Node 빌드가 겹치면
 # OOM Killer 가 컴파일 도중 프로세스를 죽이는데, 로그에는 원인이 명확히 안 남는다
-# ("Gradle build daemon disappeared unexpectedly" 정도). 스왑 2GB로 받친다.
+# ("Gradle build daemon disappeared unexpectedly" 정도). 스왑으로 받친다.
+# 🔴 GCP e2-micro 는 RAM 1GB 라 떠 있는 서비스(약 0.6GB) 옆에서 Gradle·Vite 빌드를 돌리면
+#    스왑 2GB 로는 모자란다. RAM 2GB 미만이면 4GB 를 만든다(디스크 30GB 중). 빌드는 느려진다.
 if ! swapon --show | grep -q .; then
-  log "1b/9 스왑 2GB 생성"
-  sudo dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
+  MEM_MB="$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)"
+  SWAP_MB=$([ "$MEM_MB" -lt 2048 ] && echo 4096 || echo 2048)
+  log "1b/9 스왑 ${SWAP_MB}MB 생성 (RAM ${MEM_MB}MB)"
+  sudo dd if=/dev/zero of=/swapfile bs=1M count="$SWAP_MB" status=none
   sudo chmod 600 /swapfile
   sudo mkswap /swapfile >/dev/null
   sudo swapon /swapfile

@@ -8,10 +8,10 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 # 🔴 __USER__·__HOME__·__APP_DIR__ 는 install-cd.sh 가 설치할 때 실제 값으로 채운다 — 이 파일을
-#    그대로 /etc/systemd/system 에 복사하면 안 된다. EC2 는 ec2-user, Oracle Cloud Ubuntu 는
-#    ubuntu 라 사용자 이름을 박아 두면 서버를 옮기는 순간 CD 가 "사용자 없음" 으로 멈춘다.
+#    그대로 /etc/systemd/system 에 복사하면 안 된다. EC2 는 ec2-user, GCP 는 콘솔 SSH 계정 이름이라
+#    사용자 이름을 박아 두면 서버를 옮기는 순간 CD 가 "사용자 없음" 으로 멈춘다.
 User=__USER__
-# bootstrap.sh 가 sudo 를 쓴다. AL2023 의 ec2-user · OCI Ubuntu 의 ubuntu 둘 다 NOPASSWD 다.
+# bootstrap.sh 가 sudo 를 쓴다. AL2023 의 ec2-user · GCP Ubuntu 의 SSH 계정 둘 다 NOPASSWD 다.
 Environment=HOME=__HOME__
 WorkingDirectory=__APP_DIR__
 ExecStart=/bin/bash __APP_DIR__/deploy/cd-watch.sh

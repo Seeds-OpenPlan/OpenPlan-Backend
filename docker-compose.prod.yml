@@ -2,8 +2,12 @@
 #
 # 개발용 docker-compose.yml 과 별개 파일이다.
 #
-# 🔴 2026-11 AWS(EC2+RDS) 종료로 Oracle Cloud Always Free(ARM VM 1대)로 옮겼다. RDS 가 없어져
-#    운영 DB 도 이 파일의 postgres 서비스다 — 같은 VM 안이라 백업은 deploy/backup-db.sh 가 맡는다.
+# 🔴 2026-11 AWS(EC2+RDS) 종료로 GCP 무료 등급 e2-micro(RAM 1GB, us-central1) 1대로 옮겼다.
+#    RDS 가 없어져 운영 DB 도 이 파일의 postgres 서비스다 — 백업은 deploy/backup-db.sh 가 맡는다.
+#    외부 관리형 DB(Neon 등 무료 플랜)는 쓰지 않는다: PushReminderDispatcher 가 1분마다 DB 를
+#    읽어 DB 가 쉬지 못하고, 쉬는 동안만 무료인 플랜은 월 한도를 넘겨 정지된다.
+#    🔴 메모리 예산이 빠듯하다(2026-11-10 로컬 실측, 아래 값 그대로): backend 286MB · ai 182MB ·
+#    postgres 97MB · nginx 수 MB = 약 0.6GB. 서비스를 더 얹거나 힙을 키우면 이 표부터 다시 잴 것.
 #
 #   브라우저 :80 → nginx ┬→ /        → ./web (FE 빌드 산출물)
 #                        └→ /api/**  → backend:8080 ─(내부망)┬→ ai:8000
@@ -40,12 +44,11 @@ services:
       #    DB_PORT 도 고정한다. application.yaml 기본값은 로컬 개발용 5433 이다.
       DB_HOST: postgres
       DB_PORT: "5432"
-      # 🔴 힙을 기동 때 미리 잡아 둔다(-Xms=-Xmx + AlwaysPreTouch). Oracle Always Free 는
-      #    7일간 CPU·네트워크·메모리가 모두 20% 미만이면 VM 을 회수한다. 트래픽이 적어 CPU·
-      #    네트워크로는 못 넘기므로 메모리로 넘긴다 — 2코어/12GB VM 이면 기준이 2.4GB 다.
-      #    힙 2GB 로는 backend 2.27GB + postgres 0.1GB 로 기준선에 붙었다(2026-11-04 실측).
-      #    3GB 로 여유를 둔다. VM 크기를 바꾸면 이 값도 같이 맞출 것.
-      JAVA_OPTS: ${JAVA_OPTS:--Xms3g -Xmx3g -XX:+AlwaysPreTouch}
+      # 🔴 RAM 1GB 박스용 JVM 상한. 기본값(힙 = RAM 의 1/4 + 메타스페이스·코드캐시 무제한)으로
+      #    두면 컨테이너 셋이 같이 못 산다. 이 값으로 기동 13초, 유휴 272MB, /landing 300건
+      #    동시 호출(전부 200) 뒤 286MB 였다(2026-11-10 로컬 실측). SerialGC·C1 전용은 1코어
+      #    공유 CPU 에서 GC 스레드·C2 컴파일이 요청과 다투지 않게 하려는 것이다.
+      JAVA_OPTS: ${JAVA_OPTS:--Xmx256m -Xss512k -XX:MaxMetaspaceSize=192m -XX:ReservedCodeCacheSize=48m -XX:+UseSerialGC -XX:TieredStopAtLevel=1}
     depends_on:
       postgres:
         condition: service_healthy
@@ -126,6 +129,9 @@ services:
     image: pgvector/pgvector:pg18
     container_name: openplan-postgres
     restart: unless-stopped
+    # 1GB 박스용으로 줄인다. 기본 shared_buffers 128MB 는 이 DB(12MB)에 과하다. 연결은 Hikari
+    # 기본 풀 10 + 백업·psql 몇 개면 충분하다.
+    command: ["postgres", "-c", "shared_buffers=32MB", "-c", "max_connections=30", "-c", "work_mem=2MB"]
     environment:
       POSTGRES_DB: ${DB_NAME:-openplan}
       POSTGRES_USER: ${DB_USERNAME:-openplan}
