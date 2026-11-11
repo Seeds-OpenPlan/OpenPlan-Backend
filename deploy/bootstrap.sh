@@ -308,7 +308,9 @@ cd "$APP_DIR"
 # 🔴 DB 를 먼저 올리고, 최초 이전이면 backend 보다 먼저 복원한다(머리 주석 참조).
 #    복원이 실패하면 여기서 멈춘다 — 빈 DB 로 backend 를 띄우면 Flyway 가 스키마를 만들어
 #    버려 그 뒤로는 덤프를 넣을 수 없다. AI 와 달리 DB 는 없이 계속할 부품이 아니다.
-$DOCKER compose -f docker-compose.prod.yml up -d postgres
+# --wait 로 healthy 까지 기다린다. 아래 AI 빌드 실패 경로의 `--no-deps` 는 depends_on 의
+# 헬스 대기까지 꺼 버리므로, 여기서 미리 기다려 두지 않으면 backend 가 DB 보다 먼저 뜬다.
+$DOCKER compose -f docker-compose.prod.yml up -d --wait postgres
 if [ -n "${RESTORE_DUMP:-}" ]; then
   log "6a/9 DB 복원 ($RESTORE_DUMP)"
   APP_DIR="$APP_DIR" bash "$APP_DIR/deploy/restore-db.sh" "$RESTORE_DUMP"

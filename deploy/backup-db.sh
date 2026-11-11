@@ -22,7 +22,9 @@ chmod 700 "$OUT_DIR"
 out="$OUT_DIR/openplan-$(date +%Y%m%d-%H%M).dump"
 
 # 🔴 임시 이름에 쓰고 성공해야 옮긴다. 실패한 반쪽 파일이 정상 백업처럼 남으면, 정작
-#    필요할 때 복원이 깨진다.
+#    필요할 때 복원이 깨진다. 실패하면 반쪽 파일은 지운다 — 아래 보관 정리는 .part 를
+#    보지 않아서, 남겨 두면 실패할 때마다 디스크에 쌓인다.
+trap 'rm -f "$out.part"' EXIT
 sudo docker compose -f docker-compose.prod.yml exec -T postgres \
   pg_dump -U "$DB_USER" -d "$DB_NAME" -Fc > "$out.part"
 mv "$out.part" "$out"
