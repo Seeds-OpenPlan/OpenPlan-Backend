@@ -1,9 +1,17 @@
 # OpenPlan — 운영 배포 (D-11 단일 오리진)
 #
-# 개발용 docker-compose.yml 과 별개 파일이다. 여기엔 postgres 서비스가 없다 — 운영 DB는 RDS다.
+# 개발용 docker-compose.yml 과 별개 파일이다.
+#
+# 🔴 2026-11 AWS(EC2+RDS) 종료로 GCP 무료 등급 e2-micro(RAM 1GB, us-central1) 1대로 옮겼다.
+#    RDS 가 없어져 운영 DB 도 이 파일의 postgres 서비스다 — 백업은 deploy/backup-db.sh 가 맡는다.
+#    외부 관리형 DB(Neon 등 무료 플랜)는 쓰지 않는다: PushReminderDispatcher 가 1분마다 DB 를
+#    읽어 DB 가 쉬지 못하고, 쉬는 동안만 무료인 플랜은 월 한도를 넘겨 정지된다.
+#    🔴 메모리 예산이 빠듯하다(2026-11-10 로컬 실측, 아래 값 그대로): backend 286MB · ai 182MB ·
+#    postgres 97MB · nginx 수 MB = 약 0.6GB. 서비스를 더 얹거나 힙을 키우면 이 표부터 다시 잴 것.
 #
 #   브라우저 :80 → nginx ┬→ /        → ./web (FE 빌드 산출물)
-#                        └→ /api/**  → backend:8080 ─(내부망)→ ai:8000
+#                        └→ /api/**  → backend:8080 ─(내부망)┬→ ai:8000
+#                                                            └→ postgres:5432
 #
 # 🔴 ai 는 nginx 에 라우트가 없다 — 브라우저가 AI 서비스를 직접 부르는 경로는 만들지 않는다
 #    (Spring↔AI 계약 §2). 내부 네트워크 신뢰가 MVP1 의 인증 모델이다(계약 §7 #4).
@@ -31,7 +39,19 @@ services:
       # 🔴 이 값이 비어 있으면 AI 접합(AiConfig)이 안 올라가고 규칙 first-fit 이 그대로 돈다.
       #    "AI 를 켰는데 왜 규칙이 도나"의 첫 확인 지점이다. 서비스명은 compose 내부 DNS 로 풀린다.
       AI_BASE_URL: http://openplan-ai:8000
+      # 🔴 DB 는 같은 compose 안의 postgres 다. .env 에 RDS 시절 DB_HOST 가 남아 있어도 여기서
+      #    덮어쓴다 — 남은 값을 따라가면 없어진 RDS 를 찾다가 기동이 실패한다.
+      #    DB_PORT 도 고정한다. application.yaml 기본값은 로컬 개발용 5433 이다.
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      # 🔴 RAM 1GB 박스용 JVM 상한. 기본값(힙 = RAM 의 1/4 + 메타스페이스·코드캐시 무제한)으로
+      #    두면 컨테이너 셋이 같이 못 산다. 이 값으로 기동 13초, 유휴 272MB, /landing 300건
+      #    동시 호출(전부 200) 뒤 286MB 였다(2026-11-10 로컬 실측). SerialGC·C1 전용은 1코어
+      #    공유 CPU 에서 GC 스레드·C2 컴파일이 요청과 다투지 않게 하려는 것이다.
+      JAVA_OPTS: ${JAVA_OPTS:--Xmx256m -Xss512k -XX:MaxMetaspaceSize=192m -XX:ReservedCodeCacheSize=48m -XX:+UseSerialGC -XX:TieredStopAtLevel=1}
     depends_on:
+      postgres:
+        condition: service_healthy
       # 헬스체크 통과까지 기다린다 — ai 가 뜨는 20초 남짓 동안 들어온 요청이 폴백으로
       # 새는 것을 막는다. ai 가 끝내 못 뜨면 backend 도 안 뜬다는 뜻이므로 required: false 로 둔다.
       # 🔴 이 조건은 대상에 헬스체크가 있어야 뜻이 있다. openplan-ai 의 헬스체크는 이 파일이
@@ -102,6 +122,35 @@ services:
     # ports 를 두지 않는다. 8000 을 호스트에 열면 인증 없이 모델을 호출할 수 있는 구멍이 된다 —
     # 이 서비스에는 인증이 없고(계약 §7 #4 내부망 신뢰), 남의 키로 한도를 태울 수 있다.
 
+  postgres:
+    # 🔴 메이저 버전을 18 로 둔다. RDS 가 PostgreSQL 18.3 이었고 백업 덤프가 pg_dump 18 로 떠
+    #    있다 — 더 낮은 서버로는 pg_restore 가 덤프를 못 읽는다. vector 확장도 덤프에 있어
+    #    pgvector 이미지를 쓴다(arm64 이미지가 있다).
+    image: pgvector/pgvector:pg18
+    container_name: openplan-postgres
+    restart: unless-stopped
+    # 1GB 박스용으로 줄인다. 기본 shared_buffers 128MB 는 이 DB(12MB)에 과하다. 연결은 Hikari
+    # 기본 풀 10 + 백업·psql 몇 개면 충분하다.
+    command: ["postgres", "-c", "shared_buffers=32MB", "-c", "max_connections=30", "-c", "work_mem=2MB"]
+    environment:
+      POSTGRES_DB: ${DB_NAME:-openplan}
+      POSTGRES_USER: ${DB_USERNAME:-openplan}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      TZ: Asia/Seoul
+    volumes:
+      # 🔴 PG18 이미지는 데이터 위치가 /var/lib/postgresql/18/docker 로 바뀌었고 VOLUME 도
+      #    /var/lib/postgresql 이다. 예전처럼 .../data 에 붙이면 데이터가 볼륨 밖에 써져
+      #    컨테이너를 다시 만들 때 사라진다.
+      - openplan-pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-openplan} -d ${DB_NAME:-openplan}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    expose:
+      - "5432"
+    # ports 를 두지 않는다. DB 는 backend 만 붙는다 — 밖에서 붙을 일이 있으면 SSH 터널을 쓴다.
+
   nginx:
     image: nginx:1.27-alpine
     container_name: openplan-nginx
@@ -132,3 +181,7 @@ services:
 # 네트워크를 명시하지 않으면 compose 가 기본 네트워크를 만든다. nginx.conf 의
 # `resolver 127.0.0.11`(Docker 내장 DNS)은 이 사용자 정의 네트워크에서만 동작한다 —
 # 그래서 backend 가 죽어도 nginx 는 뜨고 FE 정적 서빙이 계속된다(502만 난다).
+
+volumes:
+  # 🔴 운영 데이터 전부가 여기 있다. `docker compose down -v` 는 이 볼륨을 지운다 — 쓰지 말 것.
+  openplan-pgdata:

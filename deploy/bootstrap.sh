@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
-# OpenPlan — EC2(Amazon Linux 2023) 1차 배포 부트스트랩
+# OpenPlan — 서버 배포 부트스트랩 (GCP e2-micro Ubuntu 24.04 · 예전 EC2 Amazon Linux 2023 겸용)
 #
-# 하는 일: Docker·git·Node 설치 → 저장소 클론 → FE 빌드 → BE 이미지 빌드 → 기동
-#          → CD 설치·동기화 → 배포 스탬프 기록.
+# 하는 일: Docker·git 설치 → 스왑 → 저장소 클론 → FE 빌드
+#          → postgres 기동(+최초 1회 덤프 복원) → BE 이미지 빌드 → 기동
+#          → CD 설치·동기화 → 배포 스탬프 기록 → 정기 작업(DB 백업·인증서 갱신) 등록.
 #
 # 사용:
-#   ssh -i ~/.ssh/openplan-key.pem ec2-user@<EC2_PUBLIC_IP>
-#   curl -fsSL <이 파일 raw URL> -o bootstrap.sh && bash bootstrap.sh
-#   또는 저장소를 먼저 클론했다면: bash deploy/bootstrap.sh
+#   ssh -i ~/.ssh/<키> ubuntu@<공인 IP>
+#   git clone https://github.com/Seeds-OpenPlan/OpenPlan-Backend.git ~/openplan
+#   (최초 이전) RESTORE_DUMP=~/openplan.dump bash ~/openplan/deploy/bootstrap.sh
+#   (그 뒤)     bash ~/openplan/deploy/bootstrap.sh
+#
+# 🔴 RESTORE_DUMP 는 최초 이전 때만 준다. backend 가 뜨기 전에 복원해야 하고(Flyway 가 빈 DB 에
+#    스키마를 먼저 만들면 덤프가 안 들어간다), restore-db.sh 는 테이블이 있으면 거부한다.
+#    CD 는 이 값을 넘기지 않으므로 재배포가 복원을 다시 시도하는 일은 없다.
 #
 # 이 스크립트는 2026-08-17 EC2 1차 배포에서 실행·검증됐다. 그때 드러난 결함 5건
 # (브랜치 미교체 · MAIL_* 미검사 · MAIL_FROM 오판 · buildx 미갱신 · web/ 삭제)은
@@ -39,21 +45,38 @@ AI_DIR="$(dirname "$APP_DIR")/openplan-ai"
 log() { printf '\n\033[1;34m== %s\033[0m\n' "$*"; }
 
 # ── 1. 패키지 ────────────────────────────────────────────────────────────────
-log "1/8 패키지 설치 (docker · git)"
+log "1/9 패키지 설치 (docker · git)"
 # 🔴 nodejs 를 여기서 깔지 않는다. AL2023 저장소의 nodejs 는 18인데 프론트가
 #    package.json engines 로 ">=22.12.0 <23" 를 요구한다(Vite 8). 호스트에 22를
 #    따로 얹는 대신 5단계에서 node:22-alpine 컨테이너로 빌드한다 — 버전이 고정되고
 #    호스트가 더러워지지 않는다.
-sudo dnf -y update
-sudo dnf -y install docker git
+if command -v dnf >/dev/null 2>&1; then
+  sudo dnf -y update
+  sudo dnf -y install docker git
+else
+  # 🔴 Ubuntu(GCP) 는 배포판 docker.io 대신 Docker 공식 저장소를 쓴다. 배포판 것은
+  #    buildx 가 낡아 6단계가 "compose build requires buildx 0.17.0 or later" 로 죽는다(아래
+  #    2단계 주석, AL2023 에서 겪은 것과 같은 문제). 공식 설치 스크립트는 compose·buildx
+  #    플러그인을 최신으로 같이 깐다. 이미 깔려 있으면 건너뛴다 — CD 재배포마다 다시 돌기 때문이다.
+  sudo apt-get update -y
+  sudo apt-get install -y git curl
+  if ! command -v docker >/dev/null 2>&1; then
+    curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+    sudo sh /tmp/get-docker.sh
+  fi
+fi
 
 # ── 1-b. 스왑 ────────────────────────────────────────────────────────────────
 # t3.medium 은 RAM 4GB(실측 3.7GB)가 상한이다. Gradle 데몬 + Node 빌드가 겹치면
 # OOM Killer 가 컴파일 도중 프로세스를 죽이는데, 로그에는 원인이 명확히 안 남는다
-# ("Gradle build daemon disappeared unexpectedly" 정도). 스왑 2GB로 받친다.
+# ("Gradle build daemon disappeared unexpectedly" 정도). 스왑으로 받친다.
+# 🔴 GCP e2-micro 는 RAM 1GB 라 떠 있는 서비스(약 0.6GB) 옆에서 Gradle·Vite 빌드를 돌리면
+#    스왑 2GB 로는 모자란다. RAM 2GB 미만이면 4GB 를 만든다(디스크 30GB 중). 빌드는 느려진다.
 if ! swapon --show | grep -q .; then
-  log "1b/8 스왑 2GB 생성"
-  sudo dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
+  MEM_MB="$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)"
+  SWAP_MB=$([ "$MEM_MB" -lt 2048 ] && echo 4096 || echo 2048)
+  log "1b/9 스왑 ${SWAP_MB}MB 생성 (RAM ${MEM_MB}MB)"
+  sudo dd if=/dev/zero of=/swapfile bs=1M count="$SWAP_MB" status=none
   sudo chmod 600 /swapfile
   sudo mkswap /swapfile >/dev/null
   sudo swapon /swapfile
@@ -62,7 +85,7 @@ fi
 free -h | head -3
 
 # ── 2. Docker ────────────────────────────────────────────────────────────────
-log "2/8 Docker 기동 + 권한"
+log "2/9 Docker 기동 + 권한"
 sudo systemctl enable --now docker
 sudo usermod -aG docker "$USER"
 
@@ -104,7 +127,7 @@ fi
 DOCKER="sudo docker"
 
 # ── 3. 저장소 ────────────────────────────────────────────────────────────────
-log "3/8 저장소 클론/갱신"
+log "3/9 저장소 클론/갱신"
 # 🔴 `git pull --ff-only` 만 돌리면 이미 클론된 저장소는 "받아둔 그 브랜치"에 계속
 #    머문다 — BE_BRANCH 를 바꿔도 반영되지 않는다. 1차 배포가 feat/deploy-compose 로
 #    이뤄졌으므로, 브랜치를 갈아타는 재배포가 반드시 필요하다. fetch → switch 로
@@ -146,10 +169,12 @@ sync_repo "$AI_DIR" "$AI_REPO" "$AI_BRANCH" || {
 }
 
 # ── 4. .env 확인 ─────────────────────────────────────────────────────────────
-log "4/8 .env 확인"
+log "4/9 .env 확인"
 
 # 시드와 사전검사가 같은 목록을 본다 — 둘이 갈라지면 "안내는 여섯인데 검사는 넷" 이 된다.
-REQUIRED_KEYS=(DB_HOST DB_PASSWORD JWT_SECRET APP_BASE_URL API_BASE_URL
+# 🔴 DB_HOST 는 목록에서 뺐다 — DB 가 compose 안의 postgres 라 docker-compose.prod.yml 이 값을
+#    고정한다. DB_PASSWORD 는 남는다: postgres 컨테이너가 처음 뜰 때 그 값으로 계정을 만든다.
+REQUIRED_KEYS=(DB_PASSWORD JWT_SECRET APP_BASE_URL API_BASE_URL
                GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET MAIL_USERNAME MAIL_PASSWORD
                GROQ_API_KEY EXT_TOKEN_KEY
                VAPID_PUBLIC_KEY VAPID_PRIVATE_KEY VAPID_SUBJECT)
@@ -172,8 +197,9 @@ if [ ! -f "$APP_DIR/.env" ]; then
      nano ~/openplan/.env
 
   아래 열을 채워야 뜹니다(4단계 사전검사가 같은 목록을 봅니다):
-     DB_HOST         RDS 엔드포인트
-     DB_PASSWORD     RDS 마스터 비밀번호
+     DB_PASSWORD     운영 DB 비밀번호            openssl rand -base64 24
+                     (DB 는 compose 안의 postgres — 처음 뜰 때 이 값으로 계정이 생긴다.
+                      한 번 뜬 뒤 바꾸면 볼륨의 계정과 어긋나 backend 가 접속을 못 한다)
      JWT_SECRET      openssl rand -base64 48
      APP_BASE_URL    브라우저가 여는 프론트 주소   https://<도메인>
      API_BASE_URL    이 서버 주소                  https://<도메인>
@@ -256,7 +282,7 @@ if [ ${#missing[@]} -gt 0 ]; then
 fi
 
 # ── 5. FE 빌드 ───────────────────────────────────────────────────────────────
-log "5/8 프론트 빌드 (node:22-alpine 컨테이너)"
+log "5/9 프론트 빌드 (node:22-alpine 컨테이너)"
 cd "$FE_DIR"
 # API 베이스는 openapi 정본과 같은 /api/v1. 단일 오리진이라 상대경로면 충분하다.
 printf 'VITE_API_BASE_URL=/api/v1\n' > .env.production
@@ -276,8 +302,19 @@ sudo find "$APP_DIR/web" -mindepth 1 -delete
 sudo cp -r dist/. "$APP_DIR/web"/
 
 # ── 6. 기동 ──────────────────────────────────────────────────────────────────
-log "6/8 컨테이너 빌드·기동"
+log "6/9 컨테이너 빌드·기동"
 cd "$APP_DIR"
+
+# 🔴 DB 를 먼저 올리고, 최초 이전이면 backend 보다 먼저 복원한다(머리 주석 참조).
+#    복원이 실패하면 여기서 멈춘다 — 빈 DB 로 backend 를 띄우면 Flyway 가 스키마를 만들어
+#    버려 그 뒤로는 덤프를 넣을 수 없다. AI 와 달리 DB 는 없이 계속할 부품이 아니다.
+# --wait 로 healthy 까지 기다린다. 아래 AI 빌드 실패 경로의 `--no-deps` 는 depends_on 의
+# 헬스 대기까지 꺼 버리므로, 여기서 미리 기다려 두지 않으면 backend 가 DB 보다 먼저 뜬다.
+$DOCKER compose -f docker-compose.prod.yml up -d --wait postgres
+if [ -n "${RESTORE_DUMP:-}" ]; then
+  log "6a/9 DB 복원 ($RESTORE_DUMP)"
+  APP_DIR="$APP_DIR" bash "$APP_DIR/deploy/restore-db.sh" "$RESTORE_DUMP"
+fi
 
 # 🔴 `up -d --build` 를 통째로 걸면 안 된다. 한 서비스의 빌드가 실패하면 up 이 통째로
 #    실패해 **아무 컨테이너도 뜨지 않는다**(backend·nginx 포함). depends_on 의
@@ -388,7 +425,7 @@ cd_sync() {
 }
 
 if [ "${INSTALL_CD:-1}" = 1 ]; then
-  log "7/8 CD 설치·동기화"
+  log "7/9 CD 설치·동기화"
   if cd_sync; then
     echo "  🟢 CD 가 5분마다 ${BE_BRANCH} 를 따라간다"
   else
@@ -396,7 +433,7 @@ if [ "${INSTALL_CD:-1}" = 1 ]; then
     echo "     손으로: BE_BRANCH=$BE_BRANCH bash $APP_DIR/deploy/install-cd.sh" >&2
   fi
 else
-  log "7/8 CD 설치·동기화 — INSTALL_CD=0 이라 건너뛴다"
+  log "7/9 CD 설치·동기화 — INSTALL_CD=0 이라 건너뛴다"
 fi
 # ── 8. 배포 스탬프 ───────────────────────────────────────────────────────────
 # 🔴 5단계가 web/ 안을 통째로 비운다. 그래서 손으로 한 배포는 deploy-status.json 을
@@ -405,7 +442,7 @@ fi
 # 🔴 키 이름은 cd-watch.sh 의 스탬프와 같게 둔다. 같은 URL 을 읽는 사람이 두 형식을
 #    구분해야 하는 상황을 만들지 않는다 — source 한 필드로만 갈린다.
 # 🔴 이 기록도 배포 판정을 뒤집지 못한다(cd-watch.sh 와 같은 방침).
-log "8/8 배포 스탬프"
+log "8/9 배포 스탬프"
 be_sha="$(git -C "$APP_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
 fe_sha="$(git -C "$FE_DIR"  rev-parse HEAD 2>/dev/null || echo unknown)"
 ai_sha="$(git -C "$AI_DIR"  rev-parse HEAD 2>/dev/null || echo unknown)"
@@ -434,3 +471,13 @@ cat <<MSG
   CD 로그          journalctl -u openplan-cd.service -n 80 --no-pager
 
 MSG
+
+# ── 9. 정기 작업 ─────────────────────────────────────────────────────────────
+# DB 일일 백업과 인증서 갱신. RDS 가 없어져 백업을 이 서버가 직접 해야 하고, 인증서
+# 갱신은 enable-https.sh 가 안내만 하고 등록하지 않아 한 번도 돌지 않았다(install-cron.sh 참조).
+# 🔴 배포 판정을 뒤집지 않는다(7·8단계와 같은 방침). 끄려면 INSTALL_CRON=0.
+if [ "${INSTALL_CRON:-1}" = 1 ]; then
+  log "9/9 정기 작업 등록 (DB 백업 04:30 · 인증서 갱신 03:00)"
+  APP_DIR="$APP_DIR" bash "$APP_DIR/deploy/install-cron.sh" \
+    || echo "  ⚠️ 정기 작업 등록 실패 — 배포 자체는 끝났다. 손으로: bash $APP_DIR/deploy/install-cron.sh" >&2
+fi

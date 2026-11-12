@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # OpenPlan — CD 설치. 서버에서 한 번만 실행한다.
 #
-#   ssh -i ~/.ssh/openplan-key.pem ec2-user@openplan.services
+#   (GCP 콘솔의 SSH 버튼으로 접속 · EC2 시절은 ssh ec2-user@openplan.services)
 #   cd ~/openplan && git fetch origin && git switch -C "$(cat cd.conf 2>/dev/null | grep -oP '(?<=^BE_BRANCH=).*' || echo main)" FETCH_HEAD
 #   BE_BRANCH=main bash deploy/install-cd.sh
 #
@@ -84,7 +84,10 @@ fi
 
 # ── 3. systemd ──────────────────────────────────────────────────────────────
 log "3/4 systemd 유닛"
-sudo install -m 0644 "$APP_DIR/deploy/openplan-cd.service" "$UNIT_DIR/openplan-cd.service"
+# 서비스 파일의 자리표시자를 이 서버의 사용자·경로로 채워 설치한다(openplan-cd.service 주석 참조).
+sed -e "s|__USER__|$(id -un)|g" -e "s|__HOME__|$HOME|g" -e "s|__APP_DIR__|$APP_DIR|g" \
+  "$APP_DIR/deploy/openplan-cd.service" > /tmp/openplan-cd.service
+sudo install -m 0644 /tmp/openplan-cd.service "$UNIT_DIR/openplan-cd.service"
 sudo install -m 0644 "$APP_DIR/deploy/openplan-cd.timer"   "$UNIT_DIR/openplan-cd.timer"
 sudo systemctl daemon-reload
 sudo systemctl enable --now openplan-cd.timer
